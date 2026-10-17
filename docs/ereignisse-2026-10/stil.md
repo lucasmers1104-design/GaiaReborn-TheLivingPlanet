@@ -78,6 +78,35 @@ oder anders ist. Referenz für alle Ereignisse ist der Vulkanausbruch (`tools/fx
 - **„Effekte reduzieren“** schaltet Wackeln und Blitze ab (`FxScene.shake` macht dann nichts). Wer einen Blitz baut,
   braucht einen Ersatz-Frame ohne Weiß.
 
+## Wale
+
+Wale auf offener See sind ab 16 px pro Kachel Effekt-Sprites der Familie `fauna` (`tools/fx/fauna.js`), weiter
+herausgezoomt bleiben sie SVG-Symbole.
+
+- **Von oben gesehen**, wie die übrige Karte: spindelförmiger Körper, runder Kopf, zwei Brustflossen, breite Fluke
+  mit Kerbe am schmalen Schwanzstiel. Diese Silhouette sagt „Wal“, nicht die Seitenansicht (die wirkte wie ein U-Boot).
+- **Arten:** Blauwal (`whale_great`, 48×24, lang und schlank, hell schieferblau gefleckt, kleine Flipper, kleine Finne
+  weit hinten als dunkler Strich durchs Wasser, Spritzschutz vor dem Blasloch), Buckelwal (`whale_baleen`, 40×24,
+  gedrungen, fast schwarz, Buckel, sehr lange helle Flipper, Fluke mit weißer Unterseite und gezacktem Rand), Pottwal
+  (`whale_sperm`, 40×24, dunkelgrau, kastenförmiger Kopf ≈ ⅓ des Körpers, Blasloch vorn links, Runzeln, Knubbel,
+  breite dreieckige Fluke).
+- **Frames:** je Richtung (Osten, dann Westen) 8 Frames: 0–1 Auftauchen (Silhouette tief, dann Kopf bricht durch),
+  2–3 Schwimmen (Flukenschlag: Fluke verkürzt, Schwanz leicht gebogen), 4–7 Abtauchen (Rücken wölbt sich und der Kopf
+  geht unter, Fluke halb oben, Fluke ganz oben mit ablaufendem Wasser, Fluke sinkt in Gischt). Die gehobene Fluke ist
+  von hinten gezeichnet, als „Y“. Welche Frames wann laufen, entscheidet die Laufzeit.
+- **Wasser:** Der ganze Wal liegt als Silhouette unter einem Schleier aus Meer (Blauwal `water3`/`water4`, dunkle Wale
+  `water2` mit Rand `water0`, Buckelwal-Flipper `water6`/`water7`), tiefer = lichteres Raster; so liest er sich auf
+  Tief- und Schelfwasser. Nur der Rücken über der Wasserlinie ist Haut, 1 px höher gezeichnet, mit Schaum am Bug.
+- **Form gemessen, Licht vom Rezept:** Breitenprofil längs der Wirbelsäule, Flipper und Fluke als Polygone. Je Frame
+  hebt eine Höhenkurve die Wirbelsäule gegen die Wasserlinie; wo der Querschnitt darüber ragt, ist Rücken. Das
+  Höhenfeld wird von oben links beleuchtet (nasser Glanz längs des Rückgrats, dunkelste Stufe nur am Rand unten rechts).
+  Der Westsatz spiegelt die Form und wird neu beleuchtet.
+- **`mouth`** (Ostframes, West: `w − 1 − x`): `[blasX, blasY, schnauzeX, schnauzeY, flukeX, flukeY]` — der Pixel über
+  dem Blasloch (Frames 1–3, Fuß von `whale_blow`), die Schnauzenspitze (Bugwelle) und der Fuß der gehobenen Fluke.
+- **Blas** (`whale_blow`, 16×24, Fuß, 8 Frames, einmal): ein dünner Strahl fächert zu einer buschigen Krone auf, deren
+  Rand im Raster ausfranst; dann reißt der Strahl ab, die Krone treibt ab und löst sich mit `dissolve()` auf.
+  Gischt am Fuß hält die letzte Zeile besetzt.
+
 ## Arbeitsablauf für Effekt-Agenten
 
 1. **Katalog:** Neue Einträge kommen in `tools/fx/catalog.js` (Id, Box, Frames, Anker, Ebene). Den Katalog ändert nur

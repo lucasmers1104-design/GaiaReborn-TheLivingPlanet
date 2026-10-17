@@ -81,6 +81,14 @@ function render(w, h, cx, cy, d, zMax, field, paint) {
 /** Period of the crest's lumps along v: one tile between neighbouring crests, so lines of them join. */
 const period = (d) => 16 * Math.hypot(...DIRS[d]);
 
+/**
+ * How far a crest sinks beyond its own stretch of the front (|v| past 7 px;
+ * a diagonal front steps by half a diagonal, 11.3 px, along the crest):
+ * neighbouring tiles' crests still overlap and join, but a lone crest ends
+ * round instead of running out to the corners of its box as a slab.
+ */
+const taper = (v) => Math.max(0, Math.abs(v) - 7) * 0.9;
+
 /** A swell: gentle back slope `back`, steep front `front`, `a` high, lumpy along the crest; foam on its top share `cap`. */
 function swell(d, f, o) {
   const p = period(d);
@@ -88,7 +96,7 @@ function swell(d, f, o) {
     const roll = Math.sin(((v / p) + f / 4) * Math.PI * 2);
     const top = o.a * (1 + o.lump * roll);
     const prof = u < 0 ? Math.exp(-((u / o.back) ** 2)) : Math.exp(-((u / o.front) ** 2));
-    return { f: top * prof - o.flat - z, kind: prof * (1 + o.lump * roll * 0.5) > o.cap ? 'foam' : 'body' };
+    return { f: top * prof - o.flat - z - taper(v), kind: prof * (1 + o.lump * roll * 0.5) > o.cap ? 'foam' : 'body' };
   }, (kind, u, v, z, light, x, y) => {
     if (kind === 'foam') return foam(light + 0.1);
     // The trough in front of the face lies in the crest's shadow.
@@ -168,6 +176,7 @@ function waveBreak(i) {
       const line = (u - o.run + 40) % 2.2;
       if (line < 1.3 && k.hash(Math.floor(v / 3), Math.floor(u / 2.2), 17 + f) > o.fade) take(0.8 - z, 'run');
     }
+    best.f -= taper(v);
     return best;
   }, (kind, u, v, z, light) => {
     // The face under the lip stays in its shadow.

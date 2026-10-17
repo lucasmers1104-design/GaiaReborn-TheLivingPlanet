@@ -176,6 +176,8 @@ namespace SE {
     readonly geo: GeoSystem;
     readonly history?: HistoryRecorder;
     readonly fauna?: FaunaDex;
+    /** Model panels already paid for on this planet (app.ts). */
+    readonly paidModels?: Set<string>;
   }
 
   export class SaveSystem {
@@ -255,6 +257,7 @@ namespace SE {
           reported: Array.from(w.evo.reported),
           chronicle: w.evo.chronicle.map((e) => ({ ...e })),
           ready: Object.fromEntries(w.evo.readySince),
+          extinct: Array.from(w.evo.extinct),
         },
         geo: { offsets: ctx.geo.driftOffsets },
         params,
@@ -262,6 +265,7 @@ namespace SE {
         fauna: ctx.fauna ? ctx.fauna.toJSON() : undefined,
         civ: civToJSON(w),
         coal: coalToJSON(w),
+        paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
       };
     }
 
@@ -383,6 +387,11 @@ namespace SE {
           ctx.fauna.reset();
           ctx.fauna.adoptLiving(ctx.world);
         }
+      }
+      // Paid model panels: optional, an older save simply has none paid.
+      if (ctx.paidModels) {
+        ctx.paidModels.clear();
+        if (Array.isArray(raw.paidModels)) for (const id of raw.paidModels) if (typeof id === 'string') ctx.paidModels.add(id);
       }
       // City and people names are optional as well: without them, or with a
       // damaged field, the records are derived from the grid at the next sync.
@@ -542,7 +551,8 @@ namespace SE {
       }
       if (Array.isArray(src.chronicle)) {
         const kinds: ChronicleKind[] = ['evolution', 'milestone', 'civ', 'extinction', 'info'];
-        for (const e of src.chronicle.slice(0, 2000)) {
+        // Keep the newest entries: the chronicle only grows during play.
+        for (const e of src.chronicle.slice(-2000)) {
           if (!e || typeof e !== 'object') continue;
           const r = e as Record<string, unknown>;
           const kind = kinds.indexOf(r.kind as ChronicleKind) >= 0 ? (r.kind as ChronicleKind) : 'info';
@@ -571,6 +581,12 @@ namespace SE {
           if (typeof tick === 'number' && Number.isFinite(tick)) evo.readySince.set(id, Math.min(tick, w.ticks));
         }
       }
+      // Older saves lack the list: every lineage with an extinction entry
+      // counts as extinct; one alive again is cleared by the next check.
+      const extinct = Array.isArray(src.extinct)
+        ? src.extinct
+        : evo.chronicle.filter((e) => e.kind === 'extinction').map((e) => e.nodeId);
+      for (const id of extinct) if (typeof id === 'string' && evo.isDeveloped(id)) evo.extinct.add(id);
     }
 
     /* ------------------------------------------------------- version 4 -- */

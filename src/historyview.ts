@@ -7,8 +7,8 @@
  * ========================================================================== */
 
 namespace SE {
-  const FONT = '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif';
-  const INK_DIM = '#9fb2aa';
+  const FONT = '"Pixelify Sans", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif';
+  const INK_DIM = '#8394a8';
   const GRID = 'rgba(255,255,255,0.07)';
 
   export class HistoryPanel {
@@ -65,9 +65,9 @@ namespace SE {
       const ph = h - top - 28;
 
       ctx.strokeStyle = GRID;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 2;
       for (let g = 0; g <= 4; g++) {
-        const y = Math.round(top + (ph * g) / 4) + 0.5;
+        const y = Math.round(top + (ph * g) / 4);
         ctx.beginPath();
         ctx.moveTo(left, y);
         ctx.lineTo(left + pw, y);
@@ -123,7 +123,8 @@ namespace SE {
         }
         ctx.strokeStyle = rgbCss(s.color);
         ctx.lineWidth = 2;
-        ctx.lineJoin = 'round';
+        ctx.lineJoin = 'miter';
+        ctx.lineCap = 'square';
         ctx.stroke();
       });
       this.drawHover(ctx, left, top, pw, ph, yOf);
@@ -139,10 +140,10 @@ namespace SE {
       const k = Math.round(this.hoverAt * (years.length - 1));
       const x = left + (k / (years.length - 1)) * pw;
       ctx.strokeStyle = 'rgba(246,241,223,0.45)';
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(Math.round(x) + 0.5, top);
-      ctx.lineTo(Math.round(x) + 0.5, top + ph);
+      ctx.moveTo(Math.round(x), top);
+      ctx.lineTo(Math.round(x), top + ph);
       ctx.stroke();
       this.tip.innerHTML = '';
       this.tip.appendChild(make('div', 'hist-tip-when', `${formatEarthDate(years[k])} · ${eraAt(years[k]).name}`));
@@ -150,9 +151,7 @@ namespace SE {
         if (!this.enabled[si] || k >= s.data.length) return;
         const v = s.data[k];
         ctx.fillStyle = rgbCss(s.color);
-        ctx.beginPath();
-        ctx.arc(x, yOf(s, v), 3.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillRect(Math.round(x) - 3, Math.round(yOf(s, v)) - 3, 6, 6);
         const row = make('div', 'hist-tip-row');
         const dot = make('span', 'chip-dot');
         dot.style.background = rgbCss(s.color);

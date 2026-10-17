@@ -162,6 +162,39 @@ test('a volcano in deep ocean steams but makes no island; on the shelf it does',
   assert.equal(w.hazards.scar[shelf], SE.ScarKind.Vent);
 });
 
+test('natural eruptions and meteors go through hazardSink, on the highest land nearby, with no old markers', () => {
+  const s = makeSim(777, 'today');
+  const { SE, world: w, params: p } = s;
+  const hz = new SE.HazardSystem();
+  const calls = [];
+  const sink = SE.hazardSink;
+  const chance = w.rng.chance;
+  SE.hazardSink = (kind, i, cause) => {
+    calls.push([kind, cause]);
+    return !!hz.start(w, kind, i % SE.GRID_W, Math.floor(i / SE.GRID_W), cause);
+  };
+  w.rng.chance = () => true;
+  w.eventTtl.fill(0);
+  try {
+    s.events.step(w, p);
+  } finally {
+    w.rng.chance = chance;
+    SE.hazardSink = sink;
+  }
+  assert.deepEqual(calls, [[SE.EventKind.Volcano, 'natural'], [SE.EventKind.Meteor, 'natural']]);
+  assert.ok(w.hazards.list.some((h) => h.kind === SE.EventKind.Volcano && h.cause === 'natural'), 'the eruption runs as a hazard');
+  assert.ok(w.eventTtl.every((t) => t === 0), 'no 8×8 icon stamped');
+  assert.ok(!w.eventKind.includes(SE.EventKind.Volcano) && !w.eventKind.includes(SE.EventKind.Meteor), 'no event kind stamped');
+
+  const [x, y] = inlandTile(SE, w);
+  for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) w.elevation[SE.idx(x + dx, y + dy)] = 0.1;
+  w.elevation[SE.idx(x + 2, y - 1)] = 0.5;
+  w.elevation[SE.idx(x + 3, y)] = 0.9;
+  assert.equal(SE.EventSystem.coneTile(w, SE.idx(x, y)), SE.idx(x + 2, y - 1), 'the cone snaps to the highest land within 2 tiles');
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) w.elevation[SE.idx(x + dx, y + dy)] = -0.5;
+  assert.equal(SE.EventSystem.coneTile(w, SE.idx(x, y)), SE.idx(x, y), 'at sea the vent stays put');
+});
+
 test('hazards are deterministic, limited and refuse what has no rule yet', () => {
   const runOnce = () => {
     const s = makeSim(31337, 'today');
@@ -234,7 +267,7 @@ test('the show plays the omen before the hazard starts, then the column; reduced
     assert.ok(started, 'the hazard started once the omen was over');
     const later = show.build(w, cam, 20, 12, t0 + SE.HAZARD_OMEN_MS[SE.EventKind.Volcano] + 1500, 0.1, particles);
     assert.ok(later.objects.some((d) => d.id === 'volcano_column'), 'the eruption column stands');
-    assert.ok(later.objects.some((d) => d.id === 'vent_cone' && d.frame === 0), 'the active cone glows');
+    assert.ok(later.objects.some((d) => d.id === 'crater_glow'), 'the active cone glows');
     hz.step(w);
     for (const h of w.hazards.list) SE.HAZARD_RULES[h.kind].finish(w, h);
     w.hazards.list.length = 0;
@@ -339,4 +372,16 @@ test('windthrow keeps ageing while the storm has soaked the ground', () => {
   w.hazards.tile[i] = SE.HazardTile.Flood;
   SE.stepScars(w);
   assert.equal(w.hazards.scarAge[i], 5, 'standing water does');
+});
+
+test('a hazard lift goes through raiseCrust: no change, no stale terrain', () => {
+  const { SE, world: w } = makeSim(777, 'today');
+  w.terrainDirty = false;
+  SE.hazardLift(w, SE.idx(10, 40), 0);
+  assert.equal(w.terrainDirty, false);
+});
+
+test('the disaster tool fires once per tap: a drag does not set off one disaster per tile crossed', () => {
+  const { SE } = makeSim(777, 'today');
+  assert.equal(SE.App.isSingleShot(SE.Tool.TriggerEvent), true);
 });

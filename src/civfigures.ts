@@ -95,7 +95,7 @@ namespace SE {
         const smoke = +(bt.tech >= Tech.Industrial);
         let pic = this.pictures.get(smoke);
         if (!pic) {
-          pic = rasterArt(battleArt(bt.tech), px, CREATURE_LOOK);
+          pic = rasterArt(battleArt(bt.tech), px, CREATURE_LOOK, false, true);
           this.pictures.set(smoke, pic);
         }
         const bob = still ? 0 : Math.sin((now - bt.since) / BATTLE_BOB_MS) * BATTLE_BOB;
@@ -140,6 +140,7 @@ namespace SE {
         this.picturePx = px;
       }
       const human = world.sentientClass === Life.Mammal;
+      ctx.imageSmoothingEnabled = false;
       for (const s of world.civ.settlers) {
         if (s.path.length === 0) continue;
         const tile = s.path[clamp(s.step, 0, s.path.length - 1)];
@@ -169,7 +170,7 @@ namespace SE {
         const key = `${kind}|${s.tech}|${flag}|${+tr.flip}`;
         let pic = this.pictures.get(key);
         if (!pic) {
-          pic = rasterArt(settlerArt(kind, flag, s.tech), px, CREATURE_LOOK, tr.flip);
+          pic = rasterArt(settlerArt(kind, flag, s.tech), px, CREATURE_LOOK, tr.flip, true);
           this.pictures.set(key, pic);
         }
         const sy = Math.round(ry * size);

@@ -161,7 +161,7 @@ namespace SE {
         if (across < 1 || across > QUAKE_OFFSET_DEPTH || Math.abs(ox * dx + oy * dy) > reach) continue;
         const i = idx(wrapX(h.x + ox), y);
         // Land only: a lifted shoal would surface as a one-tile island.
-        if (world.elevation[i] >= 0) hazardLift(world, i, QUAKE_OFFSET_PER_M * M);
+        if (world.elevation[i] >= 0) raiseCrust(world, i, QUAKE_OFFSET_PER_M * M, UpliftKind.None);
       }
     }
   }
@@ -188,8 +188,8 @@ namespace SE {
     if (!slidable(world, from) || !steep(world, from)) return;
     const to = lowestLand(world, from);
     if (!slidable(world, to)) return;
-    hazardLift(world, from, -QUAKE_SLIDE_AMOUNT);
-    hazardLift(world, to, QUAKE_SLIDE_AMOUNT);
+    raiseCrust(world, from, -QUAKE_SLIDE_AMOUNT, UpliftKind.None);
+    raiseCrust(world, to, QUAKE_SLIDE_AMOUNT, UpliftKind.None);
     for (const i of [from, to]) {
       hazardStripPlants(world, i);
       setScar(world, i, ScarKind.Scree);

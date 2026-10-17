@@ -156,7 +156,7 @@ namespace SE {
           const key = `${size}|${color}`;
           let pic = this.markers.get(key);
           if (!pic) {
-            pic = rasterArt(cityMarkerArt(color), size, MARKER_LOOK);
+            pic = rasterArt(cityMarkerArt(color), size, MARKER_LOOK, false, true);
             this.markers.set(key, pic);
           }
           // The pole's foot is at (11, 27.6) of the 32 art units.

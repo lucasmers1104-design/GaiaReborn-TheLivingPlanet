@@ -70,7 +70,10 @@ namespace SE {
     const c = canvas;
     if (!c) { running = false; return; }
     // The first frame can be stamped before the burst started: never step back.
-    const dt = clamp((now - last) / 1000, 0, 0.05);
+    // Motion steps at most 50 ms, but age follows the clock, so a burst ends
+    // on time even when frames are dropped (a busy tab, a headless capture).
+    const elapsed = Math.max(0, (now - last) / 1000);
+    const dt = Math.min(elapsed, 0.05);
     last = now;
     const dpr = window.devicePixelRatio || 1;
     const w = window.innerWidth;
@@ -85,7 +88,7 @@ namespace SE {
     ctx.clearRect(0, 0, w, h);
 
     if (flash) {
-      flash.age += dt;
+      flash.age += elapsed;
       const t = flash.age / 0.9;
       if (t >= 1) flash = null;
       else {
@@ -105,7 +108,7 @@ namespace SE {
       }
     }
 
-    particles = particles.filter((p) => (p.age += dt) < p.life);
+    particles = particles.filter((p) => (p.age += elapsed) < p.life);
     for (const p of particles) {
       p.vx -= p.vx * DRAG * dt;
       p.vy += (GRAVITY - p.vy * DRAG) * dt;
@@ -165,7 +168,7 @@ namespace SE {
    * A short, bright arpeggio. Browsers only allow sound after the player has
    * interacted with the page; until then this stays silent rather than fail.
    */
-  export function playChime(spontaneous: boolean): void {
+  export function playChime(spontaneous: boolean, volume = 1): void {
     const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return;
     try {
@@ -184,7 +187,7 @@ namespace SE {
           osc.frequency.value = freq;
           osc.detune.value = detune;
           gain.gain.setValueAtTime(0, t);
-          gain.gain.linearRampToValueAtTime(gainPeak, t + 0.012);
+          gain.gain.linearRampToValueAtTime(gainPeak * volume, t + 0.012);
           gain.gain.exponentialRampToValueAtTime(0.0005, t + (k === notes.length - 1 ? 1.4 : 0.7));
           osc.connect(gain).connect(ac.destination);
           osc.start(t);

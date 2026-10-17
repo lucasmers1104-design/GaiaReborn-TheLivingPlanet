@@ -50,6 +50,12 @@ namespace SE {
     sound: boolean;
     /** Background music on the title screen and in the game. */
     music: boolean;
+    /** The sea's murmur while coasts are in view. */
+    ambient: boolean;
+    /** Volume sliders, 0..1: sea murmur, effects (chime and disasters), music. */
+    ambientVolume: number;
+    soundVolume: number;
+    musicVolume: number;
     /** Sea share new planets are made with, OCEAN_SHARE_MIN..OCEAN_SHARE_MAX. */
     oceanShare: number;
     /** The planet new games start on: random, or the Earth in an epoch. */
@@ -97,6 +103,9 @@ namespace SE {
     private menuBar!: MenuBar;
     private title: TitleScreen | null = null;
     private readonly music: MusicPlayer;
+    private readonly surf = new SurfSound();
+    private surfTarget = 0;
+    private lastSurfCheck = 0;
     private canvas!: HTMLCanvasElement;
     private dock!: HTMLElement;
     private toolTitle!: HTMLElement;
@@ -120,7 +129,7 @@ namespace SE {
     /* ---- state ---- */
     private speed = 3;
     private lastRunningSpeed = 3;
-    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion() };
+    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion() };
     private mapShowsInfo = false;
     private selection: ToolSelection = {
       tool: Tool.Examine, altitudeRaise: true, flora: Flora.LandPlants, clearing: false,
@@ -161,7 +170,8 @@ namespace SE {
       this.stage = el<HTMLElement>('desktop');
       Modal.attach(el<HTMLElement>('modal-root'));
       this.loadSettings();
-      this.music = new MusicPlayer(this.settings.music);
+      this.music = new MusicPlayer(this.settings.music, this.settings.musicVolume);
+      SFX.volume = () => (this.settings.sound ? this.settings.soundVolume : 0);
 
       this.windows = new WindowManager(this.stage);
       this.notifier = new Notifier(el<HTMLElement>('toasts'), el<HTMLElement>('milestones'), {
@@ -173,7 +183,7 @@ namespace SE {
           view: (id) => this.openTree(id),
           showOnMap: (e) => this.showEntryOnMap(e),
           progress: () => ({ developed: this.world.evo.developed.size, total: EVO_NODES.length }),
-          sound: () => this.settings.sound,
+          sound: () => (this.settings.sound ? this.settings.soundVolume : 0),
         }),
       });
       this.notifier.pauseOnMilestone = this.settings.pauseOnMilestone;
@@ -201,6 +211,7 @@ namespace SE {
 
       driftProbe = (y) => this.geo.plateVelocity(y);
       civEventSink = (kind, x, y) => this.events.trigger(this.world, kind, x, y);
+      hazardSink = (kind, i, cause) => !!this.hazards.start(this.world, kind, i % GRID_W, Math.floor(i / GRID_W), cause);
 
       this.newPlanet();
       this.unsaved = false;
@@ -865,14 +876,22 @@ namespace SE {
           toggle: () => { this.settings.reduceEffects = !this.settings.reduceEffects; this.editView.reduceEffects = this.settings.reduceEffects; this.saveSettings(); },
         },
         {
-          kind: 'toggle', label: 'Klang bei neuen Entwicklungen', icon: uiIcon('menu-sound'),
-          on: () => this.settings.sound,
-          toggle: () => { this.settings.sound = !this.settings.sound; this.saveSettings(); },
+          kind: 'toggle', group: true, label: 'Meeresrauschen', icon: uiIcon('menu-sound-on'), iconOff: uiIcon('menu-sound'),
+          on: () => this.settings.ambient,
+          toggle: () => { this.settings.ambient = !this.settings.ambient; this.saveSettings(); },
+          volume: { get: () => this.settings.ambientVolume, set: (v) => { this.settings.ambientVolume = v; this.saveSettings(); } },
         },
         {
-          kind: 'toggle', label: 'Musik', icon: uiIcon('menu-sound'),
+          kind: 'toggle', label: 'Effekt-Klänge', icon: uiIcon('menu-sound-on'), iconOff: uiIcon('menu-sound'),
+          on: () => this.settings.sound,
+          toggle: () => { this.settings.sound = !this.settings.sound; this.saveSettings(); },
+          volume: { get: () => this.settings.soundVolume, set: (v) => { this.settings.soundVolume = v; this.saveSettings(); } },
+        },
+        {
+          kind: 'toggle', label: 'Musik', icon: uiIcon('menu-sound-on'), iconOff: uiIcon('menu-sound'),
           on: () => this.settings.music,
           toggle: () => { this.settings.music = !this.settings.music; this.music.setEnabled(this.settings.music); this.saveSettings(); },
+          volume: { get: () => this.settings.musicVolume, set: (v) => { this.settings.musicVolume = v; this.music.setVolume(v); this.saveSettings(); } },
         },
       ];
     }
@@ -1112,7 +1131,7 @@ namespace SE {
     }
 
     private static isSingleShot(tool: Tool): boolean {
-      return tool === Tool.Examine || tool === Tool.PlaceLife;
+      return tool === Tool.Examine || tool === Tool.PlaceLife || tool === Tool.TriggerEvent;
     }
 
     /** After any edit: derived state, map, open panels and tree all at once. */
@@ -1137,6 +1156,8 @@ namespace SE {
 
       switch (s.tool) {
         case Tool.Examine:
+          // The open window already follows its tile live: clicking it again buys nothing.
+          if (this.examineTile && this.examineTile.x === x && this.examineTile.y === y && this.windows.isVisible('examine')) break;
           if (!this.spend(EXAMINE_COST)) return;
           this.examineTile = { x, y };
           this.examinePanel.invalidate();
@@ -1218,7 +1239,7 @@ namespace SE {
         const h = this.hazards.start(w, kind, x, y, 'player');
         if (!h) {
           // The tile changed during the omen (another hazard took it): the energy comes back.
-          w.omega += EVENT_COST;
+          w.omega = Math.min(OMEGA_MAX, w.omega + EVENT_COST);
           this.notifier.message(this.hazards.refusal(w, kind, x, y) || `${EVENT_NAMES[kind]} ist hier nicht mehr möglich.`, 'warn');
           return null;
         }
@@ -1274,7 +1295,6 @@ namespace SE {
       if (!this.spend(BIOME_COST)) return;
       let changed = 0;
       for (const j of targets) if (this.flora.plant(w, s.flora, j, 0.7)) changed++;
-      this.flora.step(w, this.params);
       BiomeSystem.step(w, false);
       this.afterEdit();
       this.notifier.message(`${n.name} auf ${changed} ${changed === 1 ? 'Feld' : 'Feldern'} angesiedelt.`, 'ok');
@@ -1316,6 +1336,8 @@ namespace SE {
           return;
         }
         if (w.tech[i] >= s.tech && w.cityPop[i] >= 0.3) { this.notifier.message('Hier steht bereits eine solche Stadt.', 'warn'); return; }
+        // A shrunken city may be revived, but never knocked back to an older age (and charged for it).
+        if (w.tech[i] > s.tech) { this.notifier.message(`Hier steht bereits eine weiter entwickelte Stadt (${TECH_NAMES[w.tech[i]]}).`, 'warn'); return; }
         const upgrade = w.tech[i] !== Tech.None;
         const problem = upgrade ? '' : citySiteProblem(w, i, founder);
         if (problem) { this.notifier.message(problem, 'warn'); return; }
@@ -1335,6 +1357,11 @@ namespace SE {
       const tf = s.terraformer;
       if (tf === Terraformer.Monolith && w.isWater(i)) {
         this.notifier.message('Der Monolith braucht festes Land.', 'warn');
+        return;
+      }
+      // One sentient species per world: the Monolith only awakens the first.
+      if (tf === Terraformer.Monolith && w.sentientClass !== Life.None) {
+        this.notifier.message(`${LIFE[w.sentientClass].name} sind bereits intelligent. Neue Städte gründest du mit dem Städte-Werkzeug.`, 'warn');
         return;
       }
       if (tf === Terraformer.Monolith && this.sentientResident(i) === Life.None) {
@@ -1860,6 +1887,11 @@ namespace SE {
 
       this.editView.editRectInto(this.mapView);
       this.editView.render(this.world);
+      if (now - this.lastSurfCheck > 400) {
+        this.lastSurfCheck = now;
+        this.surfTarget = this.title || !this.settings.ambient ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
+      }
+      this.surf.update(this.surfTarget, delta, now);
       if (this.windows.isVisible('map')) {
         if (this.mapView.globe) {
           if (now - this.lastMapRender > 50) {
@@ -1903,6 +1935,10 @@ namespace SE {
         if (typeof s.pauseOnDiscovery === 'boolean') this.settings.pauseOnDiscovery = s.pauseOnDiscovery;
         if (typeof s.sound === 'boolean') this.settings.sound = s.sound;
         if (typeof s.music === 'boolean') this.settings.music = s.music;
+        if (typeof s.ambient === 'boolean') this.settings.ambient = s.ambient;
+        if (typeof s.ambientVolume === 'number' && Number.isFinite(s.ambientVolume)) this.settings.ambientVolume = clamp(s.ambientVolume, 0, 1);
+        if (typeof s.soundVolume === 'number' && Number.isFinite(s.soundVolume)) this.settings.soundVolume = clamp(s.soundVolume, 0, 1);
+        if (typeof s.musicVolume === 'number' && Number.isFinite(s.musicVolume)) this.settings.musicVolume = clamp(s.musicVolume, 0, 1);
         if (typeof s.dockCollapsed === 'boolean') this.settings.dockCollapsed = s.dockCollapsed;
         if (typeof s.lastSlot === 'number' && s.lastSlot >= 1 && s.lastSlot <= SLOT_COUNT) this.settings.lastSlot = s.lastSlot;
         if (typeof s.oceanShare === 'number' && Number.isFinite(s.oceanShare)) this.settings.oceanShare = clamp(s.oceanShare, OCEAN_SHARE_MIN, OCEAN_SHARE_MAX);
@@ -1932,14 +1968,23 @@ namespace SE {
 
     /** Write the planet under a storage key. Returns success. */
     private async writeSave(key: string, quiet: boolean): Promise<boolean> {
-      if (this.savingNow) return false;
+      if (this.savingNow) {
+        if (key === AUTOSAVE_KEY) return false;
+        // The player's own save waits for an autosave in flight instead of silently doing nothing.
+        while (this.savingNow) await new Promise((r) => setTimeout(r, 50));
+      }
       this.savingNow = true;
       try {
-        const doc = SaveSystem.serialize({ world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna });
+        const doc = SaveSystem.serialize({ world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna, paidModels: this.paidModels });
         const text = await SaveSystem.encode(doc);
         const meta: SaveMeta = { ...SaveSystem.meta(doc), thumb: planetThumbnail(this.world) };
         window.localStorage.setItem(key, text);
-        window.localStorage.setItem(`${key}.meta`, JSON.stringify(meta));
+        try {
+          window.localStorage.setItem(`${key}.meta`, JSON.stringify(meta));
+        } catch {
+          // The planet is stored; a stale summary would describe the one it replaced.
+          window.localStorage.removeItem(`${key}.meta`);
+        }
         this.unsaved = false;
         if (!quiet) this.notifier.message('Planet gespeichert.', 'ok');
         return true;
@@ -1977,7 +2022,7 @@ namespace SE {
       }
       try {
         const doc = await SaveSystem.decode(raw);
-        const { notes } = SaveSystem.load(doc, { world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna }, this.life, this.flora);
+        const { notes } = SaveSystem.load(doc, { world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna, paidModels: this.paidModels }, this.life, this.flora);
         // Cities, peoples and names are derived from the grid; a city carpet thins out here.
         this.civ.sync(this.world, this.params);
         this.world.refreshDerived();
@@ -2002,7 +2047,6 @@ namespace SE {
     private afterLoad(): void {
       this.notifier.clear();
       this.discoveries.clear();
-      this.paidModels.clear();
       this.evolution.pending.length = 0;
       this.milestonePaused = false;
       this.accumulator = 0;

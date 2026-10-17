@@ -308,10 +308,40 @@ namespace SE {
     readonly action?: () => void;
     /** Shows a check mark and makes the item a checkbox for assistive tech. */
     readonly checked?: () => boolean;
+    /** Replaces `icon` while `checked` is false (sound off vs. on). */
+    readonly iconOff?: string;
     readonly separator?: boolean;
     readonly disabled?: () => boolean;
     /** Small right-aligned hint: a cost or a shortcut. */
     readonly hint?: string;
+    /** Makes the row a 0..1 slider instead of a button; `label` names it for assistive tech. */
+    readonly slider?: VolumeControl;
+  }
+
+  export interface VolumeControl {
+    readonly get: () => number;
+    readonly set: (v: number) => void;
+  }
+
+  /** A 0..100 % range input wired to a volume; `sync` re-reads it. */
+  export function volumeSlider(label: string, control: VolumeControl): { input: HTMLInputElement; percent: HTMLElement; sync: () => void } {
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = '0';
+    input.max = '100';
+    input.step = '5';
+    input.setAttribute('aria-label', label);
+    const percent = make('span', 'volume-percent');
+    const sync = (): void => {
+      const v = Math.round(control.get() * 100);
+      input.value = String(v);
+      input.style.setProperty('--lo', '0');
+      input.style.setProperty('--hi', String(v / 100));
+      percent.textContent = `${v} %`;
+    };
+    input.addEventListener('input', () => { control.set(Number(input.value) / 100); sync(); });
+    sync();
+    return { input, percent, sync };
   }
 
   export interface MenuDef {
@@ -331,6 +361,7 @@ namespace SE {
     private readonly panels: HTMLElement[] = [];
     private readonly rows: { el: HTMLElement; item: MenuItem }[][] = [];
     private readonly toggleBtn: HTMLButtonElement;
+    private readonly sliderSyncs = new Map<HTMLElement, () => void>();
 
     constructor(private readonly host: HTMLElement, private readonly defs: readonly MenuDef[]) {
       host.setAttribute('role', 'menubar');
@@ -366,6 +397,17 @@ namespace SE {
         const rows: { el: HTMLElement; item: MenuItem }[] = [];
         for (const item of def.items) {
           if (item.separator) { panel.appendChild(make('div', 'menu-sep')); continue; }
+          if (item.slider) {
+            const { input, percent, sync } = volumeSlider(item.label, item.slider);
+            const line = make('div', 'menu-item menu-slider');
+            input.tabIndex = -1;
+            line.append(make('span'), make('span'), input, percent);
+            input.addEventListener('keydown', (e) => this.onItemKey(e, i, rows.findIndex((r) => r.el === input)));
+            this.sliderSyncs.set(input, sync);
+            panel.appendChild(line);
+            rows.push({ el: input, item });
+            continue;
+          }
           const row = document.createElement('button');
           row.type = 'button';
           row.className = 'menu-item';
@@ -484,6 +526,8 @@ namespace SE {
       else if (e.key === 'ArrowUp') { e.preventDefault(); this.focusRow(menu, row - 1, -1); }
       else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.closeAll(); this.titles[menu].focus(); }
       else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        // On a slider the side arrows change the value.
+        if (e.target instanceof HTMLInputElement) return;
         e.preventDefault();
         const n = this.titles.length;
         const next = (menu + (e.key === 'ArrowRight' ? 1 : -1) + n) % n;
@@ -499,7 +543,10 @@ namespace SE {
         const checked = item.checked?.() ?? false;
         el.classList.toggle('checked', checked);
         if (item.checked) el.setAttribute('aria-checked', checked ? 'true' : 'false');
+        if (item.iconOff && item.icon) (el.querySelector('img.menu-item-icon') as HTMLImageElement).src = checked ? item.icon : item.iconOff;
         const disabled = item.disabled?.() ?? false;
+        this.sliderSyncs.get(el)?.();
+        if (el instanceof HTMLInputElement) { el.disabled = disabled; el.parentElement?.classList.toggle('disabled', disabled); }
         el.classList.toggle('disabled', disabled);
         el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
       }

@@ -58,6 +58,13 @@ namespace SE {
     return { canvas, ctx };
   }
 
+  /** Pixels per tile of crisp map icons: the landscape atlas draws 16. */
+  const ART_GRAIN = 16;
+  /** Crisp icons are drawn this many times larger, then point-sampled: one flat colour per pixel. */
+  const SUPERSAMPLE = 8;
+  /** Below this alpha a point-sampled pixel was only an anti-aliased fringe. */
+  const FRINGE_ALPHA = 48;
+
   /** Paint the art, or its ink silhouette widened by `outline`. */
   function paint(
     ctx: CanvasRenderingContext2D, art: Art, px: number, flip: boolean, silhouette: boolean, outline: number,
@@ -103,9 +110,28 @@ namespace SE {
   /**
    * Rasterise art for a tile of `px` device pixels. With a shadow the canvas
    * is SHADOW_SPAN times larger; draw it at that multiple of the tile size.
-   * `flip` mirrors the art to face left.
+   * `flip` mirrors the art to face left. `crisp` draws it as pixel art like
+   * the landscape: at most ART_GRAIN pixels per tile, magnified by a whole
+   * number, with a hard-edged outline and shadow.
    */
-  export function rasterArt(art: Art, px: number, look: ArtLook, flip = false): HTMLCanvasElement {
+  export function rasterArt(art: Art, px: number, look: ArtLook, flip = false, crisp = false): HTMLCanvasElement {
+    if (crisp) {
+      const grain = Math.max(1, Math.floor(px / ART_GRAIN));
+      const r = Math.round(px / grain);
+      const fine = rasterArt(art, r * SUPERSAMPLE, look, flip);
+      const n = look.shadow > 0 ? Math.ceil(r * SHADOW_SPAN) : r;
+      const small = canvasOf(n);
+      small.ctx.imageSmoothingEnabled = false;
+      small.ctx.drawImage(fine, 0, 0, n, n);
+      const img = small.ctx.getImageData(0, 0, n, n);
+      for (let i = 3; i < img.data.length; i += 4) if (img.data[i] < FRINGE_ALPHA) img.data[i] = 0;
+      small.ctx.putImageData(img, 0, 0);
+      if (grain === 1) return small.canvas;
+      const big = canvasOf(n * grain);
+      big.ctx.imageSmoothingEnabled = false;
+      big.ctx.drawImage(small.canvas, 0, 0, n * grain, n * grain);
+      return big.canvas;
+    }
     const size = look.shadow > 0 ? Math.ceil(px * SHADOW_SPAN) : px;
     const { canvas, ctx } = canvasOf(size);
     if (look.shadow > 0 || look.outline > 0) {

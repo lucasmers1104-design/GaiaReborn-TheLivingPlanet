@@ -50,9 +50,10 @@ namespace SE {
     blocks: readonly CityBlock[], wet: Uint8Array, atlas: CivAtlasPixels, out: Uint8ClampedArray | Uint8Array,
     m: CivManifest = CIV_MANIFEST,
   ): void {
-    const { w: W } = cityPictureSize(m);
+    const { w: W, h: H } = cityPictureSize(m);
     const oy = CITY_PAD + m.box.h - 16;
     out.fill(0);
+    const solid = new Uint8Array(W * H);
     const copy = (b: CityBlock, yard: boolean): void => {
       const sp = m.blocks[b.id].variants[b.v];
       const r = sp.rect;
@@ -66,6 +67,7 @@ namespace SE {
           const py = top + sy;
           if (yard && (px < 0 || px >= 16 || py < 0 || py >= 16 || wet[py * 16 + px] !== 0)) continue;
           const o = ((oy + py) * W + CITY_PAD + px) * 4;
+          if (!yard && casts(m.blocks[b.id].role)) solid[o >> 2] = 1;
           out[o] = atlas.data[a];
           out[o + 1] = atlas.data[a + 1];
           out[o + 2] = atlas.data[a + 2];
@@ -99,5 +101,17 @@ namespace SE {
       }
     }
     for (const b of blocks) if (m.blocks[b.id].role !== 'ground') copy(b, false);
+
+    // A dark rim round the buildings, so the city keeps its silhouette on busy ground and among the animal icons.
+    const RIM = 0.6;
+    for (let p = 0; p < W * H; p++) {
+      if (solid[p] === 1) continue;
+      const x = p % W;
+      if (!((x > 0 && solid[p - 1]) || (x < W - 1 && solid[p + 1]) || (p >= W && solid[p - W]) || (p < W * (H - 1) && solid[p + W]))) continue;
+      const o = p * 4;
+      const a = out[o + 3] / 255;
+      for (let c = 0; c < 3; c++) out[o + c] = Math.round((out[o + c] * a * (1 - RIM) + rgb[c] * RIM) / (a + RIM - a * RIM));
+      out[o + 3] = Math.round((a + RIM - a * RIM) * 255);
+    }
   }
 }

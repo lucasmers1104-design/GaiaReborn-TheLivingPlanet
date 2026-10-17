@@ -343,10 +343,11 @@ function groundBurnt() {
   const t = new k.Tex(64, 64, true);
   const base = k.fbm(64, 6, 3, 181);
   const char = k.fbm(64, 12, 2, 183);
+  // Mostly grey ash: one step darker overall read as a black hole in light ground (sand, steppe).
   t.each((x, y) => {
-    if (char(x, y) > 0.7) return P.c('pine0');
+    if (char(x, y) > 0.72) return P.c('pine0');
     const b = base(x, y);
-    return P.c(b < 0.4 ? 'soil0' : b < 0.55 ? 'rock0' : 'rock1');
+    return P.c(b < 0.3 ? 'soil0' : b < 0.48 ? 'rock0' : b < 0.68 ? 'rock1' : 'rock2');
   });
   for (let by = 0; by < 64; by += 6) {
     for (let bx = 0; bx < 64; bx += 6) {

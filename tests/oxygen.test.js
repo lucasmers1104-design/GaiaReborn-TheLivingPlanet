@@ -32,6 +32,22 @@ test('only cyanobacteria produce microbial oxygen; complex cells consume it', ()
   }
 });
 
+test('cyanobacterial thrombolites keep producing oxygen; sulphur and iron bacteria do not', () => {
+  for (const [stage, oxygenic] of [[5, false], [6, false], [7, true]]) {
+    const s = makeSim(12345);
+    const w = s.world;
+    w.oceanO2 = 100;
+    s.params.bio.mutationRate = 0;
+    for (let i = 0; i < SE.TILE_COUNT; i++) if (w.isWater(i)) {
+      w.lifeDensity[i * SE.LIFE_COUNT + SE.Life.Prokaryote] = 0.4;
+      w.lifeStage[i * SE.LIFE_COUNT + SE.Life.Prokaryote] = stage;
+    }
+    w.refreshDerived();
+    s.life.stepLife(w, s.params, s.atmo);
+    assert.equal(s.atmo.oceanO2Delta > 0, oxygenic, SE.SPECIES[SE.Life.Prokaryote].stages[stage].name);
+  }
+});
+
 test('water oxygen unlocks complex cells even with oxygen-free air, and is rechecked on action', () => {
   const s = makeSim(4242);
   const w = s.world;

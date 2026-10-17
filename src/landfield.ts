@@ -66,11 +66,34 @@ namespace SE {
    * mostly at 0.35–0.6.
    */
   const ARC_VOLCANO_MAGMA = 0.3;
-  /** A dormant cone looks green when its tile, or this many of its 8 neighbours, carry open land or more (LANDSCAPE_LEVEL ≥ 2). */
-  const CONE_GREEN_LEVEL = 2;
-  const CONE_GREEN_NEIGHBOURS = 5;
+  /**
+   * Off the belts, land this much hotter than the planet's mean mantle is a
+   * hotspot volcano (Hawaii, Iceland, Galápagos): 'today' types no hotspot
+   * belts. Measured: 'today' mean 0.22, hotspots 0.7–0.95; random planets
+   * mean 0.49 with a few dozen land tiles that hot; the young Earth none.
+   */
+  const HOTSPOT_MAGMA_EXCESS = 0.45;
   /** Soil (0..255) below which rock counts as unweathered, as succession.ts counts it. */
   const FRESH_ROCK_SOIL = Math.ceil(SOIL_EARTH * 255);
+  /** Kelp stands only on the shallow shelf by the shore, never over the open blue of the coast biome. */
+  const KELP_DEPTH = -0.1;
+  /**
+   * Sea ice below this water temperature (BiomeSystem.waterHabitat), the
+   * threshold wobbled by noise by up to this many °C either way: ocean temperature follows
+   * the parallels, so the plain threshold drew the pack edge as a ruler line.
+   * Near the edge the water cools 4–7 °C per tile row, so the edge swings by
+   * a tile or two.
+   */
+  const ICE_TEMP = -5;
+  const ICE_WOBBLE = 10;
+  function packIce(temp: number, i: number): boolean {
+    if (temp < ICE_TEMP - ICE_WOBBLE) return true;
+    if (temp >= ICE_TEMP + ICE_WOBBLE) return false;
+    const x = i % GRID_W;
+    const y = (i / GRID_W) | 0;
+    const n = landOctave(x, y, GRID_W, 64, 977) * 0.6 + landOctave(x, y, GRID_W, 128, 978) * 0.4;
+    return temp + (n - 0.5) * 2 * ICE_WOBBLE < ICE_TEMP;
+  }
   /** Highlands a little lighter, lowlands a little darker, in steps per unit of elevation. */
   const ALTITUDE_GAIN = 0.5;
   /** Macro variation: value-noise lattice cells around the planet (8 tiles each). */
@@ -159,7 +182,7 @@ namespace SE {
     readonly shade = new Float32Array(TILE_COUNT);
     /** Amplitude of the crags drawn inside the tile, ramp steps (0 on flat land). */
     readonly rugged = new Float32Array(TILE_COUNT);
-    /** 0 no volcano, else 1 + its variant: 1 dormant and green, 2 fresh (dark basalt), 3 dormant and bare, 4 dormant under snow. */
+    /** Volcanic cone raised in the relief (landridges.ts): 0 none, 1 dormant, 2 fresh (basalt scar or a young vent). */
     readonly volcano = new Uint8Array(TILE_COUNT);
     /** The mountain ranges as drawn ridge lines. */
     readonly ridges = new RidgePaths();
@@ -182,6 +205,8 @@ namespace SE {
     readonly cactus = new Uint8Array(TILE_COUNT);
     /** 1 where the flowering plants show as a savanna tree (savannatrees.ts). */
     readonly savannaTree = new Uint8Array(TILE_COUNT);
+    /** Coconut palms on a beach tile, 0..2 (beaches.ts). */
+    readonly palm = new Uint8Array(TILE_COUNT);
     private readonly reach = new SavannaReach();
     readonly sig = new Uint32Array(TILE_COUNT);
     private readonly rank = new Uint8Array(TILE_COUNT);
@@ -198,6 +223,7 @@ namespace SE {
       const flowering = floraBit(Flora.Flowering);
       const cacti = cactiArrived(world);
       const trees = savannaTreesArrived(world);
+      const palms = palmsArrived(world);
       if (trees) this.reach.update(world);
       for (let i = 0; i < TILE_COUNT; i++) {
         const h = e[i];
@@ -207,12 +233,13 @@ namespace SE {
         let groups = 0;
         let cactus = 0;
         let tree = 0;
+        let palm = 0;
         let shade = 0;
         let rugged = 0;
         let river = 0;
         if (h < 0) {
-          if (biome[i] === Biome.Arctic) key = T.seaIceKey;
-          else if (biome[i] === Biome.Coast && (flora[i] & kelp) !== 0) {
+          if (packIce(world.temperature[i], i)) key = T.seaIceKey;
+          else if (biome[i] === Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
             scene = LAND_SCENE_SEA;
             groups = kelp;
             density = vegetation[i] < 0.3 ? 0 : vegetation[i] < 0.6 ? 1 : 2;
@@ -232,6 +259,8 @@ namespace SE {
               key = T.materialKey('scree') || key;
             }
           }
+          const beach = isBeach(world, i);
+          if (beach) key = T.materialKey('beach') || key;
           this.depth[i] = LAND_SHALLOW;
           shade = this.relief(e, i) + MACRO[i];
           rugged = Math.round(clamp((h - CRAG_START) / MOUNTAIN_SPAN, 0, 1) * CRAG_STEPS * 4) / 4;
@@ -246,10 +275,15 @@ namespace SE {
             }
             if (trees && ls === Landscape.Savanna && (flora[i] & flowering) !== 0 &&
               landHash(i % GRID_W, (i / GRID_W) | 0, 830) < savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i])) tree = 1;
+            // A beach is bare sand: no jungle giants, only its palms.
+            if (beach) {
+              scene = LAND_SCENE_NONE;
+              palm = beachPalms(world, i, palms);
+            }
           }
           // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
           const scar = scars[i];
-          // The vent's cone is drawn by the effect layer.
+          // A vent is a cone (volcanoes()): nothing grows on it.
           if (scar === ScarKind.Vent) scene = LAND_SCENE_NONE;
           if (scar !== ScarKind.None && scarShowsGround(world, i)) {
             // Fresh ground carries none of the landscape's old objects; the
@@ -275,16 +309,17 @@ namespace SE {
         this.top[i] = floraTop[i];
         this.cactus[i] = scene === LAND_SCENE_NONE ? 0 : cactus;
         this.savannaTree[i] = scene === LAND_SCENE_NONE ? 0 : tree;
+        this.palm[i] = scars[i] === ScarKind.None ? palm : 0;
       }
       this.edges();
       this.volcanoes(world);
       this.paths.build(world);
-      this.ridges.build(world);
+      this.ridges.build(world, this.volcano);
       const lines = this.paths.sig;
       const ridges = this.ridges.sig;
       for (let i = 0; i < TILE_COUNT; i++) {
         let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
-        s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
+        s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22) ^ (this.palm[i] << 23), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
         s ^= Math.imul((this.depth[i] * QUANT) ^ (((this.shade[i] + LAND_SHIFT_MAX) * QUANT) << 8), 0xc2b2ae3d);
         s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
         this.sig[i] = (s ^ (s >>> 15)) >>> 0;
@@ -308,21 +343,28 @@ namespace SE {
     }
 
     /**
-     * Cones on volcanic belts (coastal ranges only over a hot mantle): the
-     * highest land tile within VOLCANO_REACH (ties to the lower index), never
-     * on a vent (the effect layer draws its own), a river or a city. Fresh
-     * where basalt still covers it, else under snow on ice and summit snow,
-     * green among plants, bare rock on lifeless ground.
+     * Cones: every vent and active volcano on land, and on volcanic belts
+     * (coastal ranges only over a hot mantle) or hotspots the highest land tile
+     * within VOLCANO_REACH (ties to the lower index) with neither of those that
+     * near, never on a river or a city. Fresh while basalt covers it, its vent
+     * is young or it is an active volcano, else dormant.
      */
     private volcanoes(world: WorldState): void {
-      const { elevation: e, upliftKind, riverLevel, tech, magma, landscape } = world;
-      const scar = world.hazards.scar;
+      const { elevation: e, upliftKind, riverLevel, tech, magma } = world;
+      const { scar, scarAge } = world.hazards;
       const v = this.volcano;
       v.fill(0);
+      let mean = 0;
+      for (let i = 0; i < TILE_COUNT; i++) mean += magma[i];
+      const hot = mean / TILE_COUNT + HOTSPOT_MAGMA_EXCESS;
+      const vent = (i: number): boolean => scar[i] === ScarKind.Vent || upliftKind[i] === UpliftKind.ActiveVolcano;
       for (let i = 0; i < TILE_COUNT; i++) {
-        if (e[i] < VOLCANO_MIN_ELEVATION || !isVolcanicKind(upliftKind[i]) || riverLevel[i] > 0 || tech[i] !== Tech.None) continue;
-        if (upliftKind[i] === UpliftKind.Arc && magma[i] < ARC_VOLCANO_MAGMA) continue;
-        if (scar[i] === ScarKind.Vent) continue;
+        if (vent(i)) {
+          if (e[i] >= 0) v[i] = upliftKind[i] === UpliftKind.ActiveVolcano || scarAge[i] < SCAR_MIN_TICKS[ScarKind.Basalt] ? 2 : 1;
+          continue;
+        }
+        if (e[i] < VOLCANO_MIN_ELEVATION || riverLevel[i] > 0 || tech[i] !== Tech.None) continue;
+        if (magma[i] < hot && (!isVolcanicKind(upliftKind[i]) || (upliftKind[i] === UpliftKind.Arc && magma[i] < ARC_VOLCANO_MAGMA))) continue;
         const x = i % GRID_W;
         const y = (i / GRID_W) | 0;
         let top = true;
@@ -331,30 +373,11 @@ namespace SE {
           if (ny < 0 || ny >= GRID_H) continue;
           for (let dx = -VOLCANO_REACH; dx <= VOLCANO_REACH; dx++) {
             const j = ny * GRID_W + wrapX(x + dx);
-            if (j !== i && (e[j] > e[i] || (e[j] === e[i] && j < i))) { top = false; break; }
+            if (j !== i && (vent(j) || e[j] > e[i] || (e[j] === e[i] && j < i))) { top = false; break; }
           }
         }
-        if (!top) continue;
-        const ls = landscape[i];
-        if (scar[i] === ScarKind.Basalt) v[i] = 2;
-        else if (ls === Landscape.Ice || ls === Landscape.Snow) v[i] = 4;
-        else v[i] = this.green(world, x, y) ? 1 : 3;
+        if (top) v[i] = scar[i] === ScarKind.Basalt ? 2 : 1;
       }
-    }
-
-    /** Whether plants cover a cone's tile, or most of the land around it. */
-    private green(world: WorldState, x: number, y: number): boolean {
-      const { landscape, elevation } = world;
-      if (LANDSCAPE_LEVEL[landscape[y * GRID_W + x]] >= CONE_GREEN_LEVEL) return true;
-      let n = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const j = clampY(y + dy) * GRID_W + wrapX(x + dx);
-          if (elevation[j] >= 0 && LANDSCAPE_LEVEL[landscape[j]] >= CONE_GREEN_LEVEL) n++;
-        }
-      }
-      return n >= CONE_GREEN_NEIGHBOURS;
     }
 
     /** Chebyshev distance (0, 1, 2+) to a tile of lower material rank — water counts as rank 0. */

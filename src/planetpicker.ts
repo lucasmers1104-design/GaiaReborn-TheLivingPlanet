@@ -23,8 +23,8 @@ namespace SE {
     const kinds = make('div', 'seg planet-kind');
     kinds.setAttribute('role', 'group');
     kinds.setAttribute('aria-label', 'Planet');
-    const random = button({ label: epochOf('random').name, cls: 'seg-btn', onClick: () => pick('random') });
-    const earth = button({ label: 'Erde', cls: 'seg-btn', onClick: () => pick(lastEarth) });
+    const random = button({ label: epochOf('random').name, icon: uiIcon('dice'), cls: 'seg-btn', onClick: () => pick('random') });
+    const earth = button({ label: 'Erde', icon: uiIcon('globe'), cls: 'seg-btn', onClick: () => pick(lastEarth) });
     kinds.append(random, earth);
 
     const epochs = make('div', 'planet-epochs');

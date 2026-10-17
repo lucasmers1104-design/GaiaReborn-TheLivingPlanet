@@ -270,6 +270,8 @@ namespace SE {
         if (s.once(`${h.id}:lift:${t.path[0]}`)) for (let k = 0; k < 10; k++) s.particles.spawn(x, y - 2, (Math.random() - 0.5) * 30, -8 - Math.random() * 12, 0.5 + Math.random() * 0.4, 20, DUST);
         continue;
       }
+      // One roar per storm's touchdown, even when it sets down two funnels.
+      if (s.once(`${h.id}:tornado-sound`)) playSfx('tornado');
       // Each funnel turns out of step with the others.
       s.add({ id: 'tornado', frame: frameOf('tornado', s.now + t.path[0] * 37), x, y, foot: y });
       for (let k = due(14, s.dt); k > 0; k--) {

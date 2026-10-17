@@ -27,6 +27,21 @@ namespace SE {
   const COLS = 10;
   const MIN_SCALE = 0.22;
   const MAX_SCALE = 1.6;
+  /** Below this the tree is an overview, too small to read; zoom stays continuous there. */
+  const CRISP_MIN = 0.5;
+
+  /**
+   * The zoom level next to `s` (upwards for dir > 0, downwards for dir < 0,
+   * nearest for 0) at which 2 px lines, even card edges and the 2× pixel art
+   * land on whole device pixels: multiples of 0.5 / devicePixelRatio. Any
+   * other scale smears the pixel style.
+   */
+  function crispScale(s: number, dir: number): number {
+    if (s < CRISP_MIN) return s;
+    const q = 0.5 / (window.devicePixelRatio || 1);
+    const k = dir > 0 ? Math.ceil(s / q - 1e-6) : dir < 0 ? Math.floor(s / q + 1e-6) : Math.round(s / q);
+    return Math.max(1, Math.min(k, Math.floor(MAX_SCALE / q))) * q;
+  }
 
   const KINGDOM_NAMES: Readonly<Record<Kingdom, string>> = {
     origin: 'Ursprung', plant: 'Pflanzen', animal: 'Tiere',
@@ -43,7 +58,8 @@ namespace SE {
     return PAD_X + n.col * COL_W;
   }
   function nodeY(n: EvoNode): number {
-    return PAD_TOP + (n.row - MIN_ROW) * ROW_H + (ROW_H - NODE_H) / 2;
+    // Even, like every card edge, so cards stay sharp at half-pixel zoom levels.
+    return PAD_TOP + (n.row - MIN_ROW) * ROW_H + Math.floor((ROW_H - NODE_H) / 4) * 2;
   }
 
   export interface TreeHooks {
@@ -81,6 +97,7 @@ namespace SE {
     private readonly pointers = new Map<number, { x: number; y: number }>();
     private pan: { x: number; y: number; tx: number; ty: number; moved: boolean } | null = null;
     private pinch: { d: number; scale: number; cx: number; cy: number } | null = null;
+    private settleTimer = 0;
 
     constructor(private readonly hooks: TreeHooks) {
       this.root = make('div', 'tree-layout');
@@ -206,9 +223,10 @@ namespace SE {
         const y1 = nodeY(p) + NODE_H / 2;
         const x2 = nodeX(n);
         const y2 = nodeY(n) + NODE_H / 2;
-        const mx = (x1 + x2) / 2;
+        // Odd x keeps the 2 px elbow on whole pixels at 1× and 0.5×.
+        const mx = Math.floor((x1 + x2) / 4) * 2 + 1;
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        path.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+        path.setAttribute('d', `M${x1},${y1} H${mx} V${y2} H${x2}`);
         path.setAttribute('class', `edge-lineage k-${n.kingdom}`);
         this.edgeSvg.appendChild(path);
         this.lineagePaths.set(n.id, path);
@@ -225,7 +243,7 @@ namespace SE {
       card.style.width = `${NODE_W}px`;
       card.style.height = `${NODE_H}px`;
 
-      const art = img(evoIcon(n.id), 'tree-node-art');
+      const art = pixelArt(evoIcon(n.id), 20, 'tree-node-art');
       const text = make('div', 'tree-node-text');
       text.append(make('div', 'tree-node-name', n.name), make('div', 'tree-node-status', ''));
       const progress = make('div', 'tree-node-progress');
@@ -296,7 +314,9 @@ namespace SE {
     /* ------------------------------------------------------- navigation -- */
 
     private apply(): void {
-      this.canvas.style.transform = `translate(${Math.round(this.tx)}px, ${Math.round(this.ty)}px) scale(${this.scale})`;
+      const dpr = window.devicePixelRatio || 1;
+      const px = (v: number): number => Math.round(v * dpr) / dpr;
+      this.canvas.style.transform = `translate(${px(this.tx)}px, ${px(this.ty)}px) scale(${this.scale})`;
       this.zoomLabel.textContent = `${Math.round(this.scale * 100)} %`;
     }
 
@@ -321,14 +341,22 @@ namespace SE {
     }
 
     private zoomBy(factor: number): void {
-      this.zoomAt(factor, this.viewport.clientWidth / 2, this.viewport.clientHeight / 2);
+      const next = crispScale(this.scale * factor, factor > 1 ? 1 : -1);
+      this.zoomAt(next / this.scale, this.viewport.clientWidth / 2, this.viewport.clientHeight / 2);
+    }
+
+    /** End of a wheel or pinch gesture: move on to the next crisp zoom level in its direction. */
+    private settle(dir: number, cx: number, cy: number): void {
+      this.zoomAt(crispScale(this.scale, dir) / this.scale, cx, cy);
     }
 
     fit(): void {
       const vw = this.viewport.clientWidth;
       const vh = this.viewport.clientHeight;
       if (vw <= 0 || vh <= 0) return;
-      this.scale = clamp(Math.min(vw / this.canvas.offsetWidth, vh / this.canvas.offsetHeight) * 0.98, MIN_SCALE, 1);
+      const exact = clamp(Math.min(vw / this.canvas.offsetWidth, vh / this.canvas.offsetHeight) * 0.98, MIN_SCALE, 1);
+      const crisp = crispScale(exact, -1);
+      this.scale = crisp >= CRISP_MIN ? crisp : exact;
       this.tx = (vw - this.canvas.offsetWidth * this.scale) / 2;
       this.ty = (vh - this.canvas.offsetHeight * this.scale) / 2;
       this.clampPan();
@@ -341,7 +369,7 @@ namespace SE {
       const vw = this.viewport.clientWidth;
       const vh = this.viewport.clientHeight;
       if (vw <= 0) return;
-      if (this.scale < 0.6) this.scale = 0.85;
+      if (this.scale < 0.6) this.scale = 1;
       this.tx = vw / 2 - (nodeX(n) + NODE_W / 2) * this.scale;
       this.ty = vh / 2 - (nodeY(n) + NODE_H / 2) * this.scale;
       this.clampPan();
@@ -353,7 +381,12 @@ namespace SE {
       vp.addEventListener('wheel', (e) => {
         e.preventDefault();
         const r = vp.getBoundingClientRect();
-        this.zoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - r.left, e.clientY - r.top);
+        const dir = e.deltaY < 0 ? 1 : -1;
+        const cx = e.clientX - r.left;
+        const cy = e.clientY - r.top;
+        this.zoomAt(dir > 0 ? 1.12 : 1 / 1.12, cx, cy);
+        window.clearTimeout(this.settleTimer);
+        this.settleTimer = window.setTimeout(() => this.settle(dir, cx, cy), 180);
       }, { passive: false });
 
       vp.addEventListener('pointerdown', (e) => {
@@ -397,7 +430,10 @@ namespace SE {
       });
       const end = (e: PointerEvent): void => {
         this.pointers.delete(e.pointerId);
-        if (this.pointers.size < 2) this.pinch = null;
+        if (this.pinch && this.pointers.size < 2) {
+          this.settle(Math.sign(this.scale - this.pinch.scale), this.pinch.cx, this.pinch.cy);
+          this.pinch = null;
+        }
         if (vp.hasPointerCapture(e.pointerId)) vp.releasePointerCapture(e.pointerId);
         vp.classList.remove('panning');
         // Let the click that ends a drag see `moved`, then forget the drag.
@@ -428,7 +464,7 @@ namespace SE {
       if (this.viewport.clientWidth >= 1100) {
         this.fit();
       } else {
-        this.scale = 0.85;
+        this.scale = 1;
         const target = this.selected ?? this.frontier();
         this.centerOn(target);
       }
@@ -567,6 +603,8 @@ namespace SE {
           const parentDev = n.parent ? world.evo.isDeveloped(n.parent) : true;
           path.classList.toggle('active', parentDev && st.state === 'developed');
           path.classList.toggle('reachable', parentDev && st.state !== 'developed');
+          path.classList.remove('state-locked', 'state-partial', 'state-available', 'state-developed');
+          path.classList.add(`state-${st.state}`);
         }
       }
       this.availChip.textContent = available === 1 ? '1 Schritt entwickelbar' : `${available} Schritte entwickelbar`;
@@ -600,7 +638,7 @@ namespace SE {
             const kind = need.kind === 'food' ? (from.kingdom === 'animal' ? 'prey' : 'food') : need.kind;
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('d', d);
-            const established = world.evo.isDeveloped(id);
+            const established = this.hooks.evo().presence(world, from) >= ECO_MIN_TILES;
             path.setAttribute('class', `edge-eco eco-${kind}${established ? ' met' : ''}${dim ? ' dimmed' : ''}`);
             path.setAttribute('marker-end', `url(#tree-arrow-${kind})`);
             g.appendChild(path);
@@ -662,7 +700,7 @@ namespace SE {
       const main = make('div', 'detail-main');
       main.tabIndex = -1;
       const head = make('div', 'detail-head');
-      head.appendChild(img(evoIcon(id), 'detail-art'));
+      head.appendChild(pixelArt(evoIcon(id), 32, 'detail-art'));
       const ht = make('div', 'detail-head-text');
       const chips = make('div', 'detail-chips');
       chips.append(

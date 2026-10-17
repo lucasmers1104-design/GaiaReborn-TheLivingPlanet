@@ -48,6 +48,8 @@ Stand: 15. 10. 2026 · unabhängiger Review gegen `docs/hoehe-spec.md` (Abschnit
    - Ohne Ereignis-Basalt bekommt jeder Kegel die ruhende Variante: 65 von 65 bei 2718/Tick 0, 61 von 61 bei 777 heute, davon 13 auf Eisschild.
    - Grüne Säume erscheinen dadurch bei 4,6 Mrd. J. auf einem leblosen Planeten sowie auf Eis und Gipfelschnee.
    - Sehen: `review-6`; Seed 777, Tick 0, Zoom 48 bei Kachel (152, 36).
+   - **Stand Okt. 2026: behoben.** Das Kegel-Sprite ist entfallen; der Kegel ist Relief und zeigt unten den Boden
+     seiner Kachel, ab 15 % der Höhe Schutt (ruhend) oder Basalt (frisch). Junge Erde: keine grünen Kegel (`docs/vulkane-2026-10/bericht.md`).
 2. **Mittel – Anbindung der Ereignisse fehlt noch** (`src/hazardadapter.ts`, Platzhalter „until that task is merged“).
    - Lava, Einschläge und Beben ändern die Höhe über `hazardLift` statt über `raiseCrust`, also ohne Gebirgstyp: `hazardlava.ts:111,131`, `hazardimpact.ts:95`, `hazardquake.ts:155,182–183`.
    - Basalt-, Schlot- und Schutt-Narben zeichnet `scarGround` als abgedunkelten Fels statt mit den neuen Materialien `basalt` und `scree`.
@@ -70,6 +72,8 @@ Stand: 15. 10. 2026 · unabhängiger Review gegen `docs/hoehe-spec.md` (Abschnit
    - Das 20 × 16-Sprite sitzt wie ein Hut auf dem Kammband.
    - Bei Zoom 16 ist er kaum als Vulkan zu erkennen.
    - Sehen: `review-6`.
+   - **Stand Okt. 2026: behoben.** Kegel als Relief, 20–28 px hoch, dunkel mit Umriss und Krater, im Gebirge als
+     eigener Gipfel; bei Zoom 16 als kleiner dunkler Kegel erkennbar (`docs/vulkane-2026-10/bericht.md`).
 8. **Niedrig – Kegel an nicht-vulkanischen Küsten.** In der Epoche „Heute“ werden alle Küstengürtel zu Typ 2. Dadurch stehen Kegel auch in der kanadischen Arktis, auf Spitzbergen, Nowaja Semlja und in Ostaustralien.
 9. **Niedrig – graue Tiere auf Schutt und Fels kontrastarm.** Nur die Kontur trägt sie.
 10. **Hinweis – Bergregenwald zu wenig unterscheidbar.** E5 verlangt „etwas dunkler und moosiger“; bei Zoom 48 ist kaum ein Unterschied zu sehen.

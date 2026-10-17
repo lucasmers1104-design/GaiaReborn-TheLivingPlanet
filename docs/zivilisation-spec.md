@@ -173,8 +173,8 @@ Abstand überlappen sich die Umländer nicht.
   - Er springt mit kleiner Chance auf Städte bis 14 Felder Entfernung über.
   - Sichtbar über das bestehende Seuchen-Ereignissymbol (`eventKind`/`eventTtl`) und als kurze Meldung mit dem
     Stadtnamen.
-- Die bestehende Seuche in `geo.ts` bleibt bis nach dem Merge des Geologie-Agenten unverändert. Danach läuft sie über
-  die Städteliste. Bis dahin feuert sie wegen ihrer Schwelle (`totalCityPop > 32`, ungewichtet) kaum noch.
+- Die natürliche Seuche in `geo.ts` ist abgeschaltet; natürliche Seuchen laufen nur noch über die Städteliste. Ihr
+  Wurf zieht weiter dieselben Zufallszahlen (ohne Wirkung), damit jede Saat ihre Geschichte behält.
 
 ### 2.8 Konflikte (Phase 2, `src/conflict.ts`)
 

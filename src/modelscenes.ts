@@ -153,7 +153,7 @@ namespace SE {
     s += `<path class="atmo-mix" stroke-width="${n(mix)}" d="M224 132C246 146 276 146 296 134${arrowHead(296, 134, 1, -0.6, 5 + mix)}"/>`;
 
     // What the planet makes of it all, right now.
-    s += `<g transform="translate(${SCENE_W - 104} 10)"><rect width="94" height="38" rx="10" class="scene-chip"/>` +
+    s += `<g transform="translate(${SCENE_W - 104} 10)"><rect width="94" height="38" class="scene-chip"/>` +
       `<text x="47" y="16" class="scene-chip-label">Mitteltemperatur</text>` +
       `<text x="47" y="31" class="scene-chip-value">${esc(`${fmt.one(world.globalTemp)} °C`)}</text></g>`;
     return `${s}</svg>`;

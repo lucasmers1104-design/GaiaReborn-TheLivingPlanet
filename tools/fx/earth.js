@@ -39,7 +39,8 @@ function dustPuff(f) {
   fx.billow(t, PUFFS[f].map(([x, y, r]) => ({ x, y, r })), DUST, (x, y) => (k.hash(x, y, 811 + f) < 0.04 && y > 9 ? 'rock3' : null));
   // Young dust still sits on the ground it was kicked up from.
   if (f < 2) t.each((x, y) => (y > 13 ? 0 : undefined));
-  return fx.dissolve(t, DUST_GONE[f]);
+  // Falls apart in tufts: an ordered dither over 16 px read as a waffle net on the map.
+  return fx.crumble(t, DUST_GONE[f], 817);
 }
 
 /* ------------------------------------------------------- stone parts -- */

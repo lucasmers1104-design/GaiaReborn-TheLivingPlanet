@@ -114,8 +114,12 @@ Umlaufbahnen, zwei Monde und ein Asteroid. Oben rechts eine Infokarte mit Satell
 
 - **Einstellungen:** ein Dialog mit denselben Optionen wie das Menü „Optionen“ (Datumsformat, Pausen,
   Effekte reduzieren, Klang), definiert an einer Stelle (`SettingDef`, `src/settingsview.ts`).
-- **Bewegung:** Nur die Sterne funkeln und der Globus dreht sich. Bei „Effekte reduzieren“ oder der
-  Systemeinstellung für reduzierte Bewegung steht beides still.
+- **Globus:** eigenes Pixel-Bild (`TitleGlobe`, `src/titledecor.ts`): etwa 144 Bildpunkte breit, ganzzahlig
+  vergrößert, Licht von links oben in geditherten Stufen, bläuliche Nachtseite, zwei Pixel Luftsaum und
+  eigene Wolken, die etwas schneller ziehen als der Boden.
+- **Bewegung:** Der Globus dreht sich, drei Sternschichten ziehen pixelweise unterschiedlich schnell
+  (Parallaxe), Funkeln, Asteroiden und Monde wippen in Pixelschritten. Bei „Effekte reduzieren“ oder der
+  Systemeinstellung für reduzierte Bewegung steht alles still.
 - **Schriften:** Pixelify Sans (Logo, Überschriften) und JetBrains Mono (Text) liegen als woff2 mit
   Lizenz (SIL OFL) in `assets/fonts/` und werden nur auf dem Titel verwendet.
 - **Grafiken:** Satellit, Monde und Asteroiden sind Pixel-SVGs in `assets/title/`.

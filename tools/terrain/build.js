@@ -111,8 +111,6 @@ function build(only = null) {
         const [tw, th] = C.TREE_SIZES[v.size];
         if (t.w > tw || t.h > th) problems.push(`${id}: size '${v.size}' must fit ${tw}×${th}`);
       }
-      const box = C.MOUNTAIN_SIZES[ob.id]?.[v.index];
-      if (box && (t.w > box[0] || t.h > box[1])) problems.push(`${id}: must fit ${box[0]}×${box[1]}`);
       let foot = false;
       for (let x = 0; x < t.w; x++) if (t.get(x, t.h - 1) !== 0) foot = true;
       if (!foot) problems.push(`${id}: the bottom row is empty — objects stand on their last row`);

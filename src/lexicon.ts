@@ -104,7 +104,7 @@ namespace SE {
       const title = make('h3', 'fauna-group-name', LIFE[c].name);
       title.id = `fauna-group-${id}`;
       sec.setAttribute('aria-labelledby', title.id);
-      head.append(img(evoIcon(id), 'fauna-group-icon'), title, make('span', 'fauna-group-count', `${dex.discoveredCount(c)} / ${SUBSPECIES_PER_CLASS} entdeckt`));
+      head.append(pixelArt(evoIcon(id), 15, 'fauna-group-icon'), title, make('span', 'fauna-group-count', `${dex.discoveredCount(c)} / ${SUBSPECIES_PER_CLASS} entdeckt`));
       sec.append(head, tiles);
       return sec;
     }
@@ -120,7 +120,9 @@ namespace SE {
       const where = `${LIFE[c].name}, ${faunaStageLabel(s)}`;
       if (known) {
         const name = subspeciesName(c, s);
-        b.appendChild(make('span', 'fauna-tile-name', name));
+        const label = make('span', 'fauna-tile-name', name);
+        label.style.setProperty('--chars', String(Math.max(...name.split(/[\s-]/).map((w) => w.length))));
+        b.appendChild(label);
         if (st && st.cls !== 'is-living') b.appendChild(make('span', `fauna-tile-mark ${st.cls}`, st.text));
         b.setAttribute('aria-label', `${name} – ${where}${st && st.cls !== 'is-living' ? `, ${st.text}` : ''}`);
       } else {

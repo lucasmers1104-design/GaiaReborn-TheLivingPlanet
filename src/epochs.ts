@@ -39,8 +39,7 @@ namespace SE {
       blurb: 'Die Ozeane sind gerade entstanden, Leben gibt es noch nicht. Kleine Urkontinente und Vulkaninseln, viel Vulkanismus, schnelle Platten.',
       greeting: 'Die junge Erde: Urozeane, Vulkaninseln und noch kein Leben.',
       playerSea: false, varies: true,
-      // Volcanoes and drift only: core heat would also lift the mountains and
-      // saturate the mantle field until volcanoes lose their belts.
+      // Volcanoes and drift only: core heat would also lift the mountains.
       geo: { drift: 0.8, volcanoes: 0.8 },
     },
     {

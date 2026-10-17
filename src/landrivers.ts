@@ -15,6 +15,9 @@
 namespace SE {
   /** Largest offset of a river point from where the links put it, px. */
   const JITTER = 3;
+  /** Meander: sideways swing of a straight run, px, and its wavelength along the run, px. */
+  const MEANDER = 5;
+  const MEANDER_WAVE = 88;
   /** River width at the smallest and the largest level, px. */
   const WIDTH_MIN = 3;
   const WIDTH_MAX = 6;
@@ -51,6 +54,28 @@ namespace SE {
     oy.push(ys[ys.length - 1]);
     ow.push(ws[ws.length - 1]);
     return [ox, oy, ow];
+  }
+
+  /**
+   * Sideways swing of a link midpoint, px: a wave along the link's own row or
+   * column in world space, so a straight run of links meanders (only inside
+   * a run, away from rivers alongside) and every chunk
+   * sees the same line (it depends only on where the link is).
+   */
+  function meander(dir: number, mx: number, my: number): number {
+    const along = dir <= 2 ? ((mx % WORLD_W) + WORLD_W) % WORLD_W : my;
+    const lane = dir <= 2 ? Math.floor(my / 16) : wrapX(Math.floor(mx / 16));
+    return MEANDER * Math.sin((2 * Math.PI * along) / MEANDER_WAVE + 2 * Math.PI * landHash(lane, dir, 43));
+  }
+
+  /** A river on either side of tile i, across a link in direction dir: a meander there could touch it. */
+  function besideRiver(world: WorldState, i: number, dir: number): boolean {
+    const x = i % GRID_W;
+    const y = (i / GRID_W) | 0;
+    const a = dir <= 2 ? (y > 0 ? i - GRID_W : -1) : idx(wrapX(x - 1), y);
+    const b = dir <= 2 ? (y < GRID_H - 1 ? i + GRID_W : -1) : idx(wrapX(x + 1), y);
+    const wet = (j: number): boolean => j >= 0 && world.elevation[j] >= 0 && world.riverLevel[j] > 0;
+    return wet(a) || wet(b);
   }
 
   /** Neighbour direction of j from i: 1 W, 2 E, 3 N, 4 S, 0 none. */
@@ -157,8 +182,13 @@ namespace SE {
       for (let n = 0; n + 1 < s.tiles.length; n++) {
         const to = s.tiles[n + 1];
         const dir = direction(s.tiles[n], to);
-        xs.push((cx[n] + cx[n + 1]) / 2 + jitter(to, 33 + dir));
-        ys.push((cy[n] + cy[n + 1]) / 2 + jitter(to, 38 + dir));
+        const mx = (cx[n] + cx[n + 1]) / 2;
+        const my = (cy[n] + cy[n + 1]) / 2;
+        const prev = n > 0 ? direction(s.tiles[n - 1], s.tiles[n]) : dir;
+        const next = n + 2 < s.tiles.length ? direction(to, s.tiles[n + 2]) : dir;
+        const bend = prev === dir && next === dir && !besideRiver(world, s.tiles[n], dir) && !besideRiver(world, to, dir) ? meander(dir, mx, my) : 0;
+        xs.push(mx + jitter(to, 33 + dir) + (dir >= 3 ? bend : 0));
+        ys.push(my + jitter(to, 38 + dir) + (dir <= 2 ? bend : 0));
         ws.push((width(s.tiles[n]) + width(to)) / 2);
       }
       const n = s.tiles.length - 1;

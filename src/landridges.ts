@@ -56,6 +56,38 @@ namespace SE {
   const RIDGE_POLAR_ROWS = 2;
 
   /**
+   * Volcano cones (docs/hoehe-spec.md §3.8): a point segment that stands this
+   * much above the crest rise of its tile, at least CONE_MIN, with a foot
+   * radius of CONE_FOOT_BASE + CONE_FOOT_PER_RISE·H and a crater of
+   * CRATER_BASE + H·CRATER_PER_RISE px radius. Seen in 3/4 view the far foot
+   * shows foot radius px higher, so a foot much wider than the cone is high
+   * hides its crater behind the far flank and makes it a dome.
+   */
+  const CONE_LIFT = 10;
+  const CONE_MIN = 20;
+  const CONE_FOOT_BASE = 2;
+  const CONE_FOOT_PER_RISE = 0.5;
+  const CRATER_BASE = 2;
+  const CRATER_PER_RISE = 1 / 12;
+  /**
+   * A cone is bare from this share of its height up, scree when dormant and
+   * basalt when fresh: its foot fades into the ground around. Plants or turf
+   * higher up hid it in the forest or made it a pale dome.
+   */
+  const CONE_APRON = 0.15;
+  /**
+   * A crest that runs over a cone sinks to this share of the cone's height at
+   * its tile: the cone is the peak there. Any higher, a crest point beside the
+   * moved cone (coneCentre) filled its crater and it read as a boulder.
+   */
+  const CONE_SADDLE = 0;
+  /** The crest one tile either side stays this share of the cone's height below it, so a cone in a range stands out as its own peak. */
+  const CONE_SHOULDER = 0.75;
+  /** Cone kinds of `RidgePaths.build`. */
+  const CONE_FRESH = 2;
+  const NO_CONES = new Uint8Array(0);
+
+  /**
    * An ice sheet, or ground whose sea-level climate would carry one (before
    * succession has laid it down): frozen by the zone's memory, else by the
    * temperature brought down to sea level. Summit snow on a mountain frozen
@@ -93,6 +125,15 @@ namespace SE {
     readonly zSnow: number[] = [];
     /** Ground key of the turf above the tree line (0: the tile's own ground). */
     readonly upper: number[] = [];
+    /** Crater radius of a volcano cone, px (0: a range). */
+    readonly crater: number[] = [];
+    /** Ground key of the bare upper flanks and cliffs (0: plain rock): scree on a dormant cone, basalt on a fresh one. */
+    readonly rockKey: number[] = [];
+    /** Per tile: the segment of its volcano cone, −1 none. */
+    readonly cone = new Int32Array(TILE_COUNT).fill(-1);
+    /** Per tile: the height of its cone, px, while the lines are built (0 none). */
+    private readonly coneH = new Float32Array(TILE_COUNT);
+    private coneKeys: number[] | null = null;
     private readonly buckets: number[][] = Array.from({ length: BUCKETS_X * BUCKETS_Y }, () => []);
     private stamp = new Uint32Array(0);
     private stampN = 0;
@@ -107,7 +148,8 @@ namespace SE {
     private turfKeys: number[] | null = null;
     private readonly near = new Int32Array(8);
 
-    build(world: WorldState): void {
+    /** `cones` per tile: 0 none, 1 dormant, 2 fresh (young basalt). */
+    build(world: WorldState, cones: Uint8Array = NO_CONES): void {
       const crests = this.crestKey;
       this.findCrests(world);
       // The lines change only when a crest's rise or belts do: most ticks they stay.
@@ -118,13 +160,76 @@ namespace SE {
           key = Math.imul(key ^ (this.rise(world, t) | (b.tree << 6) | (b.rock << 12) | (b.snow << 18)), 0x01000193) ^ b.upper;
         }
       }
+      for (let i = 0; i < cones.length; i++) {
+        if (cones[i] === 0) continue;
+        const b = this.bands(world, i);
+        key = Math.imul(key ^ (i * 4 + cones[i]) ^ (this.coneCentre(world, i) << 24), 0x01000193);
+        key = Math.imul(key ^ (this.rise(world, i) | (b.tree << 6) | (b.rock << 12) | (b.snow << 18)), 0x01000193) ^ b.upper;
+      }
       key >>>= 0;
       if (crests === this.crestKey && key === this.linesKey) return;
       this.linesKey = key;
       this.sig.fill(0);
       for (const b of this.buckets) b.length = 0;
-      for (const list of [this.ax, this.ay, this.bx, this.by, this.ha, this.hb, this.wa, this.wb, this.zTree, this.zRock, this.zSnow, this.upper]) list.length = 0;
+      for (const list of [this.ax, this.ay, this.bx, this.by, this.ha, this.hb, this.wa, this.wb, this.zTree, this.zRock, this.zSnow, this.upper, this.crater, this.rockKey]) list.length = 0;
+      this.cone.fill(-1);
+      this.coneH.fill(0);
+      for (let i = 0; i < cones.length; i++) if (cones[i] !== 0) this.coneH[i] = this.coneHeight(world, i);
       for (const chain of this.chains) this.shape(chain, world);
+      for (let i = 0; i < cones.length; i++) if (cones[i] !== 0) this.shapeCone(world, i, cones[i] === CONE_FRESH);
+    }
+
+    /* ------------------------------------------------------------ cones -- */
+
+    /**
+     * Where in its tile a cone stands, px: x + 16·y. The crest position, but
+     * on a coast moved inland as far as the crest jitter goes: the sea cuts
+     * off a cone's foot, and a cut front flank shows as a wall.
+     */
+    private coneCentre(world: WorldState, t: number): number {
+      const x = t % GRID_W;
+      const y = (t / GRID_W) | 0;
+      let sx = 0;
+      let sy = 0;
+      for (let k = 0; k < 8; k++) {
+        const ny = y + NY[k];
+        if (ny >= 0 && ny < GRID_H && world.elevation[ny * GRID_W + wrapX(x + NX[k])] < 0) { sx += NX[k]; sy += NY[k]; }
+      }
+      const cx = sx === 0 ? crestOffset(x, y, 0) : 8 - Math.sign(sx) * JITTER;
+      const cy = sy === 0 ? crestOffset(x, y, 1) : 8 - Math.sign(sy) * JITTER;
+      return cx + 16 * cy;
+    }
+
+    private coneHeight(world: WorldState, t: number): number {
+      return Math.max(CONE_MIN, Math.min(RIDGE_RISE_MAX, this.rise(world, t) + CONE_LIFT));
+    }
+
+    /**
+     * A volcano: a point segment at the tile's crest position, concave like a
+     * stratovolcano, with a crater on top. Above its foot a dormant cone is
+     * scree, a fresh one basalt. Snow lies above the snow line on both.
+     */
+    private shapeCone(world: WorldState, t: number, fresh: boolean): void {
+      const x = t % GRID_W;
+      const y = (t / GRID_W) | 0;
+      const h = this.coneH[t];
+      const b = this.bands(world, t);
+      if (!this.coneKeys) {
+        const T = LandTables.shared();
+        const rock = T.groundKey(Landscape.Rock, Substrate.Rock, 0);
+        // Scree, a step darker than rock: a dormant cone stands out from the bare rock around it.
+        this.coneKeys = [T.materialKey('scree') || rock, T.materialKey('basalt') || rock];
+      }
+      const cone = { tree: 0, rock: CONE_APRON * h, snow: b.snow, upper: 0 };
+      const c = this.coneCentre(world, t);
+      const cx = x * 16 + (c & 15);
+      const cy = y * 16 + (c >> 4);
+      this.cone[t] = this.ax.length;
+      this.push(cx, cy, cx, cy, h, h, cone, CONE_FOOT_BASE + CONE_FOOT_PER_RISE * h, CRATER_BASE + h * CRATER_PER_RISE, this.coneKeys[fresh ? 1 : 0]);
+      let s = Math.imul(0x2545f491 ^ (h * 4) ^ (fresh ? 1 << 8 : 0) ^ (Math.round(cone.tree) << 9) ^ (Math.round(cone.rock) << 15) ^ (cone.snow << 21), 0x85ebca77);
+      s = Math.imul(s ^ cone.upper ^ (s >>> 13), 0xc2b2ae3d);
+      s = Math.imul(s ^ c, 0x27d4eb2d);
+      this.sig[t] = (this.sig[t] ^ s) >>> 0 || 1;
     }
 
     /* ---------------------------------------------------- crest search -- */
@@ -397,6 +502,11 @@ namespace SE {
       for (let k = 0; k < ph.length; k++) {
         const x = Math.round(px[k]);
         ph[k] = Math.min(RIDGE_RISE_MAX, ph[k] * (1 - SUMMITS / 2 + SUMMITS * landHash(((x % (GRID_W * 16)) + GRID_W * 16) % (GRID_W * 16), Math.round(py[k]), 1205)));
+        const j = pb[k];
+        const cone = this.coneH[chain[j]];
+        const side = Math.max(j > 0 ? this.coneH[chain[j - 1]] : 0, j + 1 < chain.length ? this.coneH[chain[j + 1]] : 0);
+        if (cone > 0) ph[k] = Math.min(ph[k], CONE_SADDLE * cone);
+        else if (side > 0) ph[k] = Math.min(ph[k], CONE_SHOULDER * side);
       }
       const n = Math.max(1, px.length - 1);
       for (let k = 0; k < n; k++) {
@@ -425,13 +535,17 @@ namespace SE {
       return { tree: above(TREELINE_TEMP), rock: above(ROCKBELT_TEMP), snow: above(snowLine), upper: turf };
     }
 
-    private push(ax: number, ay: number, bx: number, by: number, ha: number, hb: number, b: { tree: number; rock: number; snow: number; upper: number }): void {
+    private push(
+      ax: number, ay: number, bx: number, by: number, ha: number, hb: number, b: { tree: number; rock: number; snow: number; upper: number },
+      foot = 0, crater = 0, rockKey = 0,
+    ): void {
       const id = this.ax.length;
-      const wa = FOOT_BASE + FOOT_PER_RISE * ha;
-      const wb = FOOT_BASE + FOOT_PER_RISE * hb;
+      const wa = foot || FOOT_BASE + FOOT_PER_RISE * ha;
+      const wb = foot || FOOT_BASE + FOOT_PER_RISE * hb;
       this.ax.push(ax); this.ay.push(ay); this.bx.push(bx); this.by.push(by);
       this.ha.push(ha); this.hb.push(hb); this.wa.push(wa); this.wb.push(wb);
       this.zTree.push(b.tree); this.zRock.push(b.rock); this.zSnow.push(b.snow); this.upper.push(b.upper);
+      this.crater.push(crater); this.rockKey.push(rockKey);
       const reach = Math.max(wa, wb) + 1;
       const x0 = Math.floor((Math.min(ax, bx) - reach) / BUCKET);
       const x1 = Math.floor((Math.max(ax, bx) + reach) / BUCKET);

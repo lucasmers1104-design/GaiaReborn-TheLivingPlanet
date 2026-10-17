@@ -382,3 +382,17 @@ test('zoomed out to 10 px per tile, the meteor shadow stays a dithered disc of s
     }
   }
 });
+
+test('an atomic strike sets no fire on ground another hazard holds, such as standing flood water', () => {
+  const { SE, world: w } = makeSim(4242, 'today');
+  const hz = new SE.HazardSystem();
+  const [x, y] = inlandTile(SE, w, 8);
+  for (const { i } of around(SE, x, y, 2)) {
+    w.vegetation[i] = 0.8;
+    w.hazards.tile[i] = SE.HazardTile.Flood;
+    w.hazards.level[i] = 50;
+  }
+  const h = hz.start(w, SE.EventKind.AtomicBomb, x, y, 'player');
+  assert.equal(h.impact.fires.length, 0, 'nothing under water catches fire');
+  for (const { i } of around(SE, x, y, 2)) assert.notEqual(w.hazards.tile[i], SE.HazardTile.Burning);
+});

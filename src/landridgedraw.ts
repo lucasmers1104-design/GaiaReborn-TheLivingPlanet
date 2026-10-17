@@ -54,6 +54,46 @@ namespace SE {
   /** Ground rows between a pixel and the one above it that make a skyline. */
   const SKYLINE_GAP = 4;
   const GULLY_SIZE = 128;
+  /** How far a cone's crater floor lies below its rim, px, and how many ramp steps darker its pit shows. */
+  const CRATER_DIP = 3;
+  const CRATER_SHADE = 3;
+  /** A cone keeps a clean outline: its gullies cut this share of the rise; instead ravines run down it as shading, this many around. */
+  const CONE_GULLY = 0.08;
+  const CONE_RIBS = 13;
+  const CONE_RIB_EDGE = 0.6;
+  const CONE_GAIN_X = 1.6;
+  const CONE_GAIN_Y = 0.4;
+  const CRATER_LIP = 1;
+  /** A cone's outline is drawn where it stands at least this high, px: lower, it would ring the flat foot. */
+  const CONE_OUTLINE_Z = 1.5;
+  /**
+   * Ramp steps darker the outline shows; the most a lit cone flank brightens,
+   * and how much darker the whole cone shows: dark volcanic scree, not a pale
+   * dome like a boulder.
+   */
+  const CONE_OUTLINE_SHADE = 2;
+  const CONE_LIGHT_MAX = 1;
+  const CONE_DARKEN = 1;
+
+  /**
+   * Rise at `q` = distance / foot radius from a ridge line of rise `top`:
+   * (1 − q)^1.5, and inside a cone's crater (`pit` = crater radius / foot
+   * radius) a bowl CRATER_DIP below the rim. sample and sampleAt both take it
+   * from here, so they agree bit for bit.
+   */
+  function gullyDepth(ridges: RidgePaths, seg: number): number {
+    return ridges.crater[seg] > 0 ? CONE_GULLY : GULLY;
+  }
+
+  function ridgeProfile(top: number, q: number, pit: number): number {
+    if (q >= pit) {
+      const u = 1 - q;
+      return top * u * Math.sqrt(u);
+    }
+    const u = 1 - pit;
+    const r = q / pit;
+    return top * u * Math.sqrt(u) - CRATER_DIP * (1 - r * r);
+  }
 
   /** Ridged periodic noise 0..1, world pixels: lines of 1 are the gullies. */
   const GULLIES: Float32Array = (() => {
@@ -151,7 +191,7 @@ namespace SE {
     const GS = gridSeg;
     rowLo.fill(gw, 0, gh);
     rowHi.fill(-1, 0, gh);
-    const { ax: pax, ay: pay, bx: pbx, by: pby, ha, hb, wa, wb } = ridges;
+    const { ax: pax, ay: pay, bx: pbx, by: pby, ha, hb, wa, wb, crater } = ridges;
     sortByPeak(ridges, ids);
     let any = false;
     for (const id of ids) {
@@ -174,6 +214,7 @@ namespace SE {
       const hd = hb[id] - ha[id];
       // No sample this segment cannot beat is worth the distance.
       const peak = Math.max(ha[id], hb[id]);
+      const pit = crater[id] / wa[id];
       for (let j = sj0; j <= sj1; j++) {
         slice(ax, ay, bx, by, reach, j);
         const si0 = Math.max(0, Math.ceil(sliceLo));
@@ -201,8 +242,7 @@ namespace SE {
           // (1 − d/foot)^1.5 ≤ 1 − d²/foot²: most samples another segment already beat need no root.
           const top = h0 + hd * t;
           if (top * (f2 - d2) <= G[g] * f2) continue;
-          const u = 1 - Math.sqrt(d2) / foot;
-          const rise = top * u * Math.sqrt(u);
+          const rise = ridgeProfile(top, Math.sqrt(d2) / foot, pit);
           if (rise <= G[g]) continue;
           G[g] = rise;
           GS[g] = id;
@@ -237,7 +277,7 @@ namespace SE {
    * `waterRows` rows, below them the pixels of sea tiles (`depth`, when
    * given). False when nothing rises.
    */
-  function fill(ox: number, oy: number, w: number, h: number, water: Uint8Array, waterRows: number, depth: Float32Array | null): boolean {
+  function fill(ridges: RidgePaths, ox: number, oy: number, w: number, h: number, water: Uint8Array, waterRows: number, depth: Float32Array | null): boolean {
     const gw = (w >> 1) + 1;
     const gh = (h >> 1) + 1;
     allocate(w, h);
@@ -286,14 +326,14 @@ namespace SE {
           if (v0 <= 0) continue;
           const k = y * w + x;
           if (y < waterRows ? water[k] === 1 : depth !== null && seaTile(depth, ox + x, oy + y)) continue;
-          const v = v0 * (1 - GULLY * GULLIES[((oy + y) & gm) * GULLY_SIZE + ((ox + x) & gm)]) - RISE_MIN;
-          if (v <= 0) continue;
           // The thresholds of the strongest sample the pixel reads.
           let s = ra + i;
           let top = a;
           if (xo && b > top) { top = b; s = ra + i + 1; }
           if (yo && c > top) { top = c; s = rc + i; }
           if (xo && yo && d > top) { s = rc + i + 1; }
+          const v = v0 * (1 - gullyDepth(ridges, GS[s]) * GULLIES[((oy + y) & gm) * GULLY_SIZE + ((ox + x) & gm)]) - RISE_MIN;
+          if (v <= 0) continue;
           z[k] = v;
           seg[k] = GS[s];
           if (k < dirtyLo) dirtyLo = k;
@@ -328,7 +368,7 @@ namespace SE {
       RISE_CACHE.set(place as string, kept);
       if (!recall(kept, b.w, b.h)) return null;
     } else {
-      const risen = sample(ridges, ids, ox, oy, b.w, b.h) && fill(ox, oy, b.w, b.h, b.water, b.h, null);
+      const risen = sample(ridges, ids, ox, oy, b.w, b.h) && fill(ridges, ox, oy, b.w, b.h, b.water, b.h, null);
       if (place !== null) keep(place, key, risen, b.w, b.h);
       if (!risen) return null;
     }
@@ -369,6 +409,9 @@ namespace SE {
     for (const id of ids) {
       mix(r.ax[id]); mix(r.ay[id]); mix(r.bx[id]); mix(r.by[id]);
       mix(r.ha[id]); mix(r.hb[id]); mix(r.wa[id]); mix(r.wb[id]);
+      mix(r.crater[id]); mix(r.rockKey[id]);
+      // The id too: the kept seg buffer holds ids, and a rebuild renumbers segments of the same shape.
+      mix(id);
     }
     return h >>> 0;
   }
@@ -470,7 +513,7 @@ namespace SE {
     const hh = h + LIFT_BELOW;
     const ids = ridges.query(ox, oy, ox + w, oy + hh);
     if (ids.length === 0 || !sample(ridges, ids, ox, oy, w, hh)) return null;
-    if (!fill(ox, oy, w, hh, sea ?? NO_WATER, sea ? h : 0, field.depth)) return null;
+    if (!fill(ridges, ox, oy, w, hh, sea ?? NO_WATER, sea ? h : 0, field.depth)) return null;
     colTop.fill(hh, 0, w);
     lift(ridges, { px: new Uint8Array(0), water: new Uint8Array(0), w, h: hh }, null, ox, oy, false, h);
     return { ridges, z: zBuf, seg: segBuf, depth: depthBuf, top: colTop, bottom: colHi };
@@ -523,14 +566,14 @@ namespace SE {
     // fill, for one pixel.
     const v0 = xo === 0 ? (yo === 0 ? a : (a + c) / 2) : (yo === 0 ? (a + b) / 2 : (a + b + c + d) / 4);
     if (v0 <= 0) return FOOT;
-    const gm = GULLY_SIZE - 1;
-    const v = v0 * (1 - GULLY * GULLIES[(wy & gm) * GULLY_SIZE + (wx & gm)]) - RISE_MIN;
-    if (v <= 0) return FOOT;
     let s = sa;
     let top = a;
     if (xo && b > top) { top = b; s = sb; }
     if (yo && c > top) { top = c; s = sc; }
     if (xo && yo && d > top) s = sd;
+    const gm = GULLY_SIZE - 1;
+    const v = v0 * (1 - gullyDepth(ridges, s) * GULLIES[(wy & gm) * GULLY_SIZE + (wx & gm)]) - RISE_MIN;
+    if (v <= 0) return FOOT;
     FOOT.z = Math.fround(v);
     FOOT.seg = s;
     return FOOT;
@@ -540,7 +583,7 @@ namespace SE {
 
   /** One rise sample at even world pixel (X, Y), as sample() takes it (its segment in sampleSeg); `ids` in sortByPeak order. */
   function sampleAt(ridges: RidgePaths, ids: readonly number[], X: number, Y: number): number {
-    const { ax: pax, ay: pay, bx: pbx, by: pby, ha, hb, wa, wb } = ridges;
+    const { ax: pax, ay: pay, bx: pbx, by: pby, ha, hb, wa, wb, crater } = ridges;
     // The sample is (0, 0) of a buffer at (X, Y): the same exact coordinates as in any other buffer.
     let G = 0;
     sampleSeg = -1;
@@ -564,8 +607,7 @@ namespace SE {
       const foot = wa[id] / 2 + ((wb[id] - wa[id]) / 2) * t;
       const d2 = dx * dx + dy * dy;
       if (d2 >= foot * foot) continue;
-      const u = 1 - Math.sqrt(d2) / foot;
-      const rise = (ha[id] + (hb[id] - ha[id]) * t) * u * Math.sqrt(u);
+      const rise = ridgeProfile(ha[id] + (hb[id] - ha[id]) * t, Math.sqrt(d2) / foot, crater[id] / wa[id]);
       if (rise <= G) continue;
       G = Math.fround(rise);
       sampleSeg = id;
@@ -579,12 +621,32 @@ namespace SE {
   }
 
   /**
+   * Where the crater of the volcano cone on tile (x, y) shows: the world art
+   * pixel of its centre as the compositor draws it, lifted. Null without a cone.
+   */
+  export function volcanoMouth(field: TerrainField, x: number, y: number): [number, number] | null {
+    if (y < 0 || y >= GRID_H) return null;
+    const r = field.ridges;
+    const s = r.cone[y * GRID_W + wrapX(x)];
+    if (s < 0) return null;
+    const wx = Math.round(r.ax[s]);
+    const wy = Math.round(r.ay[s]);
+    return [wx, wy - ((landRiseAt(field, wx, wy) + 0.5) | 0)];
+  }
+
+  /**
    * Redraw the lifted columns front to back, shaded, with the belts and a
    * skyline rim; with `paint` false only note which ground row each screen
    * pixel shows. Each column is read into a copy first, since its lifted
    * pixels land on rows not read yet. Only rows above `limit` matter: ground
    * that cannot rise above it is left as it is (`bottom` says so).
    */
+  /** The ground texture of a key; null for a key the art lacks, so the caller falls back instead of throwing mid-composition. */
+  function groundTex(art: LandArt, key: number): LandTex | null {
+    const g = art.ground[landKeyRank(key)];
+    return g ? g[landKeyDensity(key)] ?? g[0] ?? null : null;
+  }
+
   function lift(ridges: RidgePaths, b: LandBuffer, art: LandArt | null, ox: number, oy: number, paint: boolean, limit: number): void {
     const { px, water, w, h } = b;
     const z = zBuf;
@@ -598,9 +660,11 @@ namespace SE {
       snow = art.ground[landKeyRank(T.groundKey(Landscape.Snow, Substrate.Rock, 0))][0];
     }
     const shift = art ? art.shift : [];
-    const { zTree, zRock, zSnow, upper } = ridges;
+    const { zTree, zRock, zSnow, upper, crater, rockKey } = ridges;
     const rim = art ? art.shift[LAND_SHIFT_MAX - 1] : null;
     const turf: LandTex[] = [];
+    const stones: LandTex[] = [];
+    const wrapW = GRID_W * 16;
     const cliff2 = CLIFF_SLOPE * CLIFF_SLOPE;
     const snowCliff2 = SNOW_CLIFF_SLOPE * SNOW_CLIFF_SLOPE;
     if (colPx.length < h) { colPx = new Uint8Array(h); colWater = new Uint8Array(h); }
@@ -642,14 +706,37 @@ namespace SE {
         const gx = (z[k + right] - z[k + left]) / 2;
         const gy = (z[y + 1 < h ? k + w : k] - z[y > 0 ? k - w : k]) / 2;
         const steep = gx * gx + gy * gy;
-        let tex: LandTex | null = null;
-        if (zz >= zSnow[s]) tex = steep > snowCliff2 ? rock : snow;
-        else if (zz >= zRock[s] || steep > cliff2) tex = rock;
-        else if (zz >= zTree[s] && upper[s] !== 0) {
-          const u = upper[s];
-          tex = turf[u] ?? (turf[u] = (art as LandArt).ground[landKeyRank(u)][landKeyDensity(u)]);
+        const rk = rockKey[s] ?? 0;
+        const stone = rk === 0 ? rock : stones[rk] ?? (stones[rk] = groundTex(art as LandArt, rk) ?? (rock as LandTex));
+        let slope = SLOPE_GAIN_X * gx + SLOPE_GAIN_Y * gy;
+        // A cone's belts follow its height alone: its flanks are steep all over, and would all be cliff.
+        let cliff = cliff2;
+        let snowCliff = snowCliff2;
+        let pit = false;
+        if (crater[s] > 0) {
+          cliff = Infinity;
+          snowCliff = Infinity;
+          // Lit from the left, softer than a range so its ravines show; its
+          // front, all of it in view, would go dark from the downhill slope.
+          slope = Math.min(CONE_LIGHT_MAX, CONE_GAIN_X * gx + CONE_GAIN_Y * gy) - CONE_DARKEN;
+          // The crater: a dark rock pit inside a lit lip; ravines run down the flanks.
+          let dx = wx - ridges.ax[s];
+          dx -= Math.round(dx / wrapW) * wrapW;
+          const dy = oy + y - ridges.ay[s];
+          const d2 = dx * dx + dy * dy;
+          const c = crater[s];
+          if (d2 < (c - 1) * (c - 1)) { slope = -CRATER_SHADE; pit = true; }
+          else if (d2 < (c + 1) * (c + 1)) slope = CRATER_LIP;
+          else if (Math.cos(CONE_RIBS * Math.atan2(dy, dx) + s) > CONE_RIB_EDGE) slope -= 1;
         }
-        const slope = SLOPE_GAIN_X * gx + SLOPE_GAIN_Y * gy;
+        let tex: LandTex | null = null;
+        if (pit) tex = stone;
+        else if (zz >= zSnow[s]) tex = steep > snowCliff ? stone : snow;
+        else if (zz >= zRock[s] || steep > cliff) tex = stone;
+        else if (zz >= zTree[s] && upper[s]) {
+          const u = upper[s];
+          tex = turf[u] ?? (turf[u] = groundTex(art as LandArt, u) ?? (rock as LandTex));
+        }
         const wet = colWater[y];
         const ground = colPx[y];
         const tpx = tex !== null && wet === 0 ? tex.px : null;
@@ -669,10 +756,12 @@ namespace SE {
         top = sy;
       }
       colTop[x] = top < 0 ? 0 : top;
-      // The topmost lifted pixel against the flat ground above it.
-      if (paint && rim && prev >= 0 && top >= 1 && prev - (top - 1) >= SKYLINE_GAP && z[prev * w + x] > 0) {
+      // The topmost lifted pixel against the flat ground above it; a cone's whole outline, so it stands out on ground of its own colour.
+      const tz = prev >= 0 ? z[prev * w + x] : 0;
+      if (paint && rim && top >= 1 && tz > 0) {
         const o = top * w + x;
-        if (water[o] === 0) px[o] = rim[px[o]];
+        const outline = crater[seg[prev * w + x]] > 0 && tz >= CONE_OUTLINE_Z;
+        if (water[o] === 0 && (outline || prev - (top - 1) >= SKYLINE_GAP)) px[o] = (outline ? shift[LAND_SHIFT_MAX - CONE_OUTLINE_SHADE] : rim)[px[o]];
       }
     }
   }

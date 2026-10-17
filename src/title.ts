@@ -59,7 +59,7 @@ namespace SE {
   export class TitleScreen {
     private readonly root: HTMLElement;
     private readonly canvas: HTMLCanvasElement;
-    private globe: MapView;
+    private globe: TitleGlobe;
     private last = 0;
     private closed = false;
     private still = false;
@@ -100,9 +100,16 @@ namespace SE {
         remake: (seed) => this.remake(seed),
       });
       const start = titleButton('Spiel starten', 'play', 'title-start', () => this.begin());
+      // The planet choice heads "Planet anpassen" as two tabs; the menu keeps
+      // only actions: the way in, then saves and settings beside each other.
+      const modes = make('div', 'title-modes');
+      modes.setAttribute('role', 'group');
+      modes.setAttribute('aria-label', 'Planet');
+      modes.append(planet.earth, planet.random);
+      planet.panel.querySelector('.title-custom-head')?.after(modes);
       const buttons = make('div', 'title-buttons');
       buttons.append(
-        start, planet.earth, planet.random,
+        start,
         titleButton('Spielstände …', 'slot', 'title-saves', () => void this.saves()),
         titleButton('Einstellungen', 'menu-options', 'title-settings', () => void hooks.openSettings()),
       );
@@ -126,14 +133,8 @@ namespace SE {
       (resume ?? start).focus({ preventScroll: true });
     }
 
-    private makeGlobe(): MapView {
-      const view = new MapView(this.canvas);
-      view.globe = true;
-      view.space = false;
-      view.pixelScale = 0.4;
-      view.mode = MapMode.Terrain;
-      view.spin = 2.4;
-      return view;
+    private makeGlobe(): TitleGlobe {
+      return new TitleGlobe(this.canvas);
     }
 
     private continueCard(meta: SaveMeta): HTMLElement {

@@ -77,6 +77,51 @@ test('today\'s Earth has the real continents, seas and heights', () => {
   assert.ok(w.elevation[tileAt(0, -150)] < SE.COAST_DEPTH, 'the Pacific is open ocean');
 });
 
+test('today\'s isthmuses and long islands hold together, narrow seas stay open', () => {
+  const w = planet('today');
+  const reach = (from, to) => {
+    const goal = tileAt(...to);
+    const seen = new Set([tileAt(...from)]);
+    const queue = [...seen];
+    while (queue.length) {
+      const i = queue.pop();
+      if (i === goal) return true;
+      const x = i % SE.GRID_W;
+      const y = (i - x) / SE.GRID_W;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (y + dy < 0 || y + dy >= SE.GRID_H) continue;
+        const j = SE.idx(SE.wrapX(x + dx), y + dy);
+        if (!seen.has(j) && w.elevation[j] >= 0) { seen.add(j); queue.push(j); }
+      }
+    }
+    return false;
+  };
+  for (const [name, from, to] of [
+    ['Panama', [19.4, -99.1], [4.6, -74.1]], ['Baja California', [27.0, -113.0], [29.1, -111.0]],
+    ['Kuba', [22.4, -83.7], [20.0, -75.8]], ['Malaiische Halbinsel', [3.1, 101.7], [13.8, 100.5]],
+    ['Alaska-Halbinsel', [57.0, -157.0], [61.2, -150.0]], ['Java', [-6.9, 107.6], [-7.6, 112.7]],
+  ]) assert.ok(reach(from, to), `${name} holds together`);
+  assert.ok(!reach([37.75, 15.0], [40.85, 14.3]), 'Sizilien is an island');
+  assert.ok(w.elevation[tileAt(27.4, -110.4)] < 0, 'the Gulf of California is sea');
+});
+
+test('today\'s most active volcanoes stand where they are, always a fresh cone', () => {
+  const s = makeSim(12345, 'today');
+  s.tick();
+  const f = new SE.TerrainField();
+  f.refresh(s.world);
+  assert.deepEqual(SE.ACTIVE_VOLCANOES.map((v) => v.name), ['Kīlauea', 'Ätna']);
+  for (const v of SE.ACTIVE_VOLCANOES) {
+    const i = tileAt(...v.at);
+    assert.equal(SE.latLonTile(v.at), i, `${v.name}: tile`);
+    assert.equal(s.world.upliftKind[i], 5, `${v.name}: an active volcano`);
+    assert.equal(f.volcano[i], 2, `${v.name}: a fresh cone`);
+    SE.raiseCrust(s.world, i, 0.01, 4);
+    assert.equal(s.world.upliftKind[i], 5, `${v.name}: a hotspot does not retype it`);
+  }
+  assert.ok(planet('random').upliftKind.every((k) => k !== 5), 'only today\'s Earth has them');
+});
+
 test('today\'s mountain belts are the young ranges, not the ice sheets', () => {
   const w = planet('today');
   for (const [name, lat, lon] of [['Anden', -20, -68], ['Himalaya', 28.5, 85], ['Alpen', 47, 11]]) {
@@ -151,6 +196,7 @@ test('an epoch\'s planet survives a save', async () => {
       worst = Math.max(worst, Math.abs(b.world.elevation[i] - a.world.elevation[i]));
     }
     assert.ok(worst < 1e-3, `${epoch}: elevation off by ${worst}`);
+    assert.deepEqual(b.world.upliftKind, a.world.upliftKind, `${epoch}: mountain types and active volcanoes`);
     assert.deepEqual({ ...b.params.geo }, { ...a.params.geo }, `${epoch}: sliders`);
   }
 });

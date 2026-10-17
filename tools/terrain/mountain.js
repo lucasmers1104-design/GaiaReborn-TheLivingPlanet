@@ -1,19 +1,17 @@
 /* =============================================================================
  * SimEarth 2.0 — terrain recipes, family "mountain"
  * -----------------------------------------------------------------------------
- * Basalt, scree, alpine meadow, the montane rainforest floor and volcanic
- * cones (docs/hoehe-spec.md §3.8). The ranges themselves are no sprites: the
- * renderer lifts the ground along their crests and dresses the faces with
- * these grounds, rock and snow. Ids, ranks and sizes are fixed in
- * catalog.js; style: docs/landschaft-2026-10/stil.md.
+ * Basalt, scree, alpine meadow and the montane rainforest floor
+ * (docs/hoehe-spec.md §3.8). Ranges and volcanic cones are no sprites: the
+ * renderer lifts the ground along their crests and around their craters and
+ * dresses the faces with these grounds, rock and snow. Ids, ranks and sizes
+ * are fixed in catalog.js; style: docs/landschaft-2026-10/stil.md.
  *
  *   materials[id](t, d)   paint the seamless texture `t` (Tex, wraps) for density d
- *   objects[id](v)        return a sprite; v = { index }
  * ========================================================================== */
 'use strict';
 
 const k = require('./kit');
-const C = require('./catalog');
 const warm = require('./warm');
 
 const c = k.c;
@@ -274,74 +272,4 @@ const materials = {
   rainforest_montane: rainforestMontane,
 };
 
-/* ----------------------------------------------------------- volcanoes ---- */
-
-/**
- * A stratovolcano 20×16: concave flanks flaring to the foot, a crater at the
- * top (dark back wall, lit front lip), radial gullies. Variants (catalog):
- * 0 dormant, green climbing the lower flanks along the gullies; 1 fresh, dark
- * basalt; 2 dormant and bare, brown ash and scree in the gullies; 3 dormant
- * under snow, rock showing only on the lower ribs.
- */
-function volcano(index) {
-  const [w, h] = C.MOUNTAIN_SIZES.volcano[index];
-  const fresh = index === 1;
-  const look = ['green', 'fresh', 'bare', 'snowy'][index];
-  const cx = (w - 1) / 2;
-  const rimY = 2;
-  const rim = 2.8;
-  const half = (y) => rim + (w / 2 - rim) * Math.max(0, (y - rimY) / (h - 1 - rimY)) ** 1.35;
-  const inside = (x, y) => y >= rimY - 1 && y < h && Math.abs(x - cx) <= half(Math.max(y, rimY)) + 0.3;
-  const green = k.fbm(64, 8, 2, 2201);
-  const tone = fresh
-    ? { h: 'rock2', l: 'rock2', m: 'rock1', d: 'rock0', o: 'rock0', e: 'rock1', pit: 'mud0' }
-    : { h: 'rock4', l: 'rock3', m: 'rock2', d: 'rock1', o: 'rock0', e: 'rock1', pit: 'rock0' };
-  const t = new k.Tex(w, h);
-  for (let y = rimY - 1; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (!inside(x, y)) continue;
-      const dx = x - cx;
-      const u = dx / half(Math.max(y, rimY));
-      // Radial gullies: every few degrees of the cone a furrow.
-      const ang = Math.atan2(dx, y - rimY + 2.5);
-      const furrow = y > rimY + 2 && Math.abs(Math.sin(ang * 8)) < 0.2;
-      let v = u < -0.15 ? 'l' : u < 0.25 ? 'm' : 'd';
-      if (u < -0.55 && y < h * 0.5) v = 'h';
-      if (furrow) v = v === 'd' ? 'm' : v === 'h' ? 'l' : 'm';
-      if (h - 1 - y < 2) v = u < 0 ? 'm' : 'd';
-      let col = tone[v];
-      // Green (or ash) climbs higher in the gullies than on the ribs.
-      const reach = (y - h * 0.45) / (h * 0.55) + (furrow ? 0.25 : 0);
-      if (look === 'green' && green(x * 3, y * 3) < reach * 0.9) {
-        col = v === 'h' || v === 'l' ? 'leaf3' : v === 'm' ? 'leaf2' : 'leaf1';
-      } else if (look === 'bare' && green(x * 3, y * 3) < reach * 0.7) {
-        col = v === 'h' || v === 'l' ? 'soil3' : v === 'm' ? 'soil2' : 'soil1';
-      } else if (look === 'snowy') {
-        // Snow everywhere but on the lower ribs; the gullies hold it lowest.
-        const bare = (y - h * 0.62) / (h * 0.38) - (furrow ? 0.35 : 0);
-        if (green(x * 3, y * 3) >= bare * 1.2) col = v === 'h' || v === 'l' ? 'ice4' : v === 'm' ? 'ice3' : 'ice2';
-      }
-      if (!inside(x + 1, y) || !inside(x, y + 1) || y === h - 1 && u > -0.2) col = tone.o;
-      else if (!inside(x - 1, y) || !inside(x, y - 1)) col = u < 0.25 ? tone.e : tone.o;
-      t.set(x, y, c(col));
-    }
-  }
-  // Crater: the back wall in shadow, the pit darker, the front lip lit.
-  for (let y = rimY - 1; y <= rimY + 2; y++) {
-    for (let x = 0; x < w; x++) {
-      const e = ((x - cx) / (rim - 0.2)) ** 2 + ((y - rimY - 0.4) / 1.25) ** 2;
-      if (e <= 1) t.set(x, y, c(e < 0.35 ? tone.pit : 'rock0'));
-    }
-  }
-  for (let x = Math.ceil(cx - rim + 1); x <= Math.floor(cx + rim - 1); x++) {
-    t.set(x, rimY + 2, c(x < cx ? tone.h : tone.m));
-    t.set(x, rimY - 1, c(x < cx ? tone.m : tone.o));
-  }
-  return t;
-}
-
-const objects = {
-  volcano: (v) => volcano(v.index),
-};
-
-module.exports = { materials, objects };
+module.exports = { materials };

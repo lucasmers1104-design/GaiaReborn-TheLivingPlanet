@@ -60,10 +60,18 @@ namespace SE {
     private readonly sources: UpliftSource[] = [new BeltUplift(), new Hotspots()];
 
     step(world: WorldState, params: ModelParams): void {
-      this.drift(world, mul(params.geo.drift));
+      const shifts = world.driftShifts;
+      // Plates are calibrated per geological tick like erosion and uplift: in
+      // human time scales the continents stand still.
+      this.drift(world, mul(params.geo.drift) * geoTimeFactor(world));
       const coreHeat = mul(params.geo.coreHeat);
-      if (world.ticks % EROSION_INTERVAL === 0) this.vertical(world, params, coreHeat);
-      this.updateMagma(world, coreHeat);
+      if (world.ticks % EROSION_INTERVAL === 0) {
+        // The river network does not ride the plates: erosion must not carry
+        // a shifted row's load down the rivers of the row it left.
+        if (world.driftShifts !== shifts) RiverSystem.rebuild(world);
+        this.vertical(world, params, coreHeat);
+      }
+      this.updateMagma(world);
     }
 
     /**
@@ -172,8 +180,13 @@ namespace SE {
       for (let x = 0; x < GRID_W; x++) data[base + x] = buf[wrapX(x - shift)];
     }
 
-    /** Mantle upwelling drifts slowly and is what volcanoes erupt out of. */
-    private updateMagma(world: WorldState, coreHeat: number): void {
+    /**
+     * Mantle upwelling drifts slowly and is what volcanoes erupt out of.
+     * Kernwärme does not scale it here: a factor applied every pass compounds,
+     * so anything off 0.5 emptied or saturated the field within a few hundred
+     * ticks and the volcanic belts were gone.
+     */
+    private updateMagma(world: WorldState): void {
       const magma = world.magma;
       // A very slow diffusion keeps the belts coherent while letting them move.
       if (world.ticks % 8 !== 0) return;
@@ -182,13 +195,20 @@ namespace SE {
         for (let x = 0; x < GRID_W; x++) {
           const i = idx(x, y);
           const target = neighborMean(this.scratch, x, y);
-          magma[i] = clamp(lerp(this.scratch[i], target, 0.05) * (0.5 + 0.5 * coreHeat), 0, 1);
+          magma[i] = clamp(lerp(this.scratch[i], target, 0.05), 0, 1);
         }
       }
     }
   }
 
   /* -------------------------------------------------------------------------- */
+
+  /**
+   * Where natural volcanoes and meteors go (the app's HazardSystem, cause
+   * 'natural'); true if one started. Null in headless runs, which keep the
+   * old brush.
+   */
+  export let hazardSink: ((kind: EventKind, i: number, cause: HazardCause) => boolean) | null = null;
 
   /**
    * The eight disasters of the original. Each one both changes the world and
@@ -217,26 +237,24 @@ namespace SE {
       const volcanoChance = 0.0004 * mul(params.geo.volcanoes);
       if (world.rng.chance(volcanoChance)) {
         const i = this.pickByMagma(world);
-        this.trigger(world, EventKind.Volcano, i % GRID_W, Math.floor(i / GRID_W));
+        if (hazardSink) hazardSink(EventKind.Volcano, EventSystem.coneTile(world, i), 'natural');
+        else this.trigger(world, EventKind.Volcano, i % GRID_W, Math.floor(i / GRID_W));
       }
 
       const meteorChance = 0.00018 * mul(params.geo.meteors);
       if (world.rng.chance(meteorChance)) {
-        this.trigger(
-          world, EventKind.Meteor,
-          world.rng.int(GRID_W), world.rng.int(GRID_H),
-        );
+        const mx = world.rng.int(GRID_W);
+        const my = world.rng.int(GRID_H);
+        if (hazardSink) hazardSink(EventKind.Meteor, idx(mx, my), 'natural');
+        else this.trigger(world, EventKind.Meteor, mx, my);
       }
 
-      // Plagues stalk dense civilizations; medicine holds them off. The
-      // threshold is a share of the planet, not a raw population sum, which on
-      // a finer grid would be reached by a far smaller civilization.
+      // Natural plagues now run over the city list (epidemic.ts, spec E5). The
+      // old roll still draws its random numbers, unused, so every later draw
+      // and every seed's history stay as they were (like CivSystem.LEGACY_DRAWS).
       if (world.totalCityPop > scaledCount(8)) {
         const plagueChance = 0.0025 * (1 - params.civAlloc.medicine * 0.8);
-        if (world.rng.chance(plagueChance)) {
-          const i = this.pickCity(world);
-          if (i >= 0) this.trigger(world, EventKind.Plague, i % GRID_W, Math.floor(i / GRID_W));
-        }
+        if (world.rng.chance(plagueChance)) this.pickCity(world);
       }
     }
 
@@ -248,6 +266,22 @@ namespace SE {
         if (world.magma[cand] > world.magma[best]) best = cand;
       }
       return best;
+    }
+
+    /** The cone stands on the highest land within 2 tiles of `i`; at sea the vent stays put. No rng. */
+    static coneTile(world: WorldState, i: number): number {
+      const cx = i % GRID_W;
+      const cy = Math.floor(i / GRID_W);
+      let best = -1;
+      for (let dy = -2; dy <= 2; dy++) {
+        const y = cy + dy;
+        if (y < 0 || y >= GRID_H) continue;
+        for (let dx = -2; dx <= 2; dx++) {
+          const j = idx(wrapX(cx + dx), y);
+          if (world.elevation[j] >= 0 && (best < 0 || world.elevation[j] > world.elevation[best])) best = j;
+        }
+      }
+      return best < 0 ? i : best;
     }
 
     private pickCity(world: WorldState): number {

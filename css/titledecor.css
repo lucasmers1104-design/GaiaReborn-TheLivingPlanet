@@ -15,20 +15,24 @@
     radial-gradient(30% 26% at 30% 108%, rgba(70, 110, 220, 0.2), transparent 72%),
     linear-gradient(180deg, #02050b, #030912 55%, #05101a);
 }
-/* Three layers of stars at different spacings, so no grid shows. */
+/* Three layers of square pixel stars (titleSky) on tiles of prime sizes, so
+   no grid shows. Each drifts one tile to the left in whole-pixel steps, the
+   near ones faster: a slow parallax. */
 .title-stars {
   position: absolute;
   inset: 0;
-  opacity: 0.8;
-  background-image:
-    radial-gradient(1.2px 1.2px at 20px 30px, #fff, transparent),
-    radial-gradient(1px 1px at 90px 120px, rgba(255, 255, 255, 0.8), transparent),
-    radial-gradient(1.6px 1.6px at 160px 60px, rgba(190, 225, 255, 0.9), transparent),
-    radial-gradient(1px 1px at 47px 211px, rgba(255, 255, 255, 0.6), transparent),
-    radial-gradient(1.3px 1.3px at 301px 97px, rgba(255, 240, 210, 0.8), transparent),
-    radial-gradient(0.9px 0.9px at 13px 77px, rgba(255, 255, 255, 0.55), transparent);
-  background-size: 173px 151px, 237px 211px, 311px 283px, 419px 367px, 523px 449px, 97px 131px;
-  background-position: 0 0, 41px 17px, 113px 71px, 7px 203px, 251px 29px, 61px 5px;
+  background-repeat: repeat;
+  image-rendering: pixelated;
+  animation-name: title-drift;
+  animation-iteration-count: infinite;
+}
+@keyframes title-drift { to { background-position: calc(-1 * var(--tile)) 0; } }
+/* Behind the menu column, stars would read as dots in the text. */
+@media (min-width: 900px) {
+  .title-stars { mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.3) 0 42%, #000 52%); }
+}
+@media (max-width: 899px) {
+  .title-stars { opacity: 0.45; }
 }
 .title-nebula {
   position: absolute;
@@ -41,23 +45,26 @@
     radial-gradient(36% 40% at 56% 86%, rgba(70, 120, 230, 0.18), transparent 70%),
     radial-gradient(26% 30% at 12% 40%, rgba(120, 220, 230, 0.1), transparent 70%);
 }
+/* A pixel sparkle: a 1 px cross with a dimmer 3 px heart, blinking in steps. */
 .title-spark {
   position: absolute;
   width: var(--s);
   height: var(--s);
-  transform: translate(-50%, -50%);
   background:
-    linear-gradient(#f2fbff, #f2fbff) center / 100% 1px no-repeat,
-    linear-gradient(#f2fbff, #f2fbff) center / 1px 100% no-repeat;
-  filter: drop-shadow(0 0 3px rgba(160, 230, 255, 0.85));
-  animation: title-twinkle 4.8s ease-in-out infinite;
+    linear-gradient(#f2fbff, #f2fbff) center / 1px 1px no-repeat,
+    linear-gradient(rgba(170, 236, 255, 0.55), rgba(170, 236, 255, 0.55)) center / 3px 3px no-repeat,
+    linear-gradient(#bfefff, #bfefff) center / 100% 1px no-repeat,
+    linear-gradient(#bfefff, #bfefff) center / 1px 100% no-repeat;
+  animation: title-twinkle 4.8s steps(3, jump-none) infinite;
 }
-@keyframes title-twinkle { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@keyframes title-twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
 
-.title-rock { position: absolute; image-rendering: pixelated; }
-.title-rock.depth-0 { opacity: 0.4; filter: blur(0.6px); }
-.title-rock.depth-1 { opacity: 0.7; }
+/* Asteroids bob a few pixels, in whole-pixel steps; far ones more slowly. */
+.title-rock { position: absolute; image-rendering: pixelated; animation: title-bob 9s steps(4, jump-none) infinite; }
+.title-rock.depth-0 { opacity: 0.4; animation-duration: 14s; }
+.title-rock.depth-1 { opacity: 0.7; animation-duration: 11s; }
 .title-rock.depth-2 { opacity: 0.9; filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.7)); }
+@keyframes title-bob { 50% { transform: translateY(-4px); } }
 
 /* ---- HUD marks ---- */
 .title-hud { z-index: 1; }
@@ -76,6 +83,10 @@
 .title-cross-logo { left: 43%; top: 25%; opacity: 0.5; }
 .title-cross-globe-top { left: 71%; top: 7%; opacity: 0.45; }
 .title-cross-globe-bottom { left: 71%; top: 86%; opacity: 0.45; }
+/* Narrower frames: these marks would land on the logo and the quote. */
+@media (max-width: 1239px) {
+  .title-cross-logo, .title-cross-globe-bottom { display: none; }
+}
 .title-line { position: absolute; height: 1px; }
 .title-line-top { left: 0; top: 6.5%; width: 10%; background: linear-gradient(90deg, transparent, var(--hud-soft)); }
 .title-line-foot { right: 3%; bottom: 6.5%; width: 26%; background: linear-gradient(90deg, transparent, var(--hud-soft) 30%, var(--hud-soft)); }
@@ -107,15 +118,17 @@
 }
 /* The disc fills 92 % of the canvas (MapView.renderGlobe), so its edge sits at
    78 % of these boxes' closest side. */
-.title-globe::before, .title-globe::after { content: ""; position: absolute; inset: -9%; border-radius: 50%; pointer-events: none; }
+/* Only a faint glow in the room around it; the rim of air is pixels on the
+   canvas (TitleGlobe), which sizes the canvas to whole device pixels. */
 .title-globe::before {
+  content: "";
+  position: absolute;
   inset: -36%;
-  background: radial-gradient(circle closest-side, rgba(40, 140, 230, 0.22) 45%, rgba(40, 140, 230, 0.08) 70%, transparent 100%);
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle closest-side, rgba(40, 140, 230, 0.2) 45%, rgba(40, 140, 230, 0.07) 70%, transparent 100%);
 }
-.title-globe::after {
-  background: radial-gradient(circle closest-side, transparent 75%, rgba(120, 225, 255, 0.6) 79%, rgba(70, 180, 255, 0.24) 86%, transparent 100%);
-}
-.title-globe-canvas { position: relative; z-index: 1; display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.title-globe-canvas { position: absolute; inset: 0; z-index: 1; display: block; width: 100%; height: 100%; margin: auto; image-rendering: pixelated; }
 
 .title-orbits { position: absolute; inset: 0; pointer-events: none; }
 .title-orbits svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -124,7 +137,8 @@
 .title-orbit-tick { stroke: rgba(79, 214, 224, 0.55); }
 .title-orbit-marks rect { fill: none; stroke: rgba(79, 214, 224, 0.8); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
-.title-moon { position: absolute; z-index: 2; image-rendering: pixelated; pointer-events: none; }
+.title-moon { position: absolute; z-index: 2; image-rendering: pixelated; pointer-events: none; animation: title-bob 12s steps(4, jump-none) infinite; }
+.title-moon-small { animation-duration: 9s; animation-delay: -4s; }
 .title-moon-large { left: -13%; top: 2%; width: 10%; filter: drop-shadow(0 0 12px rgba(150, 200, 255, 0.25)); }
 .title-moon-small { right: -11%; top: 68%; width: 6%; }
 .title-moon-tiny { right: 4%; top: -4%; width: 3%; opacity: 0.8; }
@@ -139,9 +153,11 @@
   align-items: center;
   gap: 14px;
   padding: 10px 14px 10px 10px;
-  border: 1px solid var(--hud-soft);
-  border-radius: 6px;
-  background: rgba(4, 14, 22, 0.78);
+  border: 2px solid var(--glass-border);
+  border-radius: 0;
+  background: var(--glass);
+  clip-path: var(--px-clip);
+  font-family: var(--hudfont);
   font-size: 12px;
   line-height: 1.6;
   letter-spacing: 0.08em;
@@ -162,20 +178,30 @@
   max-width: 280px;
   margin: 0;
   padding: 12px 14px 12px 18px;
-  border-left: 1px solid var(--hud-soft);
+  border-left: 2px solid var(--hud-soft);
+  /* A dark plate, so drifting stars never sit in the words. */
+  background: linear-gradient(90deg, rgba(3, 9, 18, 0.9), rgba(3, 9, 18, 0.55));
+  font-family: var(--hudfont);
   font-size: 13px;
   line-height: 1.6;
   color: var(--accent);
 }
-.title-quote::before, .title-quote::after { content: ""; position: absolute; left: 0; width: 14px; height: 1px; background: var(--hud-soft); }
+.title-quote::before, .title-quote::after { content: ""; position: absolute; left: 0; width: 14px; height: 2px; background: var(--hud-soft); }
 .title-quote::before { top: 0; }
 .title-quote::after { bottom: 0; }
 .title-quote blockquote, .title-quote p { margin: 0; }
 .title-quote-arrow { position: relative; display: block; width: 30px; height: 1px; margin-top: 8px; background: var(--hud-soft); }
 .title-quote-arrow::after { content: ""; position: absolute; right: 0; top: -3px; border: 3.5px solid transparent; border-left: 5px solid var(--hud); border-right: 0; }
 
+/* ---- phones: sparks and corner marks would sit on the logo and the text ---- */
+@media (max-width: 700px) {
+  .title-spark, .title-cross-tl, .title-line-top { display: none; }
+}
+
 /* ---- reduced motion: nothing moves ---- */
 .title-still .title-spark, .title-still .title-logo-light { animation: none; opacity: 0.8; }
+.title-still .title-stars, .title-still .title-rock, .title-still .title-moon { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .title-spark, .title-logo-light { animation: none; opacity: 0.8; }
+  .title-stars, .title-rock, .title-moon { animation: none; }
 }

@@ -20,8 +20,8 @@ namespace SE {
     showOnMap(entry: ChronicleEntry): void;
     /** Steps developed so far and in all. */
     progress(): { developed: number; total: number };
-    /** Sound is on. */
-    sound(): boolean;
+    /** Effect volume 0..1; 0 while sound is off. */
+    sound(): number;
   }
 
   /** A film for a step that has none: its badge, glowing, with the sparkle. */
@@ -99,7 +99,7 @@ namespace SE {
       const body = make('div', 'showcase-body');
       const head = make('div', 'showcase-head');
       const badge = make('div', 'showcase-badge');
-      badge.appendChild(img(evoIcon(n.id), 'showcase-badge-img'));
+      badge.appendChild(pixelArt(evoIcon(n.id), 38, 'showcase-badge-img'));
       const titles = make('div', 'showcase-titles');
       const kicker = make('div', 'showcase-kicker');
       kicker.append(make('span', undefined, `Neue Entwicklung · ${KINGDOM_LABEL[n.kingdom]}`));
@@ -161,8 +161,10 @@ namespace SE {
       play();
       next.focus({ preventScroll: true });
       const r = badge.getBoundingClientRect();
-      celebrate(r.left + r.width / 2, r.top + r.height / 2, n.kingdom);
-      if (this.hooks.sound()) playChime(!!e.spontaneous);
+      // A hidden card has no box: a burst would go off in the top-left corner.
+      if (r.width > 0) celebrate(r.left + r.width / 2, r.top + r.height / 2, n.kingdom);
+      const volume = this.hooks.sound();
+      if (volume > 0) playChime(!!e.spontaneous, volume);
     }
 
     private clearTimers(): void {

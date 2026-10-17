@@ -111,7 +111,7 @@ namespace SE {
           hazardHitCity(world, i, 1, false);
           hazardKillLife(world, i, 1);
           hazardStripPlants(world, i);
-          hazardLift(world, i, -Math.min(METEOR_CRATER_DEPTH, Math.max(0, world.elevation[i] - METEOR_CRATER_FLOOR)));
+          raiseCrust(world, i, -Math.min(METEOR_CRATER_DEPTH, Math.max(0, world.elevation[i] - METEOR_CRATER_FLOOR)), UpliftKind.None);
           SuccessionSystem.scour(world, i);
           setScar(world, i, ScarKind.Crater);
         } else if (d === 1) {
@@ -154,7 +154,8 @@ namespace SE {
           if (hz.scar[i] !== ScarKind.Vent) setScar(world, i, ScarKind.Ash, from);
           return;
         }
-        const fuel = world.elevation[i] >= 0 && world.vegetation[i] >= BARE_COVER;
+        // A tile another hazard holds (flood, lava, a wildfire) stays that hazard's.
+        const fuel = world.elevation[i] >= 0 && world.vegetation[i] >= BARE_COVER && hz.tile[i] === HazardTile.None;
         hazardKillLife(world, i, ATOMIC_RING2_KILL);
         scorch(world, i, ATOMIC_RING2_KEEP, true);
         hazardHitCity(world, i, 1);

@@ -502,6 +502,24 @@ test('epidemics strike only scarce cities, and medicine helps from the industria
   assert.ok(withMedicine < without, `medicine: ${withMedicine} instead of ${without}`);
 });
 
+test('the old plague roll in the event system no longer harms cities, but still draws', () => {
+  const s = fixture([]);
+  const { SE, world: w } = s;
+  w.tech.fill(SE.Tech.Stone);
+  w.cityPop.fill(1);
+  w.totalCityPop = SE.TILE_COUNT;
+  s.params.civAlloc.medicine = 0;
+  // Only the plague roll (0.0025) succeeds; volcano and meteor (< 0.0005) stay quiet.
+  w.rng.chance = (p) => p > 0.002;
+  const next = w.rng.next.bind(w.rng);
+  let draws = 0;
+  w.rng.next = () => { draws++; return next(); };
+  s.events.step(w, s.params);
+  assert.ok(draws > 0, 'the target pick still draws its random numbers');
+  assert.ok(w.cityPop.every((p) => p === 1), 'no city lost people');
+  assert.ok(w.eventTtl.every((t) => t === 0), 'no plague marker');
+});
+
 test('the city tool names what is wrong with a site', () => {
   const s = fixture([[40, 40, 100, 90]]);
   const { SE, world: w } = s;
@@ -512,4 +530,22 @@ test('the city tool names what is wrong with a site', () => {
   w.landscape[at(SE, 50, 50)] = SE.Landscape.Rock;
   assert.equal(SE.citySiteProblem(w, at(SE, 50, 50), SE.Life.Mammal), 'Hier kann keine Stadt stehen: Fels, Wüste oder Eis.');
   assert.equal(SE.citySiteProblem(w, at(SE, 85, 75), SE.Life.Mammal), '');
+});
+
+test('two Stone Age cities on poor land still send settlers while the planet is too small to invent', () => {
+  const s = fixture([[40, 40, 100, 90]]);
+  const { SE, world: w } = s;
+  const a = city(s, 60, 60);
+  const b = city(s, 70, 60);
+  s.civ.sync(w, s.params);
+  assert.equal(w.civ.cityAt(a).tribe, w.civ.cityAt(b).tribe, 'one people');
+  for (const i of [a, b]) {
+    const c = w.civ.cityAt(i);
+    c.capacity = 0.18; // too poor ever to reach SETTLER_DEPART_POP
+    c.settleAfter = 0;
+    w.cityPop[i] = 0.17;
+  }
+  assert.ok(w.civ.cities.length < SE.TECH_CITIES_MIN[SE.Tech.Stone]);
+  SE.sendSettlers(w);
+  assert.ok(w.civ.settlers.length > 0, 'a group leaves');
 });

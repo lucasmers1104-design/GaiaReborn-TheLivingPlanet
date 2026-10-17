@@ -56,6 +56,30 @@ test('round trip keeps the planet and the whole evolution state', async () => {
   for (let c = 1; c < SE.LIFE_COUNT; c++) assert.equal(wb.lifeCounts[c], wa.lifeCounts[c], `population count of ${SE.LIFE[c].id}`);
 });
 
+test('a long chronicle reloads with its newest entries', () => {
+  const a = makeSim(7);
+  for (let k = 0; k < 2100; k++) {
+    a.world.evo.chronicle.push({ key: `t:${k}`, kind: 'info', title: 't', text: '', change: '', icon: 'assets/events/milestone.svg', tick: k, years: 0, major: false });
+  }
+  const b = makeSim(1);
+  SE.SaveSystem.load(JSON.parse(JSON.stringify(SE.SaveSystem.serialize(ctx(a)))), ctx(b), b.life, b.flora);
+  const keys = b.world.evo.chronicle.map((e) => e.key);
+  assert.ok(keys.includes('t:2099'), 'newest entry survives');
+  assert.ok(!keys.includes('t:0'), 'oldest entry is dropped');
+});
+
+test('paid model panels survive a reload; an older save has none paid', () => {
+  const a = makeSim(7);
+  const doc = JSON.parse(JSON.stringify(SE.SaveSystem.serialize({ ...ctx(a), paidModels: new Set(['atmo', 'geo']) })));
+  const b = makeSim(1);
+  const paid = new Set(['stale']);
+  SE.SaveSystem.load(doc, { ...ctx(b), paidModels: paid }, b.life, b.flora);
+  assert.deepEqual([...paid].sort(), ['atmo', 'geo']);
+  delete doc.paidModels;
+  SE.SaveSystem.load(doc, { ...ctx(b), paidModels: paid }, b.life, b.flora);
+  assert.equal(paid.size, 0);
+});
+
 test('play continues after loading: points accrue and new steps can be developed', async () => {
   const a = playedSim(55, 900);
   const doc = await SE.SaveSystem.decode(await SE.SaveSystem.encode(SE.SaveSystem.serialize(ctx(a))));
@@ -213,4 +237,24 @@ test('version-4 saves are migrated with every reinterpretation explained', () =>
   s.evo.refresh(w, s.params, true);
   for (let k = 0; k < 50; k++) s.tick();
   assert.ok(w.vegetation.every((v) => Number.isFinite(v)));
+});
+
+test('a lineage already extinct is not reported extinct again after loading', async () => {
+  const a = makeSim(2024);
+  a.evo.develop(a.world, a.params, 'cells');
+  a.play(40);
+  a.world.lifeDensity.fill(0);
+  a.world.refreshDerived();
+  for (let k = 0; k < 16; k++) a.tick();
+  const count = (s) => s.world.evo.chronicle.filter((e) => e.kind === 'extinction' && e.nodeId === 'cells').length;
+  assert.equal(count(a), 1, 'cells died out once');
+
+  const legacy = SE.SaveSystem.serialize(ctx(a));
+  delete legacy.evolution.extinct; // a save from before the field existed
+  for (const doc of [SE.SaveSystem.serialize(ctx(a)), legacy]) {
+    const b = makeSim(1);
+    SE.SaveSystem.load(await SE.SaveSystem.decode(await SE.SaveSystem.encode(doc)), ctx(b), b.life, b.flora);
+    for (let k = 0; k < 24; k++) b.tick();
+    assert.equal(count(b), 1, 'no second extinction notice after loading');
+  }
 });

@@ -60,8 +60,8 @@ namespace SE {
     const bx = x0 + col * 3 + 8;
     const bw = col - 16;
     const width = bw * (0.25 + p.tolerance * 0.65);
-    s += `<rect x="${bx}" y="${base - 58}" width="${bw}" height="12" rx="6" fill="url(#bio-temp)"/>`;
-    s += `<rect x="${n(bx + (bw - width) / 2)}" y="${base - 64}" width="${n(width)}" height="24" rx="7" class="bio-band"/>`;
+    s += `<rect x="${bx}" y="${base - 58}" width="${bw}" height="12" fill="url(#bio-temp)"/>`;
+    s += `<rect x="${n(bx + (bw - width) / 2)}" y="${base - 64}" width="${n(width)}" height="24" class="bio-band"/>`;
     s += `<text x="${bx}" y="${base - 26}" class="scene-small">kalt</text><text x="${bx + bw}" y="${base - 26}" class="scene-small end">heiß</text>`;
     s += caption(3, 'Toleranz');
 
@@ -105,8 +105,8 @@ namespace SE {
     values.forEach((v, k) => {
       const h = 6 + v * 76;
       const x = x0 + k * step + step * 0.2;
-      s += `<rect x="${n(x)}" y="${n(floor - 82)}" width="${n(step * 0.6)}" height="82" rx="5" class="civ-slot"/>`;
-      s += `<rect x="${n(x)}" y="${n(floor - h)}" width="${n(step * 0.6)}" height="${n(h)}" rx="5" fill="${ALLOC_COLORS[k]}"/>`;
+      s += `<rect x="${n(x)}" y="${n(floor - 82)}" width="${n(step * 0.6)}" height="82" class="civ-slot"/>`;
+      s += `<rect x="${n(x)}" y="${n(floor - h)}" width="${n(step * 0.6)}" height="${n(h)}" fill="${ALLOC_COLORS[k]}"/>`;
       s += `<text x="${n(x + step * 0.3)}" y="${floor + 14}" class="scene-small mid">${ALLOC_SHORT[k]}</text>`;
     });
 
@@ -116,8 +116,8 @@ namespace SE {
     const word = risk <= 0 ? 'keine' : risk < 0.34 ? 'gering' : risk < 0.67 ? 'erheblich' : 'hoch';
     const w = SCENE_W - x0 - 8;
     s += `<text x="${x0}" y="${SCENE_H - 26}" class="scene-small">Kriegsgefahr im Atomzeitalter: <tspan class="${risk > 0.33 ? 'warn' : ''}">${word}</tspan></text>`;
-    s += `<rect x="${x0}" y="${SCENE_H - 18}" width="${n(w)}" height="7" rx="3.5" class="civ-slot"/>`;
-    if (risk > 0) s += `<rect x="${x0}" y="${SCENE_H - 18}" width="${n(Math.max(7, w * risk))}" height="7" rx="3.5" fill="url(#civ-risk)"/>`;
+    s += `<rect x="${x0}" y="${SCENE_H - 18}" width="${n(w)}" height="7" class="civ-slot"/>`;
+    if (risk > 0) s += `<rect x="${x0}" y="${SCENE_H - 18}" width="${n(Math.max(7, w * risk))}" height="7" fill="url(#civ-risk)"/>`;
     s += '<defs><linearGradient id="civ-risk"><stop offset="0" stop-color="#f6c453"/><stop offset="1" stop-color="#ff5a4a"/></linearGradient></defs>';
     return `${s}</svg>`;
   }

@@ -54,7 +54,11 @@ namespace SE {
       // seeds tuned and tested elsewhere still mean the same planet.
       if (asleep) for (let n = 0; n < CivSystem.LEGACY_DRAWS; n++) world.rng.next();
       const drifted = reconcileCities(world, params);
-      if (civ.cities.length === 0 && civ.settlers.length === 0) return;
+      if (civ.cities.length === 0 && civ.settlers.length === 0) {
+        // Peoples whose last city just fell go now, or a new city finds every colour taken.
+        updateTribes(world);
+        return;
+      }
 
       if (!drifted && world.ticks % CITY_CAPACITY_EVERY === 0) refreshCapacities(world, params);
       growCities(world, params);
@@ -222,8 +226,14 @@ namespace SE {
     private warfare(world: WorldState, params: ModelParams): void {
       const strike = atomicWar(world, params);
       if (!strike) return;
-      this.lastNotice = `Warnung: Atomschlag auf ${strike.target.name}! Ein Krieg zwischen den ${strike.by.name} ` +
+      const text = `Warnung: Atomschlag auf ${strike.target.name}! Ein Krieg zwischen den ${strike.by.name} ` +
         `und den ${strike.on.name} zerstört Städte und Leben.`;
+      // A level reached this tick keeps its chronicle entry; the warning goes out as news instead.
+      if (this.lastKind === 'tech') {
+        world.civ.news.push({ text, tone: 'warn', at: strike.target.tile });
+        return;
+      }
+      this.lastNotice = text;
       this.lastKind = 'war';
     }
   }

@@ -37,6 +37,12 @@ ihrer Zeit startet, wäre ein eigener, größerer Schritt (Abschnitt 6.2).
 - Die Regeln pro Kachel:
   - Land, wenn mindestens die Hälfte der Punkte über dem Meer liegt.
   - Eine einzeln liegende Insel bleibt schon ab einem Fünftel Land erhalten (55 Kacheln, z. B. Hawaii, Inseln im Pazifik).
+  - Landbrücken (32 Kacheln): Land, das in den 10′-Punkten zusammenhängt, auf dem Raster aber zerfällt, wird über
+    die Meerkacheln verbunden, durch die es tatsächlich verläuft – über die mit dem meisten Land, mindestens 15 %.
+    Eine Brücke, die ein Meer abschneiden würde, wird verworfen. So hängen Mittel- und Südamerika über Panama
+    zusammen, Baja California, Kuba, die Malaiische Halbinsel, Java, Sulawesi, Honshu und die Alaska-Halbinsel sind
+    je ein Stück, der Golf von Kalifornien bleibt offen und Sizilien eine Insel (Straße von Messina: unter 15 %).
+    Vorher zeichnete die Karte Panama nur als diagonale Berührung, also getrennt, und Baja und Kuba in Brocken.
   - Seen und Binnengewässer unter 6 Kacheln werden Land (38 Kacheln). ETOPO1 enthält die Tiefen der Seeböden,
     sonst lägen Teile der Großen Seen unter dem Meeresspiegel und würden zu Meer.
   - Höhe = Mittel der Landpunkte, Tiefe = Mittel der Meerpunkte. Küstenkacheln werden so weder versenkt noch angehoben.

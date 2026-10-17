@@ -16,11 +16,12 @@ const STEAM = ['ice2', 'ice3', 'ice4', 'white0'];
 
 function smokePuff(f) {
   const t = new k.Tex(8, 8);
-  const r = [1.7, 2.5, 3.1, 3.5][f];
+  // The last frame stays round and thins out: grown to the box edges its 50 % dither read as a checker square.
+  const r = [1.7, 2.5, 3.1, 2.9][f];
   const puffs = [{ x: 4.2, y: 4.4, r }];
   if (f >= 2) puffs.push({ x: 3.2, y: 3.4, r: r * 0.7 });
   fx.billow(t, puffs, SMOKE);
-  return fx.dissolve(t, f === 3 ? 0.5 : 0);
+  return fx.dissolve(t, f === 3 ? 0.6 : 0);
 }
 
 function steamPuff(f) {

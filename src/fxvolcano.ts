@@ -9,8 +9,11 @@
  *                 off its vent
  *   spread        the flow itself is ground (fxground.ts); steam where it
  *                 meets the sea
- *   after         the cone stays: glowing while lava sits in the crater,
- *                 dark basalt, then green flanks; now and then it smokes
+ *   after         the cone is landscape relief (landridgedraw.ts); while
+ *                 lava sits in its crater the crater glows and throws
+ *                 embers; vents and hot cones smoke now and then
+ *   active        an active volcano (Kīlauea, Etna) always has lava in its
+ *                 crater and trails a thin plume
  * ========================================================================== */
 
 namespace SE {
@@ -27,18 +30,27 @@ namespace SE {
   const SPLASH_EVERY_MS = 220;
   const SPLASH_MS = 700;
   const STEAM_MS = 1100;
-  /** Neighbours at open land or more before a resting vent shows green flanks. */
-  const VENT_GREEN = 5;
+  /** Magma under a landscape cone from which it smokes now and then. */
+  const SMOKE_MAGMA = 0.6;
+  /** An erupting crater throws an ember this often, an active volcano's lava lake now and then. */
+  const CRATER_EMBER_MS = 140;
+  const LAKE_EMBER_MS = 1100;
+  /** An active volcano's plume: a small puff leaves the crater this often, drifting this many art pixels per second with the wind. */
+  const WISP_MS = 450;
+  const WISP_DRIFT = 5;
 
   /** World art pixel of a tile's foot (bottom centre) and of its vent's crater. */
   function foot(x: number, y: number): [number, number] {
     return [x * 16 + 8, y * 16 + 15];
   }
+  type MouthFn = (field: TerrainField, x: number, y: number) => [number, number] | null;
+  /** The crater of the cone the landscape draws on tile (x, y), x unwrapped; the tile's centre without one. */
   function mouth(x: number, y: number): [number, number] {
-    const cone = FX_MANIFEST.sprites.vent_cone;
-    const m = cone?.mouth ?? [12, 7];
-    const [fx, fy] = foot(x, y);
-    return [fx - (cone?.ax ?? 12) + m[0], fy - (cone?.ay ?? 23) + m[1]];
+    const wx = wrapX(x);
+    // ponytail: looked up by name so this builds before landridges.ts exports volcanoMouth; call it directly once it does.
+    const find = (SE as unknown as { volcanoMouth?: MouthFn }).volcanoMouth;
+    const m = find?.(PixelTerrain.shared().field, wx, y);
+    return m ? [m[0] + (x - wx) * 16, m[1]] : [x * 16 + 8, y * 16 + 8];
   }
 
   function puff(s: FxScene, x: number, y: number, age: number, footY: number): void {
@@ -64,6 +76,7 @@ namespace SE {
       const footY = st.y * 16 + 15;
       const col = FX_MANIFEST.sprites.volcano_column;
       if (!col) return;
+      if (s.once(`${st.id}:boom`)) playSfx('vulkan-explosion');
       const end = HAZARD_MAIN_MS[EventKind.Volcano];
       const grown = Math.min(col.h, Math.ceil((col.h * t) / GROW_MS));
       const lifted = t > end - LIFT_MS ? Math.ceil((col.h * (t - (end - LIFT_MS))) / LIFT_MS) : 0;
@@ -92,25 +105,39 @@ namespace SE {
 
     live(s: FxScene, world: WorldState): void {
       const hz = world.hazards;
+      const field = PixelTerrain.shared().field;
       for (let y = s.y0; y <= s.y1; y++) {
         for (let xx = s.x0; xx <= s.x1; xx++) {
           const x = wrapX(xx);
           const i = y * GRID_W + x;
-          if (hz.scar[i] !== ScarKind.Vent) continue;
-          const [fx, fy] = foot(xx, y);
-          const active = hz.tile[i] === HazardTile.Lava;
-          // Its flanks turn green once its basalt has aged and the land around is open land or more.
-          let green = 0;
-          for (let k = 0; k < 8; k++) {
-            const ny = y + HAZARD_NY[k];
-            if (ny >= 0 && ny < GRID_H && LANDSCAPE_LEVEL[world.landscape[idx(wrapX(x + HAZARD_NX[k]), ny)]] >= 2) green++;
+          const vent = hz.scar[i] === ScarKind.Vent;
+          const active = world.upliftKind[i] === UpliftKind.ActiveVolcano && field.volcano[i] > 0;
+          if (!vent && !active && (field.volcano[i] === 0 || world.magma[i] < SMOKE_MAGMA)) continue;
+          const fy = foot(xx, y)[1];
+          const [mx, my] = mouth(xx, y);
+          // An erupting volcano, and an active one always: lava glows in its crater and throws embers.
+          const erupting = vent && hz.tile[i] === HazardTile.Lava;
+          if (erupting || active) {
+            const glow = FX_MANIFEST.sprites.crater_glow;
+            const frame = glow && !s.reduce ? Math.floor(s.now / (1000 / glow.fps)) % glow.frames.length : 0;
+            s.add({ id: 'crater_glow', frame, x: mx, y: my, foot: fy, z: 0 });
+            const every = erupting ? CRATER_EMBER_MS : LAKE_EMBER_MS;
+            const t = s.now + hazardRoll(world.seed, i, 11) * every;
+            const n = s.reduce ? 0 : Math.floor(t / every) - Math.floor((t - s.dt * 1000) / every);
+            for (let k = 0; k < n; k++) {
+              s.particles.spawn(mx + (Math.random() - 0.5) * 6, my - 1, (Math.random() - 0.5) * 24, -20 - Math.random() * 20, 0.6 + Math.random() * 0.5, 60, FX_EMBER);
+            }
           }
-          s.add({ id: 'vent_cone', frame: active ? 0 : green >= VENT_GREEN && hz.scarAge[i] >= SCAR_MIN_TICKS[ScarKind.Basalt] ? 2 : 1, x: fx, y: fy, foot: fy, z: 0 });
-          if (active) continue;
-          // A resting volcano smokes now and then, each on its own beat.
+          // An active volcano trails a thin plume of puffs, bent by the wind.
+          if (active && !s.reduce) {
+            const wind = ClimateSystem.airCurrent(y).dx * WISP_DRIFT / 1000;
+            const start = hazardRoll(world.seed, i, 9) * WISP_MS;
+            for (let age = (s.now + start) % WISP_MS; age < PUFF_MS; age += WISP_MS) puff(s, mx + 1 + age * wind, my - 2, age, fy);
+            continue;
+          }
+          // Vents and hot cones smoke now and then, each on its own beat.
           const period = 20000 + hazardRoll(world.seed, i, 7) * 20000;
           const phase = (s.now + hazardRoll(world.seed, i, 9) * period) % period;
-          const [mx, my] = mouth(xx, y);
           puff(s, mx + 1, my - 2, phase, fy);
         }
       }

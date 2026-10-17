@@ -104,7 +104,7 @@ namespace SE {
       const k = `${this.deviceTile}|${key}`;
       let tile = this.vectors.get(k);
       if (!tile) {
-        tile = rasterArt(art ?? [], this.deviceTile, look, flip);
+        tile = rasterArt(art ?? [], this.deviceTile, look, flip, true);
         this.vectors.set(k, tile);
       }
       return tile;

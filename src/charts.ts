@@ -103,7 +103,7 @@ namespace SE {
     const line = pts.join(' ');
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="spark" aria-hidden="true">` +
       `<polygon points="0,${h} ${line} ${w},${h}" fill="${color}" opacity="0.16"/>` +
-      `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` +
+      `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="miter" stroke-linecap="square"/>` +
       '</svg>';
   }
 

@@ -343,3 +343,13 @@ test('the plume leans downwind in every wind belt', {
   for (const sp of [east, west]) assert.deepEqual([sp.w, sp.h, sp.frames.length], [24, 32, 6]);
   assert.equal(SE.FX_MANIFEST.sprites.smoke_plume.frames.length, 6);
 });
+
+test('a fire on lava or rubble names what is there instead of claiming nothing can burn', () => {
+  const { SE, world: w } = makeSim(777, 'today');
+  const hz = new SE.HazardSystem();
+  forest(SE, w, X, Y, X, Y);
+  w.hazards.tile[SE.idx(X, Y)] = SE.HazardTile.Lava;
+  assert.equal(hz.refusal(w, SE.EventKind.Fire, X, Y), 'Hier fließt glühende Lava.');
+  w.hazards.tile[SE.idx(X, Y)] = SE.HazardTile.Rubble;
+  assert.equal(hz.refusal(w, SE.EventKind.Fire, X, Y), 'Hier liegen Trümmer.');
+});

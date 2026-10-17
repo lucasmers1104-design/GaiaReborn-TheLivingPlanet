@@ -8,34 +8,67 @@
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: 0;
+  border: 2px solid var(--glass-border);
+  background: var(--raise);
+  clip-path: var(--px-clip);
 }
 
 .planet-kind { display: flex; }
-.planet-kind .seg-btn { flex: 1 1 0; min-height: 36px; }
+.planet-kind .seg-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 0;
+  min-height: 40px;
+  font-weight: 600;
+}
+.planet-kind .seg-btn .ico { width: 18px; height: 18px; image-rendering: pixelated; opacity: 0.75; }
+.planet-kind .seg-btn.on .ico { opacity: 1; }
+.planet-kind .seg-btn.on { background: rgba(99, 193, 111, 0.14); box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* The chosen kind and epoch each light a square, like the title's mode
+   buttons: the choice reads without relying on colour alone. */
+.planet-kind .seg-btn::after, .planet-epoch::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  margin-top: -5px;
+  border: 2px solid var(--line-2);
+}
+.planet-kind .seg-btn.on::after, .planet-epoch.on::after { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 6px var(--accent); }
 
 .planet-epochs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
 .planet-epochs[hidden] { display: none; }
 .planet-epoch {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  min-height: 44px;
-  padding: 7px 10px;
-  border-radius: var(--radius-s);
-  border: 1px solid var(--line);
+  min-height: 48px;
+  padding: 8px 28px 8px 10px;
+  border-radius: 0;
+  border: 2px solid var(--line-2);
   background: transparent;
+  clip-path: var(--px-clip);
   color: var(--ink-2);
   text-align: left;
   cursor: pointer;
   transition: background 140ms, border-color 140ms, color 140ms;
 }
-.planet-epoch:hover { background: rgba(255, 255, 255, 0.06); color: var(--ink); }
-.planet-epoch.on { background: rgba(143, 220, 154, 0.14); border-color: rgba(143, 220, 154, 0.55); color: var(--ink); }
-.planet-epoch-name { font-weight: 700; font-size: 13.5px; }
+.planet-epoch:hover { background: var(--raise-2); border-color: var(--ink-3); color: var(--ink); }
+.planet-epoch.on { background: rgba(99, 193, 111, 0.14); border-color: var(--accent); color: var(--ink); box-shadow: inset 0 -3px 0 rgba(99, 193, 111, 0.35); }
+.planet-epoch.on .planet-epoch-when { color: var(--ink-2); }
+.planet-epoch::after { top: 10px; margin-top: 0; }
+/* clip-path cuts the outline off, so focus shows inside the frame. */
+.planet-epoch:focus-visible, .planet-kind .seg-btn:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+.planet-epoch-name { font-weight: 600; font-size: 13.5px; }
 .planet-epoch-when { font-size: 11.5px; color: var(--ink-3); }
 
 .planet-blurb { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-3); }

@@ -17,6 +17,9 @@
  * Rules, all per tile (≈ 156 km at the equator):
  *   - land where at least half of the samples are above sea level, and also
  *     where an isolated island holds a fifth, so archipelagos do not vanish;
+ *   - land that hangs together in the samples but would fall apart on the
+ *     grid (Panama, Baja California, Cuba) is joined through the sea tiles it
+ *     runs through, never cutting off a sea;
  *   - lakes and inland water smaller than MIN_SEA_TILES become land (ETOPO
  *     carries lake-bed bathymetry: the Great Lakes would turn into sea);
  *   - height = mean of the land samples, depth = mean of the sea samples, so a
@@ -34,6 +37,13 @@ const W = 256;
 const H = 128;
 const MIN_SEA_TILES = 6;
 const ISLAND_SHARE = 0.2;
+/**
+ * Bridging: only masses of at least this many samples (≈ 30 000 km² at the
+ * equator), and only through tiles they fill to this share, so a strait a few
+ * kilometres wide (Messina) stays open.
+ */
+const BRIDGE_MASS = 100;
+const BRIDGE_SHARE = 0.15;
 /** Heights and depths the byte encoding spans, in metres. */
 const MAX_HEIGHT = 6000;
 const MAX_DEPTH = 11000;
@@ -89,6 +99,10 @@ function bin(grid) {
     n: new Uint32Array(W * H), land: new Uint32Array(W * H),
     landSum: new Float64Array(W * H), landSq: new Float64Array(W * H), seaSum: new Float64Array(W * H),
   };
+  /** Tile of each sample, -1 for the -180° column repeated at 180°. */
+  t.tileOf = new Int32Array(grid.rows * grid.cols).fill(-1);
+  /** Sample columns west of 180°: the ones a row wraps around. */
+  t.span = 0;
   const tile = 360 / W;
   for (let r = 0; r < grid.rows; r++) {
     const lat = grid.y0 + (grid.rows - 1 - r) * grid.step;
@@ -96,8 +110,10 @@ function bin(grid) {
     for (let c = 0; c < grid.cols; c++) {
       const lon = grid.x0 + c * grid.step;
       if (lon >= 180) continue; // the -180° column again
+      t.span = Math.max(t.span, c + 1);
       const x = Math.min(W - 1, Math.floor((lon + 180) / tile));
       const i = y * W + x;
+      t.tileOf[r * grid.cols + c] = i;
       const h = grid.data[r * grid.cols + c];
       t.n[i]++;
       if (h > 0) { t.land[i]++; t.landSum[i] += h; t.landSq[i] += h * h; } else t.seaSum[i] += h;
@@ -121,7 +137,146 @@ function neighbours(i, diagonal) {
   return out;
 }
 
-function landMask(t) {
+/**
+ * Land that hangs together in ETOPO but falls apart on the grid (Panama, Baja
+ * California, Cuba, the Malay Peninsula) is joined again through sea tiles it
+ * runs through. Returns the tiles added.
+ */
+function bridge(grid, t, land) {
+  const { rows, cols, data } = grid;
+  const span = t.span;
+  const around = (p) => {
+    const c = p % cols;
+    const r = (p - c) / cols;
+    return [r > 0 ? p - cols : -1, r < rows - 1 ? p + cols : -1, r * cols + (c + 1) % span, r * cols + (c - 1 + span) % span];
+  };
+  const isLand = (p) => p >= 0 && data[p] > 0 && t.tileOf[p] >= 0;
+  const seen = new Uint8Array(rows * cols);
+  const node = new Int32Array(rows * cols).fill(-1);
+  let added = 0;
+  for (let s = 0; s < rows * cols; s++) {
+    if (seen[s] || !isLand(s)) continue;
+    const mass = [s];
+    seen[s] = 1;
+    for (let k = 0; k < mass.length; k++) for (const q of around(mass[k])) if (isLand(q) && !seen[q]) { seen[q] = 1; mass.push(q); }
+    if (mass.length < BRIDGE_MASS) continue;
+    // Nodes: each land tile whole (it is drawn as one), and in a sea tile each
+    // piece of the mass inside it on its own, so a gulf tile holding both shores
+    // does not pass for a land link between them.
+    const tileOfNode = [];
+    const share = [];
+    const landNode = new Map();
+    for (const p of mass) {
+      if (node[p] >= 0) continue;
+      const i = t.tileOf[p];
+      if (land[i]) {
+        if (!landNode.has(i)) { landNode.set(i, tileOfNode.length); tileOfNode.push(i); share.push(1); }
+        node[p] = landNode.get(i);
+        continue;
+      }
+      const id = tileOfNode.length;
+      tileOfNode.push(i);
+      const piece = [p];
+      node[p] = id;
+      for (let k = 0; k < piece.length; k++) {
+        for (const q of around(piece[k])) if (isLand(q) && node[q] < 0 && t.tileOf[q] === i) { node[q] = id; piece.push(q); }
+      }
+      share.push(piece.length / t.n[i]);
+    }
+    const links = tileOfNode.map(() => new Set());
+    for (const p of mass) for (const q of around(p)) if (isLand(q) && node[q] !== node[p]) links[node[p]].add(node[q]);
+    // Neighbouring land tiles touch on the map whether or not land crosses their border.
+    for (const [i, a] of landNode) for (const j of neighbours(i, false)) if (landNode.has(j)) links[a].add(landNode.get(j));
+    added += join(tileOfNode, share, links, landNode, land);
+    for (const p of mass) node[p] = -1;
+  }
+  return added;
+}
+
+/** Sea areas, 4-connected as the lake rule counts them. */
+function seaParts(land) {
+  const seen = new Uint8Array(W * H);
+  let n = 0;
+  for (let s = 0; s < W * H; s++) {
+    if (land[s] || seen[s]) continue;
+    n++;
+    const stack = [s];
+    seen[s] = 1;
+    while (stack.length) for (const j of neighbours(stack.pop(), false)) if (!land[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+  }
+  return n;
+}
+
+/**
+ * Join the land parts of one mass to its biggest, one at a time along the
+ * cheapest chain of nodes (see bridge): land is free, a piece in a sea tile
+ * costs the share of the tile it leaves to the sea, and pieces under
+ * BRIDGE_SHARE are no way at all. A chain that would cut off a sea (the Gulf
+ * of California behind Baja) is refused and the next cheapest one tried.
+ */
+function join(tileOfNode, share, links, landNode, land) {
+  const part = new Map();
+  const sizes = [];
+  for (const a of landNode.values()) {
+    if (part.has(a)) continue;
+    const stack = [a];
+    part.set(a, sizes.length);
+    for (let k = 0; k < stack.length; k++) {
+      for (const b of links[stack[k]]) if (land[tileOfNode[b]] && !part.has(b)) { part.set(b, sizes.length); stack.push(b); }
+    }
+    sizes.push(stack.length);
+  }
+  if (sizes.length < 2) return 0;
+  const joined = new Set([sizes.indexOf(Math.max(...sizes))]);
+  const blocked = new Set();
+  let added = 0;
+  for (;;) {
+    const seas = seaParts(land);
+    const dist = new Map();
+    const prev = new Map();
+    const open = [];
+    for (const [a, p] of part) if (joined.has(p)) { dist.set(a, 0); open.push(a); }
+    let hit = -1;
+    while (open.length) {
+      let k = 0;
+      for (let m = 1; m < open.length; m++) if (dist.get(open[m]) < dist.get(open[k])) k = m;
+      const a = open[k];
+      open[k] = open[open.length - 1];
+      open.pop();
+      if (part.has(a) && !joined.has(part.get(a))) { hit = a; break; }
+      for (const b of links[a]) {
+        const onLand = land[tileOfNode[b]] > 0;
+        if (!onLand && (share[b] < BRIDGE_SHARE || blocked.has(b))) continue;
+        // A small step cost keeps the path short across land.
+        const d = dist.get(a) + (onLand ? 0 : 1 - share[b]) + 1e-3;
+        if (d >= (dist.get(b) ?? Infinity)) continue;
+        if (!dist.has(b)) open.push(b);
+        dist.set(b, d);
+        prev.set(b, a);
+      }
+    }
+    if (hit < 0) return added;
+    const path = [];
+    for (let a = prev.get(hit); dist.get(a) > 0; a = prev.get(a)) if (!land[tileOfNode[a]]) path.push(a);
+    const cuts = (nodes) => {
+      for (const a of nodes) land[tileOfNode[a]] = 4;
+      const cut = seaParts(land) > seas;
+      for (const a of nodes) land[tileOfNode[a]] = 0;
+      return cut;
+    };
+    if (cuts(path)) {
+      const alone = path.filter((a) => cuts([a]));
+      // Several tiles may cut only together: then refuse the first.
+      for (const a of alone.length ? alone : path.slice(0, 1)) blocked.add(a);
+      continue;
+    }
+    for (const a of path) land[tileOfNode[a]] = 4;
+    added += new Set(path.map((a) => tileOfNode[a])).size;
+    joined.add(part.get(hit));
+  }
+}
+
+function landMask(grid, t) {
   const share = (i) => t.land[i] / Math.max(1, t.n[i]);
   const land = new Uint8Array(W * H);
   for (let i = 0; i < W * H; i++) land[i] = share(i) >= 0.5 ? 1 : 0;
@@ -130,6 +285,7 @@ function landMask(t) {
     if (land[i] || share(i) < ISLAND_SHARE) continue;
     if (neighbours(i, true).every((j) => share(j) < 0.5)) land[i] = 2;
   }
+  const bridged = bridge(grid, t, land);
   // Small water bodies (lake beds, fragments) become land.
   const seen = new Uint8Array(W * H);
   let filled = 0;
@@ -142,7 +298,7 @@ function landMask(t) {
     }
     if (comp.length < MIN_SEA_TILES) { for (const i of comp) land[i] = 3; filled += comp.length; }
   }
-  return { land, filled };
+  return { land, filled, bridged };
 }
 
 /** Heights and relief in metres; land tiles > 0, sea tiles < 0. */
@@ -230,8 +386,9 @@ async function main() {
   if (a.fetch) await fetchEtopo(a.file);
   if (!fs.existsSync(a.file)) throw new Error(`${a.file} missing: run with --fetch (downloads ${ERDDAP_URL})`);
 
-  const t = bin(readGrid(a.file));
-  const { land, filled } = landMask(t);
+  const grid = readGrid(a.file);
+  const t = bin(grid);
+  const { land, filled, bridged } = landMask(grid, t);
   const { h, relief } = heights(t, land);
 
   const heightBytes = new Uint8Array(W * H);
@@ -246,7 +403,7 @@ async function main() {
     // The encoding must never flip a tile between land and sea.
     if ((decodeHeight(heightBytes[i]) > 0) !== (land[i] > 0)) throw new Error(`tile ${i}: height ${h[i]} changed sides`);
   }
-  const stats = `${landTiles} land tiles (${(landTiles / (W * H) * 100).toFixed(1)} % of the grid), ${islands} kept as islands, ${filled} lake tiles filled.`;
+  const stats = `${landTiles} land tiles (${(landTiles / (W * H) * 100).toFixed(1)} % of the grid), ${islands} kept as islands, ${bridged} bridging land, ${filled} lake tiles filled.`;
   console.log(stats);
 
   if (a.png) preview(a.png, h);

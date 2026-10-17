@@ -14,7 +14,7 @@
  *               (default: <OS temp>/simearth-terrain); parts: palette,
  *               materials, transitions, masks, objects, objects-light,
  *               scenes, desert, savanna — pick some with --part
- *     --family  build and show only cold | temperate | warm | wet
+ *     --family  build and show only cold | temperate | warm | wet | mountain | coast
  *               (sheets that need other families are skipped)
  *     --write   write assets/terrain/atlas.png, assets/terrain/manifest.json
  *               and src/terrainatlas.ts — the lead does this when merging,

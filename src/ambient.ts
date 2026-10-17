@@ -8,12 +8,14 @@
  * ========================================================================== */
 
 namespace SE {
-  /** Cloud texels per tile along each axis: two sprite pixels per texel. */
-  const CLOUD_RES = 4;
+  /** Cloud texels per tile along each axis: two ground-art pixels per texel; at 4 the edges read as blocks. */
+  const CLOUD_RES = 8;
   /** Tiles per second the cloud deck drifts east. */
   const CLOUD_DRIFT = 0.22;
   /** Cloud shadows fall this many tiles south-east of their clouds. */
   const SHADOW_OFFSET = 1.25;
+  /** Largest sideways shift of the cloud noise lookup, texels. */
+  const CLOUD_WARP = 3.5 * CLOUD_RES;
   const GLINT_MAX = 20;
   const GLINT_MS = 1100;
   /** Wall-clock gap between attempts to start a new glint. */
@@ -113,12 +115,12 @@ namespace SE {
       const w = GRID_W * CLOUD_RES;
       const h = GRID_H * CLOUD_RES;
       const field = AmbientLayer.noise(w, h, 0x5eed);
-      this.deck = AmbientLayer.paint(field, w, h, [246, 250, 250], [0, 0.22, 0.55, 0.9]);
+      this.deck = AmbientLayer.paint(field, w, h, [246, 250, 250], [0, 0.22, 0.55, 0.9], true);
       this.shade = AmbientLayer.paint(field, w, h, [6, 18, 26], [0, 1, 1, 1]);
     }
 
     /** Four stepped alpha levels, so the edges stay crisp pixel art. */
-    private static paint(field: Float32Array, w: number, h: number, rgb: Rgb, levels: readonly number[]): HTMLCanvasElement {
+    private static paint(field: Float32Array, w: number, h: number, rgb: Rgb, levels: readonly number[], lit = false): HTMLCanvasElement {
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
@@ -126,12 +128,25 @@ namespace SE {
       if (!ctx) return canvas;
       const img = ctx.createImageData(w, h);
       const d = img.data;
+      const levelAt = (x: number, y: number): number => {
+        const v = field[Math.min(h - 1, Math.max(0, y)) * w + ((x + w) % w)];
+        return v > 0.7 ? 3 : v > 0.655 ? 2 : v > 0.625 ? 1 : 0;
+      };
       for (let p = 0; p < w * h; p++) {
-        const v = field[p];
-        const level = v > 0.7 ? 3 : v > 0.655 ? 2 : v > 0.625 ? 1 : 0;
-        d[p * 4] = rgb[0];
-        d[p * 4 + 1] = rgb[1];
-        d[p * 4 + 2] = rgb[2];
+        const x = p % w;
+        const y = (p / w) | 0;
+        const level = levelAt(x, y);
+        // Lit clouds get volume, light from the upper left like the ground:
+        // a bright rim where the cloud thins up-left, a grey one down-right.
+        let tone = 0;
+        if (lit && level >= 2) {
+          if (levelAt(x + 1, y + 1) < level) tone = -34;
+          else if (levelAt(x - 1, y - 1) < level) tone = 8;
+          else tone = -12;
+        }
+        d[p * 4] = Math.min(255, rgb[0] + tone);
+        d[p * 4 + 1] = Math.min(255, rgb[1] + tone);
+        d[p * 4 + 2] = Math.min(255, rgb[2] + tone * 0.6);
         d[p * 4 + 3] = Math.round(levels[level] * 255);
       }
       ctx.putImageData(img, 0, 0);
@@ -141,21 +156,42 @@ namespace SE {
     /** Value-noise fBm in 0..1, wrapping in X like the planet. */
     private static noise(w: number, h: number, seed: number): Float32Array {
       const rng = new Rng(seed);
+      const base = AmbientLayer.fbm(w, h, rng, [[10, 5, 1], [20, 10, 0.5], [40, 20, 0.25], [80, 40, 0.12]]);
+      // Sampled through a slow warp: value noise alone leaves long straight
+      // cloud edges along its lattice lines.
+      const wx = AmbientLayer.fbm(w, h, rng, [[40, 20, 1], [80, 40, 0.5]]);
+      const wy = AmbientLayer.fbm(w, h, rng, [[40, 20, 1], [80, 40, 0.5]]);
       const out = new Float32Array(w * h);
-      const octaves = [[10, 5, 1], [20, 10, 0.5], [40, 20, 0.25], [80, 40, 0.12]] as const;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const p = y * w + x;
+          const sx = (x + Math.round((wx[p] - 0.5) * 2 * CLOUD_WARP) + w) % w;
+          const sy = clamp(y + Math.round((wy[p] - 0.5) * 2 * CLOUD_WARP), 0, h - 1);
+          out[p] = base[sy * w + sx];
+        }
+      }
+      return out;
+    }
+
+    private static fbm(w: number, h: number, rng: Rng, octaves: readonly (readonly [number, number, number])[]): Float32Array {
+      const out = new Float32Array(w * h);
       let total = 0;
       for (const [cx, cy, amp] of octaves) {
         total += amp;
-        const lattice = new Float32Array(cx * (cy + 1));
+        const lattice = new Float32Array(cx * (cy + 2));
         for (let k = 0; k < lattice.length; k++) lattice[k] = rng.next();
+        // Each octave's lattice shifted by a fraction of a cell: aligned
+        // lattices stack their flat seams into ruler-straight cloud edges.
+        const sx = rng.next();
+        const sy = rng.next();
         for (let y = 0; y < h; y++) {
-          const fy = (y / h) * cy;
+          const fy = (y / h) * cy + sy;
           const y0 = Math.floor(fy);
           const ty = smoothstep(fy - y0);
           for (let x = 0; x < w; x++) {
-            const fx = (x / w) * cx;
-            const x0 = Math.floor(fx);
-            const tx = smoothstep(fx - x0);
+            const fx = (x / w) * cx + sx;
+            const x0 = Math.floor(fx) % cx;
+            const tx = smoothstep(fx - Math.floor(fx));
             const x1 = (x0 + 1) % cx;
             const a = lattice[y0 * cx + x0];
             const b = lattice[y0 * cx + x1];

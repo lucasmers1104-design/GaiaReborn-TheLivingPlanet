@@ -26,7 +26,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'earth'];
+const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'earth', 'fauna'];
 
 const SPRITES = [
   { id: 'smoke_puff', name: 'Rauchwölkchen', family: 'smoke', w: 8, h: 8, frames: 4, fps: 8, anchor: 'center', layer: 'top' },
@@ -39,10 +39,8 @@ const SPRITES = [
     id: 'ash_cloud', name: 'Aschewolke', family: 'volcano', w: 48, h: 32, frames: 7, loop: 4, fps: 6,
     anchor: 'center', layer: 'top',
   },
-  {
-    id: 'vent_cone', name: 'Schlot mit Krater (aktiv, frisch, bewachsen)', family: 'volcano', w: 24, h: 24, frames: 3, fps: 0,
-    anchor: 'foot', layer: 'object', mouth: [12, 7],
-  },
+  // The cone is landscape relief (src/landridgedraw.ts); an erupting one glows in its crater.
+  { id: 'crater_glow', name: 'Glühender Lavasee im Krater', family: 'volcano', w: 16, h: 16, frames: 4, fps: 6, anchor: 'center', layer: 'object' },
   { id: 'lava_splash', name: 'Lavaspritzer', family: 'volcano', w: 8, h: 8, frames: 4, fps: 10, anchor: 'center', layer: 'object' },
 
   // Fire (Flächenbrand): flames stand on burning tiles, smoke drifts with the wind.
@@ -81,6 +79,20 @@ const SPRITES = [
   { id: 'rubble', name: 'Trümmer über einer Stadt', family: 'earth', w: 16, h: 16, frames: 2, fps: 4, anchor: 'foot', layer: 'object' },
   { id: 'fissure', name: 'Erdriss, flach: 4 Richtungen (−, |, /, \\) × Mitte, Ende, Abzweigung', family: 'earth', w: 16, h: 16, frames: 12, fps: 0, anchor: 'center', layer: 'object' },
   { id: 'ruin', name: 'Ruine', family: 'earth', w: 16, h: 20, tile: true, frames: 3, fps: 0, anchor: 'foot', layer: 'object' },
+
+  // Fauna: whales seen from above on the open sea (src/whalelayer.ts). Two directions (east, then west) × 8
+  // frames: 0–1 rise, 2–3 swim, 4–7 fluke dive (back arches, fluke rises, fluke peak, fluke sinks). The runtime
+  // picks the frames itself. `mouth`, east frames (west: w − 1 − x): [blowX, blowY, snoutX, snoutY, flukeX,
+  // flukeY] — the pixel above the blowhole in frames 1–3, where the blow's foot stands; the snout tip on the
+  // spine (frames 2–3, the bow wave); the foot of the raised fluke (frames 6–7). whale_blow plays once.
+  { id: 'whale_great', name: 'Blauwal: 2 Richtungen × 8 Frames', family: 'fauna', w: 48, h: 24, frames: 16, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [40, 12, 45, 13, 8, 13] },
+  { id: 'whale_baleen', name: 'Buckelwal: 2 Richtungen × 8 Frames', family: 'fauna', w: 40, h: 24, frames: 16, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [30, 10, 35, 11, 8, 11] },
+  { id: 'whale_sperm', name: 'Pottwal: 2 Richtungen × 8 Frames', family: 'fauna', w: 40, h: 24, frames: 16, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [37, 8, 37, 12, 8, 12] },
+  { id: 'whale_blow', name: 'Blas eines Wals', family: 'fauna', w: 24, h: 24, frames: 8, fps: 10, anchor: 'foot', layer: 'object' },
+  { id: 'whale_blow_sperm', name: 'Blas des Pottwals, schräg nach vorn: 2 Richtungen × 8 Frames', family: 'fauna', w: 24, h: 24, frames: 16, fps: 10, anchor: 'foot', layer: 'object', mirror: 'generator', directions: 2 },
+  // Drawn under the whale: bow wave (east 0–3, west 4–7, looped; `mouth` its tip in the east frames, set on
+  // the snout) and the footprint ring before a whale rises and after its fluke sinks (8–11, once).
+  { id: 'whale_wake', name: 'Bugwelle (Osten, Westen) und Fußabdruck-Ring', family: 'fauna', w: 24, h: 16, frames: 12, loop: 4, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', mouth: [18, 7] },
 ];
 
 /**

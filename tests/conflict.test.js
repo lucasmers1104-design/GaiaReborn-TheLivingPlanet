@@ -375,3 +375,44 @@ test('the battle symbol keeps the art format and sits halfway, the short way rou
   assert.deepEqual(SE.battleSpot(at(SE, 1, 20), at(SE, SE.GRID_W - 3, 20)), { x: SE.GRID_W - 1, y: 20 });
   assert.deepEqual(SE.battleSpot(at(SE, SE.GRID_W - 2, 20), at(SE, 2, 22)), { x: 0, y: 21 });
 });
+
+test('a new tech level and an atomic strike in the same tick are both reported', () => {
+  const s = fixture([[40, 40, 52, 47], [60, 40, 72, 47]]);
+  const { SE, world: w } = s;
+  warlike(s.params);
+  for (const [x, y] of [[42, 43], [50, 43], [62, 43], [70, 43]]) {
+    w.tech[at(SE, x, y)] = SE.Tech.Atomic;
+    w.cityPop[at(SE, x, y)] = 0.6;
+  }
+  const sink = SE.civEventSink;
+  SE.civEventSink = () => {};
+  try {
+    run(s, 1);
+    w.civ.calmUntil = 0;
+    w.civ.topSince = -SE.TECH_MIN_AGE;
+    // Every roll hits: the leading cities invent the next level and the bomb falls, both in one tick.
+    w.rng.next = () => 0;
+    run(s, 1);
+  } finally {
+    SE.civEventSink = sink;
+  }
+  assert.equal(s.civ.lastKind, 'tech', 'the new level keeps its chronicle entry');
+  assert.equal(s.civ.lastTech, SE.Tech.Information);
+  assert.ok(w.civ.news.some((n) => n.tone === 'warn' && n.text.startsWith('Warnung: Atomschlag')), 'the strike is still reported');
+});
+
+test('peoples whose last city fell are gone before a new city takes a colour', () => {
+  const s = islands(4, 2, 5);
+  const { SE, world: w } = s;
+  run(s, 1);
+  assert.equal(w.civ.tribes.length, SE.TRIBE_MAX);
+  const first = w.civ.cities[0].tile;
+  for (const c of w.civ.cities) { w.tech[c.tile] = 0; w.cityPop[c.tile] = 0; }
+  run(s, 1);
+  assert.equal(w.civ.cities.length, 0);
+  w.tech[first] = SE.Tech.Stone;
+  w.cityPop[first] = 0.3;
+  s.civ.sync(w, s.params);
+  const t = w.civ.tribe(w.civ.cityAt(first).tribe);
+  assert.ok(t && t.color < SE.TRIBE_MAX, `colour ${t && t.color}`);
+});

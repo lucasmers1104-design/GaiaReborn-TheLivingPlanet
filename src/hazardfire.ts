@@ -134,7 +134,9 @@ namespace SE {
       if (world.elevation[i] < 0 || world.riverLevel[i] > 0) return 'Wasser brennt nicht.';
       if (hz.tile[i] === HazardTile.Wet || hz.tile[i] === HazardTile.Flood) return 'Hier ist alles zu nass, um zu brennen.';
       if (hz.scar[i] === ScarKind.Burnt) return 'Hier ist schon alles verbrannt.';
-      if (world.vegetation[i] < BARE_COVER || hz.tile[i] !== HazardTile.None) return NO_FUEL;
+      if (hz.tile[i] === HazardTile.Lava) return 'Hier fließt glühende Lava.';
+      if (hz.tile[i] === HazardTile.Rubble) return 'Hier liegen Trümmer.';
+      if (world.vegetation[i] < BARE_COVER) return NO_FUEL;
       return '';
     },
 

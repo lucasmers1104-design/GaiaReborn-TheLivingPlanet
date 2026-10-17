@@ -143,6 +143,8 @@ namespace SE {
     readonly born: number;
     readonly generation: number;
     readonly commit: () => Hazard | null;
+    /** How long the omen plays before commit: HAZARD_OMEN_MS, or longer while a lead-in sound runs. */
+    readonly omen: number;
   }
 
   /** Tiles of margin around the view for tall sprites and drifting clouds. */
@@ -175,7 +177,9 @@ namespace SE {
         if (h) this.begin(h, performance.now());
         return;
       }
-      this.staged.push({ kind, x, y, born: performance.now(), generation: world.hazards.generation, commit });
+      // The bomb waits out its siren, so it goes off with the bang in the sound.
+      const lead = kind === EventKind.AtomicBomb && playSfx('siren-and-nuke') ? NUKE_BOOM_MS : 0;
+      this.staged.push({ kind, x, y, born: performance.now(), generation: world.hazards.generation, commit, omen: Math.max(lead, HAZARD_OMEN_MS[kind]) });
     }
 
     /** Start every staged hazard of this planet at once: with the effect layer off, nothing shows their omens. */
@@ -235,13 +239,14 @@ namespace SE {
         const st = this.staged[k];
         const t = now - st.born;
         if (st.generation !== world.hazards.generation) { this.staged.splice(k, 1); continue; }
-        if (t >= HAZARD_OMEN_MS[st.kind]) {
+        if (t >= st.omen) {
           this.staged.splice(k, 1);
           const h = st.commit();
           if (h) this.begin(h, now);
           continue;
         }
-        if (s.sees(st.x, st.y)) FX_SCRIPTS[st.kind]?.omen(s, st.x, st.y, t);
+        // A long lead-in holds the omen's opening, then plays the rest up to commit.
+        if (s.sees(st.x, st.y)) FX_SCRIPTS[st.kind]?.omen(s, st.x, st.y, Math.max(0, t - (st.omen - HAZARD_OMEN_MS[st.kind])));
       }
       // A hazard that started without the show (nature, a load) plays its main animation if it is fresh and in view.
       for (const h of world.hazards.list) {

@@ -517,6 +517,15 @@ Die verbliebenen Einzelkacheln sind fast nur frisch gestörte Kacheln, die in we
   - Objekte sind handgezeichnete Zeichenraster wie in `sprites.ts`.
 - **Regeländerung:** `AGENTS.md` sagt „Assets are SVG only“ und `assets/README.md` beschreibt nur SVG. Beide werden für `assets/terrain/` um die Pixel-PNG-Ausnahme ergänzt.
 
+### 4.10 Strände (17. 10.)
+
+Nur Darstellung: Die Simulation kennt keine Strände, gespeichert wird nichts. Regeln in `src/beaches.ts`, Werte `BEACH_*`/`PALM_*` in `constants.ts`.
+
+- **Sandstrand:** Landkachel unter `BEACH_MAX_ELEVATION` (0,06), Klimazone warm oder tropisch (Hysterese-Zone, daher kein Flackern), weder Feuchtgebiet noch Gebirge, nicht Eis, Schnee, Fels, Sumpf oder Sumpfwald, direkt neben offenem Meer (nicht arktisch). Ein Küstenrauschen (`BEACH_SHARE` 0,55) lässt nur Abschnitte zu Strand werden, nicht jede Küstenkachel.
+- **Bild:** Material `beach` (Familie `coast`), keine Landschaftsobjekte (`scene` NONE), Brandung und nasser Saum wie an jeder Küste. Untersuchen-Fenster: „Sandstrand“.
+- **Kokospalmen:** erst `PALM_DELAY_YEARS` (45 Mio. Jahre) nach den Blütenpflanzen; danach auf 60 % der tropischen und 30 % der warmen Strandkacheln, davon 30 % als Paar. Füße zur Landseite versetzt, Kronen zum Meer geneigt (Form 0 links, 1 rechts).
+- **Folge der Zonenregel:** Feuchte Tropenküsten (Feuchtgebiet-Zone) tragen Sumpfwald statt Strand. Strände liegen deshalb vor allem an trockeneren warmen Küsten (Golf von Mexiko, Bahamas, Arabien, Nordwestaustralien), kaum in Indonesien. Bericht: `docs/strand-2026-10/bericht.md`.
+
 ---
 
 ## 5. Rangfolge und Asset-Liste

@@ -91,6 +91,31 @@ namespace SE {
     { name: 'Southeast Indian Ridge', heat: 0.55, path: [[-25.5, 70.0], [-38.0, 77.5], [-42.0, 85.0], [-48.0, 100.0], [-50.0, 115.0], [-50.0, 125.0], [-55.0, 140.0], [-61.5, 161.0]] },
   ];
 
+  /** The summit craters of the most active volcanoes (Smithsonian GVP), each typed UpliftKind.ActiveVolcano. */
+  export const ACTIVE_VOLCANOES: readonly { readonly name: string; readonly at: LatLon }[] = [
+    { name: 'Kīlauea', at: [19.421, -155.287] },
+    { name: 'Ätna', at: [37.748, 14.999] },
+  ];
+
+  /** Tile of a position: the one whose cell holds it, as tools/earth-map.js bins its samples. */
+  export function latLonTile([lat, lon]: LatLon): number {
+    return idx(wrapX(Math.floor(((lon + 180) / 360) * GRID_W)), clamp(Math.floor(((90 - lat) / 180) * GRID_H), 0, GRID_H - 1));
+  }
+
+  /**
+   * After the belts are typed, before their uplift is balanced: the active
+   * volcanoes, where they stand on land. Each gets a trace of uplift, so it is
+   * balanced like a belt and builds up as fast as it wears down.
+   */
+  export function markActiveVolcanoes(world: WorldState): void {
+    for (const v of ACTIVE_VOLCANOES) {
+      const i = latLonTile(v.at);
+      if (world.elevation[i] <= 0) continue;
+      world.upliftKind[i] = UpliftKind.ActiveVolcano;
+      world.uplift[i] = Math.max(world.uplift[i], UPLIFT_TRACE);
+    }
+  }
+
   /** Decode EARTH_MAP into elevation, mountain belts and the volcanic mantle field. */
   export function shapeEarthToday(seed: number, elevation: Float32Array, uplift: Float32Array, magma: Float32Array): void {
     const map = EARTH_MAP;

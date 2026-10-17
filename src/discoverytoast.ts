@@ -89,7 +89,7 @@ namespace SE {
     private showOne(e: FaunaEvent): void {
       const { c, stage } = e;
       const pic = make('span', 'fauna-toast-pic');
-      pic.innerHTML = speciesPicture(c, stage, 'full', 'fauna-svg');
+      pic.appendChild(pixelArt(speciesPicture(c, stage, 'full', 'fauna-svg'), 24, 'fauna-svg'));
       const text = make('span', 'fauna-toast-text');
       text.append(
         make('span', 'fauna-toast-kicker', 'Neue Art entdeckt'),
@@ -105,7 +105,7 @@ namespace SE {
     private showBundle(events: readonly FaunaEvent[]): void {
       const pics = events.slice(0, DISCOVERY_NAMES).map((e) => {
         const pic = make('span', 'fauna-toast-pic');
-        pic.innerHTML = speciesPicture(e.c, e.stage, 'full', 'fauna-svg');
+        pic.appendChild(pixelArt(speciesPicture(e.c, e.stage, 'full', 'fauna-svg'), 18, 'fauna-svg'));
         return pic;
       });
       const names = events.slice(0, DISCOVERY_NAMES).map((e) => subspeciesName(e.c, e.stage));

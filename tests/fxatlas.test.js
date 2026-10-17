@@ -52,7 +52,7 @@ test('every frame lies inside the atlas and no two frames overlap', () => {
 
 test('the effect layer never rotates, blurs or fades pixel art', () => {
   const dir = path.join(__dirname, '..', 'src');
-  for (const f of fs.readdirSync(dir).filter((n) => /^fx.*\.ts$/.test(n) && n !== 'fxatlas.ts')) {
+  for (const f of fs.readdirSync(dir).filter((n) => /^(fx.*|whalelayer)\.ts$/.test(n) && n !== 'fxatlas.ts')) {
     const src = fs.readFileSync(path.join(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
     for (const bad of ['.rotate(', '.filter =', 'shadowBlur', 'globalAlpha']) assert.ok(!src.includes(bad), `${f} uses ${bad}`);
   }

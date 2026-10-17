@@ -37,6 +37,27 @@ test('first land plants grow only where open water is next door', () => {
   assert.ok(s.flora.suit(w, SE.Flora.MarineAlgae, shelf) > s.flora.suit(w, SE.Flora.MarineAlgae, deep) * 5);
 });
 
+test('problem() never objects to a tile a group can spread into (founding habitat uses it)', () => {
+  const s = makeSim(12345);
+  const w = s.world;
+  s.flora.prepare(w, s.params, true);
+  for (let g = 1; g < SE.FLORA_COUNT; g++) {
+    const i = findTile(w, (j) => s.flora.suit(w, g, j) >= 0.15 && s.flora.problem(w, g, j) !== null);
+    assert.equal(i, -1, `${SE.FLORA[g].id}: "${i >= 0 ? s.flora.problem(w, g, i) : ''}" on a suitable tile`);
+  }
+});
+
+test('a planted group leads its tile at once, without a sim step (the planting tool)', () => {
+  const s = makeSim(321);
+  const w = s.world;
+  for (let k = 0; k < 40; k++) s.tick();
+  s.flora.prepare(w, s.params, true);
+  const i = findTile(w, (j) => !w.isWater(j) && w.flora[j] === 0 && s.flora.suit(w, SE.Flora.LandPlants, j) > 0.3);
+  assert.ok(i >= 0, 'a bare tile that suits the first land plants');
+  assert.ok(s.flora.plant(w, SE.Flora.LandPlants, i, 0.7));
+  assert.equal(w.floraTop[i], SE.Flora.LandPlants, 'drawn on the map right away');
+});
+
 test('biomes need the right plants: forest needs trees, taiga conifers, mosses make tundra', () => {
   // The habitat is derived from the tile's landscape (tests/landscape.test.js
   // has the full table). Since the landscape rework the rainforest begins at

@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlib = require('zlib');
-const { loadSE } = require('./helpers');
+const { loadSE, makeSim } = require('./helpers');
 
 const SE = loadSE();
 const M = SE.TERRAIN_MANIFEST;
@@ -676,28 +676,47 @@ test('ranges: trees on the faces join without a seam where chunks meet', () => {
   }
 });
 
-test('volcanoes: cones on volcanic belts only, fresh on basalt, none on a vent', () => {
+test('volcanoes: cones on volcanic belts only, raised in the relief, fresh on basalt and on a young vent', () => {
   const fold = rangeField(rangeWorld(10, 1));
   assert.ok(fold.volcano.every((v) => v === 0), 'a fold belt has no volcanoes');
   const w = rangeWorld(10, 2);
   const summit = 48 * SE.GRID_W + 240;
   assert.ok(rangeField(w).volcano.every((v) => v === 0), 'a coastal range over a cold mantle has no volcanoes');
-  w.magma.fill(0.5);
+  // Hot mantle under one half of the range only: the other half is a plain coast.
+  for (let i = 0; i < SE.TILE_COUNT; i++) if (i % SE.GRID_W >= 230) w.magma[i] = 0.5;
   let f = rangeField(w);
-  assert.equal(f.volcano[summit], 3, 'a dormant cone of bare rock on the arc summit: nothing grows around it');
-  for (let i = 0; i < SE.TILE_COUNT; i++) if (f.volcano[i]) assert.ok(SE.isVolcanicKind(w.upliftKind[i]), 'only on volcanic belts');
+  assert.equal(f.volcano[summit], 1, 'a dormant cone on the arc summit');
+  let cones = 0;
+  for (let i = 0; i < SE.TILE_COUNT; i++) {
+    if (!f.volcano[i]) continue;
+    cones++;
+    assert.equal(f.volcano[i], 1, 'no basalt, no vent: dormant');
+    assert.ok(SE.isVolcanicKind(w.upliftKind[i]) && w.magma[i] >= 0.3, 'only on a volcanic belt over hot mantle');
+  }
+  assert.ok(cones > 1 && f.volcano.slice(48 * SE.GRID_W, 48 * SE.GRID_W + 30).every((v) => v === 0), `${cones} cones, none on the cold half`);
+  assert.ok(f.ridges.cone[summit] >= 0, 'the cone is part of the relief');
   const list = [];
-  SE.placeLandObjects(f, art, 238, 46, 242, 50, list);
-  assert.ok(list.some((p) => p.sprite.id === 'volcano'), 'the cone stands among the other objects');
+  SE.placeLandObjects(f, art, 236, 44, 246, 52, list);
+  assert.ok(list.every((p) => p.sprite.id !== 'volcano'), 'no cone sprite among the objects');
   w.hazards.scar[summit] = SE.ScarKind.Basalt;
-  f = rangeField(w);
-  assert.equal(f.volcano[summit], 2, 'fresh on basalt');
+  assert.equal(rangeField(w).volcano[summit], 2, 'fresh on basalt');
   w.hazards.scar[summit] = SE.ScarKind.Vent;
+  assert.equal(rangeField(w).volcano[summit], 2, 'a young vent is fresh');
+  w.hazards.scarAge[summit] = SE.SCAR_MIN_TICKS[SE.ScarKind.Basalt];
+  assert.equal(rangeField(w).volcano[summit], 1, 'an old vent is dormant');
+  // A vent anywhere on land is a cone, and the belt's own cone keeps its distance.
+  w.hazards.scar[summit] = SE.ScarKind.None;
+  const plain = 20 * SE.GRID_W + 100;
+  const near = summit + 2;
+  w.hazards.scar[plain] = SE.ScarKind.Vent;
+  w.hazards.scar[near] = SE.ScarKind.Vent;
   f = rangeField(w);
-  assert.equal(f.volcano[summit], 0, 'the effect layer draws the vent');
+  assert.equal(f.volcano[plain], 2, 'a vent off any belt');
+  assert.equal(f.volcano[near], 2, 'a vent on the range');
+  assert.equal(f.volcano[summit], 0, 'no second cone right beside a vent');
 });
 
-test('volcanoes: green only among plants, snowy on ice and summit snow, hotspots whatever the mantle', () => {
+test('volcanoes: one dormant cone whatever grows or lies around it, no green on a lifeless planet, hotspots whatever the mantle', () => {
   const summit = 48 * SE.GRID_W + 240;
   const look = (kind, magma, ground) => {
     const w = rangeWorld(10, kind);
@@ -705,17 +724,22 @@ test('volcanoes: green only among plants, snowy on ice and summit snow, hotspots
     ground(w);
     return rangeField(w).volcano[summit];
   };
-  assert.equal(look(2, 0.5, () => {}), 3, 'lifeless rock: bare');
-  assert.equal(look(2, 0.5, (w) => w.landscape.fill(L.Forest)), 1, 'forest all around: green');
-  // Plants on most neighbours, the summit itself bare.
-  assert.equal(look(2, 0.5, (w) => { w.landscape.fill(L.Meadow); w.landscape[summit] = L.Rock; }), 1, 'meadow around: green');
-  assert.equal(look(2, 0.5, (w) => { w.landscape.fill(L.Forest); w.landscape[summit] = L.Ice; }), 4, 'on ice: snowy');
-  assert.equal(look(2, 0.5, (w) => { w.landscape[summit] = L.Snow; }), 4, 'under summit snow: snowy');
-  assert.equal(look(4, 0, () => {}), 3, 'a hotspot needs no hot mantle field');
-  assert.equal(look(3, 0, () => {}), 3, 'nor does an island arc');
+  assert.equal(look(2, 0.5, () => {}), 1, 'lifeless rock');
+  assert.equal(look(2, 0.5, (w) => w.landscape.fill(L.Forest)), 1, 'forest all around');
+  assert.equal(look(2, 0.5, (w) => { w.landscape.fill(L.Forest); w.landscape[summit] = L.Ice; }), 1, 'on ice');
+  assert.equal(look(2, 0.5, (w) => { w.landscape[summit] = L.Snow; }), 1, 'under summit snow');
+  assert.equal(look(4, 0, () => {}), 1, 'a hotspot needs no hot mantle field');
+  assert.equal(look(3, 0, () => {}), 1, 'nor does an island arc');
   assert.equal(look(2, 0.2, () => {}), 0, 'a coastal range over a cold mantle: none');
-  const vars = art.manifest.objects.volcano.variants;
-  assert.equal(vars.length, 4, 'green, fresh, bare and snowy cones');
+  // The lifeless range with its cone composes without a single plant colour.
+  const w = rangeWorld(10, 2);
+  w.magma.fill(0.5);
+  const f = rangeField(w);
+  assert.equal(f.volcano[summit], 1);
+  const green = new Set(['leaf', 'pine', 'jungle', 'meadow', 'moss'].flatMap((r) => M.ramps[r].map((v) => art.rgba[v])));
+  for (const [cx, cy] of [[14, 2], [14, 3], [15, 2], [15, 3]]) {
+    assert.ok(rangeChunk(f, cx, cy).every((c) => !green.has(c)), `chunk ${cx},${cy}: no green on a lifeless planet`);
+  }
 });
 
 test('ground: new land of a hotspot or an island arc is basalt until it weathers, the rock belt scree', () => {
@@ -912,6 +936,33 @@ test('ranges: a recomposed chunk with a kept rise looks exactly like a fresh one
   assert.deepEqual(warm, cold);
   SE.landRiseForget();
   assert.deepEqual(rangeChunk(f, 15, 3), cold);
+});
+
+test('ranges: a meteor on a slope renumbers the segments; kept rises never recall stale ids', () => {
+  // Regression: the kept rise was keyed by the ranges' shape alone, so after a
+  // rebuild it handed back segment ids of the old list, and lift() threw on a
+  // rockKey that no longer existed: the map stopped redrawing.
+  const s = makeSim(12345, 'today');
+  const f = new SE.TerrainField();
+  const composer = new SE.LandComposer(art);
+  const out = new Uint32Array(SIDE * SIDE);
+  const [mx, my] = [79, 82];
+  const around = () => {
+    for (let cy = my - 24; cy < my + 24; cy += CHUNK) {
+      for (let cx = mx - 24; cx < mx + 24; cx += CHUNK) composer.compose(f, cx, cy, CHUNK, CHUNK, MARGIN, out, null);
+    }
+  };
+  SE.landRiseForget();
+  f.refresh(s.world);
+  around();
+  const hz = new SE.HazardSystem();
+  assert.ok(hz.start(s.world, SE.EventKind.Meteor, mx, my, 'player'));
+  for (let t = 0; t < 4; t++) {
+    s.tick();
+    hz.step(s.world);
+    f.refresh(s.world);
+    assert.doesNotThrow(around, `tick ${t}`);
+  }
 });
 
 test('bare ground shows the first plants that settle on it', () => {

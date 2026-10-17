@@ -8,3 +8,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-16 v0.8.1 feat(flora): cacti as the flowering plants' desert form
 - 2026-10-16 v0.8.2 feat(ui): title screen redesign and savanna trees
 - 2026-10-16 v0.8.3 feat(audio): background music on title screen and in game
+- 2026-10-17 v0.8.4 feat(world): Earth land bridges, active volcanoes, whales and beaches

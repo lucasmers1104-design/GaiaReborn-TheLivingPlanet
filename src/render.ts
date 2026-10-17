@@ -310,6 +310,7 @@ namespace SE {
     private readonly ambient = new AmbientLayer();
     private readonly waterMotion = new WaterMotion();
     private readonly herds = new HerdLayer();
+    private readonly whales = new WhaleLayer();
     private readonly cities = new CityLayer();
     private readonly settlers = new SettlerLayer();
     /** Disasters: omens, eruptions, lava, smoke (docs/ereignisse-spec.md). */
@@ -360,6 +361,7 @@ namespace SE {
     set reduceEffects(on: boolean) {
       this.fx.reduce = on;
       this.waterMotion.still = on;
+      this.whales.still = on;
     }
 
     /** Force a full redraw on the next frame (after a tool changed the world). */
@@ -519,7 +521,11 @@ namespace SE {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (this.layers.life) {
         this.herds.update(world, now);
-        this.herds.draw(ctx, this, world, now, this.tiles, this.regions);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.herds.draw(ctx, this, world, now, this.tiles, this.regions,
+          (m) => this.whales.claims(m, world, this.tilePx, this.regions));
       }
       if (this.layers.cities) this.settlers.draw(ctx, this, world, now, dpr);
       if (fx) {
@@ -535,6 +541,31 @@ namespace SE {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       this.drawCursor(ctx, this.tilePx);
+    }
+
+    /**
+     * How much surf the view shows, 0..1: the share of visible tiles that are
+     * open water on a shore, on a coarse grid. Coasts are lines, so zooming out
+     * thins the share by itself; the zoom term lowers it further.
+     */
+    surfPresence(world: WorldState): number {
+      const step = Math.max(1, Math.ceil(Math.max(this.cols / 48, this.rows / 32)));
+      const x0 = Math.floor(this.scrollX);
+      const y0 = Math.max(0, Math.floor(this.scrollY));
+      const y1 = Math.min(GRID_H, Math.ceil(this.scrollY + this.rows));
+      let seen = 0;
+      let shore = 0;
+      for (let y = y0; y < y1; y += step) {
+        for (let rx = 0; rx < this.cols; rx += step) {
+          const x = wrapX(x0 + rx);
+          const i = idx(x, y);
+          seen++;
+          if (world.isWater(i) && world.biome[i] !== Biome.Arctic && shoreMask(world, x, y) !== 0) shore++;
+        }
+      }
+      if (seen === 0) return 0;
+      const zoom = (this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE);
+      return clamp((shore / seen) / 0.06, 0, 1) * (0.4 + 0.6 * zoom);
     }
 
     /** The last full picture, scaled and moved to where the new zoom puts it. */

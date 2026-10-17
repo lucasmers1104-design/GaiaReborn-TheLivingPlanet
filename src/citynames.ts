@@ -26,15 +26,18 @@ namespace SE {
   export function drawCityNames(ctx: CanvasRenderingContext2D, view: AmbientView, world: WorldState): void {
     const size = view.tilePx;
     if (size < CITY_NAMES_FROM) return;
-    const px = Math.round(clamp(size * 0.4, 10, 13));
+    const px = Math.round(clamp(size * 0.42, 11, 14));
     ctx.save();
-    ctx.font = `600 ${px}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    ctx.font = `600 ${px}px "Pixelify Sans", system-ui, -apple-system, "Segoe UI", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(8, 14, 12, 0.85)';
-    ctx.fillStyle = '#f2efe2';
+    // A hard one-pixel edge all round, like the pixel UI's labels, instead of a soft stroke.
+    const edge = (text: string, sx: number, sy: number): void => {
+      ctx.fillStyle = '#0b1210';
+      for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1], [0, 2]]) ctx.fillText(text, sx + dx, sy + dy);
+      ctx.fillStyle = '#f2efe2';
+      ctx.fillText(text, sx, sy);
+    };
     for (const c of world.civ.cities) {
       let rx = (c.tile % GRID_W) + 0.5 - view.scrollX;
       rx -= Math.floor(rx / GRID_W) * GRID_W;
@@ -44,8 +47,7 @@ namespace SE {
       for (let x = rx; x < view.cols + 2; x += GRID_W) {
         const sx = Math.round(x * size);
         const sy = Math.round(ry * size) - 1;
-        ctx.strokeText(c.name, sx, sy);
-        ctx.fillText(c.name, sx, sy);
+        edge(c.name, sx, sy);
       }
     }
     ctx.restore();

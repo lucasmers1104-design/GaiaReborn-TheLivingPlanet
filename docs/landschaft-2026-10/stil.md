@@ -62,6 +62,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 - **Dichtestufen** (spärlich, mittel, dicht) sind eigene Texturen desselben Materials. Sie unterscheiden sich im Bedeckungsgrad, nicht im Farbcharakter. Die dichte Stufe zeichnet sich über die spärliche, also müssen sie zueinander passen.
 - **Untergrund bleibt erkennbar:** Flechten auf Fels zeigen grauen Stein mit Krusten, Moosteppich zeigt Erde mit Polstern, Halbwüste auf Sand ist hell und körnig, auf Fels steinig.
 - **Waldböden** sind vor allem zwischen den Bäumen zu sehen: dunkel, mit Streu, Moos und Farnflecken.
+- **Strand** (`beach`) ist ruhiger, heller Sand (sand3/sand4) mit feinen Windrippeln und seltenen Muscheln, ohne Dünenbänder wie die Wüste. Pixel (0,0) ist sand3, die Farbe der Fernansicht.
 - **Savanne** ist Grasland von Rand zu Rand: goldgelbes bis olivgrünes Gras mit Büscheln, kein offener roter Boden. Die spärliche Stufe ist trockener, mit dunkleren Trockenstellen im Gras, die dichte grüner und dichter mit Büscheln.
 
 ## Objekte
@@ -94,6 +95,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 | Tropenriese | Laubbäume | breite, flache Schirmkuppel, Brettwurzeln |
 | Schirmbaum | Laubbäume, auch Savannenbaum der Blütenpflanzen | flache Schirmkrone auf dünnem, schrägem Stamm (Akazie) |
 | Affenbrotbaum | Blütenpflanzen (Savannenbaum, selten) | grauer Flaschenstamm, kurze Äste, flache Krone aus Blattbüscheln; Form 2 lichter, mit weißen Blüten |
+| Kokospalme | Blütenpflanzen (am Strand) | schlanker, gebogener, geringelter Stamm (Form 1 nach links, Form 2 nach rechts), Krone aus hängenden, gefiederten Wedeln, kleine Traube Kokosnüsse darunter; anders als der Palmfarn hoch und dünn |
 | Laubstrauch, Dornbusch | Laubbäume | runder Busch; Dornbusch sparrig und olivgrau |
 | Blumen, Blütenstrauch | Blütenpflanzen | farbige Blüten-Tupfer (2 px) |
 | Heide | Blütenpflanzen | niedrige Polster, violette Tupfer |
@@ -117,6 +119,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 Bei Zweifeln gilt `docs/ueberarbeitung-2026-10/quellenpruefung.md`.
 
 - **Kakteen** sind Blütenpflanzen, aber keine eigene Gruppe: Sie sind deren Form auf Wüsten- und Halbwüstenfeldern und erscheinen erst 95 Mio. Jahre nach ihnen (`src/cacti.ts`). Vorher zeigen diese Felder keine Blütenpflanzen-Objekte, die Halbwüste also Samenpflanzen-Büsche und Gräser.
+- **Palmen** sind ebenso keine eigene Gruppe: Die Kokospalme ist die Form der Blütenpflanzen am Strand (`src/beaches.ts`).
 - **Savannenbäume** sind ebenso keine eigene Gruppe: Sie sind die Form der Blütenpflanzen auf Savannenfeldern, sobald es Laubbäume gibt (`src/savannatrees.ts`), meist ein Schirmbaum, etwa jeder achte ein Affenbrotbaum.
 - **Schilf** ist ein Gras, **Sumpfzypresse** ein Nadelbaum, **Schirmbaum** und Tropenriese sind Laubbäume (Bedecktsamer).
 - **Offenland vor den Gräsern** ist Farnflur, keine Wiese.
@@ -130,7 +133,7 @@ Bei Zweifeln gilt `docs/ueberarbeitung-2026-10/quellenpruefung.md`.
 
 ## Arbeitsablauf für Asset-Agenten
 
-1. **Datei:** Ausschließlich die eigene Familien-Datei ändern: `cold.js`, `temperate.js`, `warm.js` oder `wet.js`. `catalog.js`, `palette.js`, `kit.js` und `masks.js` sind fest. Eigene Hilfsfunktionen gehören lokal in die Familien-Datei.
+1. **Datei:** Ausschließlich die eigene Familien-Datei ändern: `cold.js`, `temperate.js`, `warm.js`, `wet.js`, `mountain.js` oder `coast.js`. `catalog.js`, `palette.js`, `kit.js` und `masks.js` sind fest. Eigene Hilfsfunktionen gehören lokal in die Familien-Datei.
 2. **Eigene Familie prüfen:** `node tools/terrain-atlas.js --family <familie> --sheet <ordner>` erzeugt die Kontaktblätter `materials.png`, `objects.png` und `objects-light.png`.
 3. **Im Zusammenspiel prüfen:** `node tools/terrain-atlas.js --check --sheet <ordner> --part transitions,scenes,rivers` zeigt Übergänge, Szenen und Flüsse mit allen Familien.
 4. **Ziel:** 0 `PROBLEM`-Zeilen. Kontaktblätter landen im eigenen Scratchpad oder im OS-Temp-Ordner, nicht im Repo.

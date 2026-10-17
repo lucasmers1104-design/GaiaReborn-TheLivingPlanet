@@ -8,10 +8,9 @@
  * ========================================================================== */
 
 namespace SE {
-  /** Raise (or with a negative amount lower) the crust of one tile. Stand-in for `raiseCrust`. */
+  /** Raise (or with a negative amount lower) the crust of one tile; hazardlava.ts still calls it. */
   export function hazardLift(world: WorldState, i: number, amount: number): void {
-    world.elevation[i] = clamp(world.elevation[i] + amount, -1, 1);
-    world.terrainDirty = true;
+    raiseCrust(world, i, amount, UpliftKind.None);
   }
 
   /** Ramp steps the stand-in basalt darkens bare rock by. */

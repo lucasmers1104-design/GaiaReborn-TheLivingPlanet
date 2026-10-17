@@ -325,12 +325,14 @@ function taiga(t, d) {
 /** Pack ice: snow-covered floes, the shaded front face of each floe, refrozen leads with brash. */
 function seaIce(t) {
   const S = t.w;
-  const wx = k.fbm(S, 4, 2, 401);
-  const wy = k.fbm(S, 4, 2, 403);
-  const cell = worley(S, 5, 445, 0.95);
-  const lead = k.fbm(S, 4, 2, 407);
-  const show = k.fbm(S, 4, 2, 411);
-  const snowy = k.fbm(S, 4, 3, 413);
+  // Lattice counts are per 64 px, so the floes keep their size on a larger texture.
+  const q = S / 64;
+  const wx = k.fbm(S, 4 * q, 2, 401);
+  const wy = k.fbm(S, 4 * q, 2, 403);
+  const cell = worley(S, 5 * q, 445, 0.95);
+  const lead = k.fbm(S, 4 * q, 2, 407);
+  const show = k.fbm(S, 4 * q, 2, 411);
+  const snowy = k.fbm(S, 4 * q, 3, 413);
   const gap = field(S);
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {

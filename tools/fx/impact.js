@@ -616,13 +616,16 @@ function groundAsh() {
   return t;
 }
 
-/** A pale veil: sparse lichen-pale pixels in an ordered dither, transparent between. */
+/**
+ * A pale veil: sparse lichen-pale specks, denser in drifts, transparent between.
+ * Scattered by hash: an ordered dither read as a regular dot grid laid over the map.
+ */
 function falloutFilm() {
   const t = new k.Tex(64, 64, true);
   const n = k.fbm(64, 4, 2, 371);
   t.each((x, y) => {
     const v = n(x, y);
-    if (k.BAYER4[y & 3][x & 3] >= 1 + Math.floor(v * 3)) return undefined;
+    if (k.hash(x, y, 372) >= 0.03 + v * 0.11) return undefined;
     return P.c(v > 0.58 ? 'lichen1' : 'lichen0');
   });
   return t;

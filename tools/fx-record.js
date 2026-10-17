@@ -15,13 +15,16 @@
  *
  *     --kind    EventKind name in lower case (volcano, meteor, fire, …)
  *     --x/--y   the tile; without them the page picks one for --site:
- *               inland (a vegetated slope, the default), coast, shelf, sea
+ *               inland (a vegetated slope, the default), fuel (dry woods
+ *               that burn best), coast, shelf, sea
  *     --ticks   fast-forward before recording (default 1500)
  *     --speed   game speed while recording (default 3, "Mittel")
  *     --frames  frames to capture (default 90), --every ms apart (default 100)
  *     --count   raise N disasters at once, spread over the view
  *     --perf    measure for this many ms instead of capturing: the effect
  *               layer's time per frame and the frame interval
+ *     --whales  no disaster: put great whales (Cetacean stages 4/5/7) on the
+ *               open sea around the tile (site 'sea'); use with --speed 0
  * ========================================================================== */
 'use strict';
 
@@ -48,7 +51,7 @@ function fail(msg) {
 }
 
 function parseArgs(argv) {
-  const a = { kind: 'volcano', x: null, y: null, seed: null, epoch: null, ticks: 1500, zoom: 32, speed: 3, frames: 90, every: 100, w: 640, h: 400, reduce: false, bundle: null, out: null, count: 1, perf: 0, site: 'inland' };
+  const a = { kind: 'volcano', x: null, y: null, seed: null, epoch: null, ticks: 1500, zoom: 32, speed: 3, frames: 90, every: 100, w: 640, h: 400, reduce: false, bundle: null, out: null, count: 1, perf: 0, site: 'inland', whales: false };
   for (let k = 0; k < argv.length; k++) {
     const v = argv[k];
     const next = () => argv[++k];
@@ -67,6 +70,7 @@ function parseArgs(argv) {
     else if (v === '--count') a.count = Number(next());
     else if (v === '--site') { a.site = next(); a.siteGiven = true; }
     else if (v === '--perf') a.perf = Number(next());
+    else if (v === '--whales') a.whales = true;
     else if (v === '--bundle') a.bundle = next();
     else if (v === '--out') a.out = next();
     else fail(`unknown argument ${v}`);
@@ -277,10 +281,11 @@ const PICK = (site) => `(() => {
   let best = -1, bestScore = -Infinity;
   for (let y = 24; y < SE.GRID_H - 24; y++) for (let x = 0; x < SE.GRID_W; x++) {
     const i = SE.idx(x, y), e = w.elevation[i];
-    let water = 0, land = 0, green = 0, drop = 0;
+    let water = 0, land = 0, green = 0, drop = 0, fuel = 0;
     for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
       const v = at(x + dx, y + dy);
-      if (v < 0) water++; else { land++; green += w.vegetation[SE.idx(SE.wrapX(x + dx), y + dy)]; }
+      const j = SE.idx(SE.wrapX(x + dx), y + dy);
+      if (v < 0) water++; else { land++; green += w.vegetation[j]; fuel += SE.fireFuel(w, j) * SE.fireDryness(w, j); }
       if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) drop = Math.max(drop, e - v);
     }
     let score = -Infinity;
@@ -288,6 +293,7 @@ const PICK = (site) => `(() => {
     if (site === 'coast' && e > 0.03 && e < 0.2 && water >= 12 && water <= 40 && w.tech[i] === 0) score = green + drop * 30;
     if (site === 'shelf' && e > -0.12 && e < -0.05 && land >= 12) score = land;
     if (site === 'sea' && e < -0.2 && land === 0) score = -e;
+    if (site === 'fuel' && water === 0 && !SE.HAZARD_RULES[SE.EventKind.Fire].refuse(w, x, y)) score = fuel;
     if (score > bestScore) { bestScore = score; best = i; }
   }
   return best < 0 ? null : [best % SE.GRID_W, Math.floor(best / SE.GRID_W)];
@@ -299,7 +305,7 @@ async function main() {
   if (!fs.existsSync(bundle)) fail(`no bundle at ${bundle}`);
   const chrome = CHROMES.find((c) => fs.existsSync(c));
   if (!chrome) fail('no Chrome or Edge found; set CHROME to its path');
-  const out = path.resolve(a.out || path.join(os.tmpdir(), `simearth-fx-${a.kind}`));
+  const out = path.resolve(a.out || path.join(os.tmpdir(), `simearth-fx-${a.whales ? 'whales' : a.kind}`));
   fs.mkdirSync(out, { recursive: true });
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'simearth-rec-'));
   const html = path.join(work, 'record.html');
@@ -333,7 +339,7 @@ async function main() {
       if (k === 599) fail('the page never became ready');
     }
     const kindId = `SE.EventKind[${JSON.stringify(a.kind)}] ?? SE.EventKind[Object.keys(SE.EventKind).find((n) => n.toLowerCase() === ${JSON.stringify(a.kind)})]`;
-    const tile = a.x !== null && a.y !== null ? [a.x, a.y] : await cdp.eval(PICK(a.kind === 'tidalwave' && !a.siteGiven ? 'sea' : a.site));
+    const tile = a.x !== null && a.y !== null ? [a.x, a.y] : await cdp.eval(PICK((a.kind === 'tidalwave' || a.whales) && !a.siteGiven ? 'sea' : a.site));
     if (!tile) fail('no suitable tile on this planet');
     // Hide every window: only the map counts.
     await cdp.eval(`(() => { const app = SE.app; for (const el of document.querySelectorAll('.win')) el.style.display = 'none';
@@ -344,7 +350,19 @@ async function main() {
     await sleep(1500);
     const rect = await cdp.eval(`(() => { const r = document.querySelector('.world-canvas').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()`);
     const ticks0 = await cdp.eval('SE.app.world.ticks');
-    for (let n = 0; n < a.count; n++) {
+    if (a.whales) {
+      // Cetaceans on the water within 6 tiles, stages mixed; the herd layer re-selects 300 ms after an edit.
+      await cdp.eval(`(() => { const w = SE.app.world, stages = [4, 5, 7];
+        for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
+          const y = ${tile[1]} + dy, i = SE.idx(SE.wrapX(${tile[0]} + dx), y);
+          if (y < 0 || y >= SE.GRID_H || !w.isWater(i) || dx * dx + dy * dy > 36) continue;
+          w.lifeDensity[i * SE.LIFE_COUNT + SE.Life.Cetacean] = 0.6;
+          w.lifeStage[i * SE.LIFE_COUNT + SE.Life.Cetacean] = stages[(dx + 7 * dy + 99) % 3];
+        }
+        w.revision++; SE.app.editView.markDirty(); })()`);
+      await sleep(600);
+    }
+    for (let n = 0; n < (a.whales ? 0 : a.count); n++) {
       const dx = n === 0 ? 0 : Math.round(Math.cos(n * 2.4) * 6);
       const dy = n === 0 ? 0 : Math.round(Math.sin(n * 2.4) * 3);
       await cdp.eval(`SE.app.world.omega = SE.OMEGA_MAX; SE.app.raiseHazard(${kindId}, ${tile[0] + dx}, ${tile[1] + dy})`);

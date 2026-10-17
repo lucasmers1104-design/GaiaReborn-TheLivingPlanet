@@ -18,7 +18,7 @@ namespace SE {
           ? `${(st.ma / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mrd.`
           : `${st.ma.toLocaleString('de-DE', { maximumFractionDigits: 1 })} Mio.`;
         item.title = `Unterart ${s + 1} von ${SUBSPECIES_PER_CLASS}: ${st.name} – auf der Erde erstmals vor ${when} Jahren`;
-        pic.innerHTML = artSvg(st.art, CREATURE_LOOK);
+        pic.appendChild(pixelArt(artSvg(st.art, CREATURE_LOOK), 18, 'art'));
       } else {
         item.title = `Unterart ${s + 1} von ${SUBSPECIES_PER_CLASS}: Noch nicht entdeckt`;
         pic.textContent = '?';

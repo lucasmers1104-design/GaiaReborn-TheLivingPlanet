@@ -8,9 +8,10 @@
   display: flex;
   flex-direction: column;
   padding: 8px 12px 6px;
-  border-radius: var(--radius-m);
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: 0;
+  border: 2px solid var(--glass-border);
+  background: var(--raise);
+  clip-path: var(--px-clip);
   transition: border-color 140ms;
 }
 /* An epoch with its own sea hides it. */
@@ -23,13 +24,16 @@
 .ocean-slider-bar {
   --sea: 0.58;
   flex: 0 0 auto;
-  width: 46px;
-  height: 8px;
-  border-radius: 4px;
-  background: linear-gradient(90deg,
-    var(--water) 0 calc(var(--sea) * 100%),
-    var(--plant) calc(var(--sea) * 100%) 100%);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3);
+  width: 50px;
+  height: 10px;
+  border-radius: 0;
+  /* Ten pixel cells in a dark frame, like a pixel game's gauge. */
+  background:
+    repeating-linear-gradient(90deg, transparent 0 4px, rgba(4, 10, 18, 0.55) 4px 5px),
+    linear-gradient(90deg,
+      var(--water) 0 calc(var(--sea) * 100%),
+      var(--plant) calc(var(--sea) * 100%) 100%);
+  box-shadow: 0 0 0 2px var(--ink-dark);
 }
 .ocean-slider-value {
   font-size: 12.5px;
@@ -41,6 +45,14 @@
 
 /* 44 px tall: the whole row is the touch target, not just the knob. */
 .ocean-slider-track input[type="range"] { --fill: var(--water); height: 44px; }
+/* Pixel track and knob: square ends, flat 2 px frame; the knob stays 20 px
+   wide because the base track's fill math assumes that width. */
+.ocean-slider-track input[type="range"]::-webkit-slider-runnable-track { border-radius: 0; }
+.ocean-slider-track input[type="range"]::-moz-range-track { border-radius: 0; }
+.ocean-slider-track input[type="range"]::-webkit-slider-thumb { border-radius: 0; border-width: 2px; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45); }
+.ocean-slider-track input[type="range"]::-moz-range-thumb { border-radius: 0; border-width: 2px; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45); }
+.ocean-slider-track input[type="range"]:hover::-webkit-slider-thumb { box-shadow: 0 2px 0 rgba(0, 0, 0, 0.45), 0 0 0 4px color-mix(in srgb, var(--fill) 30%, transparent); }
+.ocean-slider-track input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--focus); }
 
 .ocean-slider-ends {
   display: flex;

@@ -29,6 +29,7 @@ namespace SE {
   /** "Wiese (dicht) auf Erde": a land tile's landscape as the Examine window names it. */
   export function landscapeLabel(world: WorldState, i: number): string {
     if (world.isWater(i)) return BIOME_NAMES[world.biome[i]];
+    if (isBeach(world, i)) return 'Sandstrand';
     const ls = world.landscape[i] as Landscape;
     const dens = DENSITY_NAMES[LANDSCAPE_DENSITIES[ls]]?.[world.landscapeDensity[i]];
     const name = LANDSCAPE_NAMES[ls] + (dens ? ` (${dens})` : '');

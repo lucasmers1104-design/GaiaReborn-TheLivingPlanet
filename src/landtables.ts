@@ -24,7 +24,7 @@ namespace SE {
   /** A tile that shows no objects at all: open sea, a city or a river. */
   export const LAND_SCENE_NONE = 255;
   /** Expected kelp per coastal tile by algae density step. */
-  const KELP_COUNTS = [0.06, 0.15, 0.28];
+  const KELP_COUNTS = [0.04, 0.1, 0.18];
 
   export function landKey(rank: number, density: number): number {
     return rank * 4 + density + 1;

@@ -92,7 +92,7 @@ namespace SE {
       if (canvas) picture.append(canvas);
       else picture.append(img(habitatAsset(BIOME_ICONS[world.biome[i]]), 'ex-picture-fallback'));
       const meta = make('div', 'ex-meta');
-      const name = world.isWater(i) ? BIOME_NAMES[world.biome[i]] : LANDSCAPE_NAMES[world.landscape[i]];
+      const name = world.isWater(i) ? BIOME_NAMES[world.biome[i]] : isBeach(world, i) ? 'Sandstrand' : LANDSCAPE_NAMES[world.landscape[i]];
       const heading = make('h3', 'ex-place', name);
       heading.title = [landscapeLabel(world, i), altitudeBelt(world, i)].filter(Boolean).join(' · ');
       meta.append(heading, make('div', 'ex-state', `· ${state.toLocaleLowerCase('de')}`));

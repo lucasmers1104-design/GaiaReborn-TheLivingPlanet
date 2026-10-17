@@ -25,8 +25,15 @@ namespace SE {
   /** Portrait (or silhouette) in its dark frame. */
   export function faunaPicture(c: Life, stage: number, known: boolean, cls: string): HTMLElement {
     const box = make('span', `fauna-pic ${cls}${known ? '' : ' is-unknown'}`);
-    box.innerHTML = speciesPicture(c, stage, known ? 'full' : 'silhouette', 'fauna-svg');
-    if (!box.firstChild) box.appendChild(img(evoIcon(LIFE[c].id), 'fauna-svg'));
+    // Pixel resolution: half (lg: a third) of the frame's inner CSS size; the 22 px examine entry
+    // stays 1:1, at 11 px its animals were unreadable blobs.
+    const size = cls.includes('fauna-pic-lg') ? 40 : cls.includes('fauna-pic-md') ? 28 : cls.includes('fauna-pic-sm') ? 20 : 22;
+    // An image can't inherit `color`, so the silhouette gets the frame's ink baked in.
+    const svg = speciesPicture(c, stage, known ? 'full' : 'silhouette', 'fauna-svg')
+      .replace(/currentColor/g, getComputedStyle(document.documentElement).getPropertyValue('--ink-3').trim() || '#8394a8');
+    box.appendChild(svg
+      ? pixelArt(svg, size, /^<svg class="([^"]*)"/.exec(svg)?.[1] ?? 'fauna-svg')
+      : pixelArt(evoIcon(LIFE[c].id), size, 'fauna-svg'));
     return box;
   }
 

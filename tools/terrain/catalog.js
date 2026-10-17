@@ -8,7 +8,7 @@
  * docs/landschaft-2026-10/stil.md).
  *
  * Families (one recipe file each under tools/terrain/):
- *   cold · temperate · warm · wet · mountain (docs/hoehe-spec.md)
+ *   cold · temperate · warm · wet · mountain (docs/hoehe-spec.md) · coast (beaches)
  * ========================================================================== */
 'use strict';
 
@@ -25,6 +25,7 @@ const MATERIALS = [
   { id: 'scree', name: 'Schutt', family: 'mountain', size: 64, densities: 1 },
   { id: 'stony_desert', name: 'Felswüste', family: 'warm', size: 64, densities: 1 },
   { id: 'sand', name: 'Sand', family: 'warm', size: 128, densities: 1 },
+  { id: 'beach', name: 'Strand', family: 'coast', size: 64, densities: 1 },
   { id: 'barren', name: 'Rohboden', family: 'temperate', size: 64, densities: 1 },
   { id: 'mud', name: 'Schlamm', family: 'wet', size: 64, densities: 1 },
   { id: 'semidesert_rock', name: 'Halbwüste auf Fels', family: 'warm', size: 64, densities: 3 },
@@ -44,7 +45,7 @@ const MATERIALS = [
   { id: 'forest', name: 'Waldboden', family: 'temperate', size: 64, densities: 2 },
   { id: 'rainforest', name: 'Regenwaldboden', family: 'warm', size: 64, densities: 2 },
   { id: 'rainforest_montane', name: 'Bergregenwaldboden', family: 'mountain', size: 64, densities: 2 },
-  { id: 'sea_ice', name: 'Meereis', family: 'cold', size: 64, densities: 1 },
+  { id: 'sea_ice', name: 'Meereis', family: 'cold', size: 128, densities: 1 },
   { id: 'ice', name: 'Eis', family: 'cold', size: 128, densities: 1 },
   { id: 'snow', name: 'Gipfelschnee', family: 'cold', size: 64, densities: 1 },
 ];
@@ -166,6 +167,9 @@ const OBJECTS = [
   { id: 'acacia', name: 'Schirmbaum', group: 'broadleaf', kind: 'tree', family: 'warm' },
   // In no group's list: only the savanna-tree rule (src/savannatrees.ts) sets it, beside the Schirmbaum.
   { id: 'baobab', name: 'Affenbrotbaum', group: 'flowering', kind: 'tree', family: 'warm' },
+  // In no group's list either: only the beach rule (src/beaches.ts) sets it on beach tiles.
+  // Form 0 curves left, form 1 curves right.
+  { id: 'coconut_palm', name: 'Kokospalme', group: 'flowering', kind: 'tree', family: 'coast' },
   // --- bushes ---
   { id: 'tree_fern', name: 'Baumfarn', group: 'ferns', kind: 'bush', family: 'warm' },
   { id: 'seed_fern', name: 'Samenfarn-Busch', group: 'seedPlants', kind: 'bush', family: 'temperate' },
@@ -195,22 +199,15 @@ const OBJECTS = [
   { id: 'boulder', name: 'Felsbrocken', group: null, kind: 'rock', family: 'cold', variants: 3 },
   { id: 'scree', name: 'Geröll', group: null, kind: 'rock', family: 'cold', variants: 2 },
   { id: 'ice_block', name: 'Eisbrocken', group: null, kind: 'rock', family: 'cold', variants: 2 },
-  // Volcanic cones (docs/hoehe-spec.md §3.8), placed on volcanic belts, not by
-  // plant group: 0 dormant and green, 1 fresh (dark basalt), 2 dormant and
-  // bare (no plants around), 3 dormant under snow. Mountain ranges are no
-  // objects: the renderer lifts the ground along their crests (landridges.ts).
-  { id: 'volcano', name: 'Vulkankegel', group: null, kind: 'mountain', family: 'mountain', variants: 4 },
+  // Mountain ranges and volcanic cones are no objects: the renderer lifts the
+  // ground along their crests and around their craters (landridges.ts).
 ];
 
 /** Tree size steps (bounding box) and forms per size. */
 const TREE_SIZES = { s: [10, 13], m: [13, 17], l: [16, 20] };
 const TREE_FORMS = 2;
 /** Largest box per kind, [w, h]. */
-const KIND_BOX = { tree: [16, 20], bush: [16, 16], low: [16, 16], water: [16, 16], rock: [16, 16], mountain: [20, 16], cactus: [16, 20] };
-/** Largest box of each mountain variant, [w, h]; a cone may reach 8 px into the tile above. */
-const MOUNTAIN_SIZES = {
-  volcano: [[20, 16], [20, 16], [20, 16], [20, 16]],
-};
+const KIND_BOX = { tree: [16, 20], bush: [16, 16], low: [16, 16], water: [16, 16], rock: [16, 16],cactus: [16, 20] };
 
 /**
  * Which object a plant group shows where. A slot of one kind goes to one of
@@ -302,9 +299,9 @@ const ABIOTIC = [
 /** Edge masks: 16 marching-squares cases (corner bits TL=1 TR=2 BL=4 BR=8) × variants. */
 const MASKS = { cases: 16, variants: 3 };
 
-const FAMILIES = ['cold', 'temperate', 'warm', 'wet', 'mountain'];
+const FAMILIES = ['cold', 'temperate', 'warm', 'wet', 'mountain', 'coast'];
 
 module.exports = {
-  MATERIALS, OVERLAYS, LANDSCAPES, OBJECTS, TREE_SIZES, TREE_FORMS, KIND_BOX, MOUNTAIN_SIZES,
+  MATERIALS, OVERLAYS, LANDSCAPES, OBJECTS, TREE_SIZES, TREE_FORMS, KIND_BOX,
   GROUPS, ABIOTIC, MASKS, FAMILIES,
 };

@@ -199,24 +199,24 @@ namespace SE {
       s.add({ id: 'mushroom', frame, x: cx, y: fy, foot: fy });
       if (t < FLAMES_FROM_MS) return;
       const fires = world.hazards.hazard(st.id)?.impact?.fires ?? [];
-      const id = t < FLAMES_LOW_MS ? 'flame_medium' : 'flame_small';
-      const frames = FX_MANIFEST.sprites[id]?.frames.length ?? 0;
-      if (frames === 0) return;
       const wind = ClimateSystem.airCurrent(st.y);
       for (const i of fires) {
-        // Each flame on its own beat, arriving and dying a little apart from the others.
+        // Each flame on its own beat, spot and height, so the ring does not read as a grid of stamps.
         const beat = hazardRoll(st.id, i, 5);
         const tx = i % GRID_W;
         const ty = Math.floor(i / GRID_W);
         const dx = ((tx - st.x + GRID_W * 1.5) % GRID_W) - GRID_W / 2;
-        const px = (st.x + dx) * 16 + 5 + Math.floor(beat * 6);
-        const py = ty * 16 + 13 + Math.floor(hazardRoll(st.id, i, 6) * 3);
+        const px = (st.x + dx) * 16 + 3 + Math.floor(hazardRoll(st.id, i, 7) * 10);
+        const py = ty * 16 + 9 + Math.floor(hazardRoll(st.id, i, 6) * 7);
         if (t > FLAMES_TO_MS - (1 - beat) * 500) {
-          // A dying flame leaves a wisp of smoke that drifts off with the wind.
-          if (s.once(`${st.id}:smoke:${i}`)) s.spawn({ id: 'smoke_puff', x: px, y: py - 6, vx: wind.dx * 3, vy: -4, life: 1400, mode: 'once' });
+          // Some dying flames leave a wisp of smoke that drifts off with the wind.
+          if (beat < 0.6 && s.once(`${st.id}:smoke:${i}`)) s.spawn({ id: 'smoke_puff', x: px, y: py - 6, vx: wind.dx * 3 + (beat - 0.3) * 6, vy: -3 - beat * 3, life: 1000 + beat * 700, mode: 'once' });
           continue;
         }
         if (t < FLAMES_FROM_MS + beat * 500) continue;
+        const id = t < FLAMES_LOW_MS && hazardRoll(st.id, i, 8) < 0.7 ? 'flame_medium' : 'flame_small';
+        const frames = FX_MANIFEST.sprites[id]?.frames.length ?? 0;
+        if (frames === 0) continue;
         s.add({ id, frame: Math.floor(t / 100 + beat * frames) % frames, x: px, y: py, foot: py });
       }
     },

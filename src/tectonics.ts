@@ -21,8 +21,10 @@ namespace SE {
     IslandArc = 3,
     /** Track of a mantle-fixed hotspot the plate has moved over. */
     Hotspot = 4,
+    /** A volcano that never rests: always a cone, lava in its crater, a thin plume (Kīlauea, Etna). */
+    ActiveVolcano = 5,
   }
-  export const UPLIFT_KIND_COUNT = 5;
+  export const UPLIFT_KIND_COUNT = 6;
 
   /** What raises the crust each tick: generator belts and hotspots today, a plate model later. */
   export interface UpliftSource {
@@ -46,18 +48,19 @@ namespace SE {
 
   /** True for the mountain types that carry volcanoes. */
   export function isVolcanicKind(kind: number): boolean {
-    return kind === UpliftKind.Arc || kind === UpliftKind.IslandArc || kind === UpliftKind.Hotspot;
+    return kind === UpliftKind.Arc || kind === UpliftKind.IslandArc || kind === UpliftKind.Hotspot || kind === UpliftKind.ActiveVolcano;
   }
 
   /**
    * Raise (with a negative amount: lower) one tile's crust. Clamps to the
    * elevation range and marks the river network stale. Raising with a kind
-   * other than None records that kind on the tile; lowering never clears it.
+   * other than None records that kind on the tile, unless it is an active
+   * volcano; lowering never clears it.
    */
   export function raiseCrust(world: WorldState, i: number, amount: number, kind: UpliftKind): void {
     if (amount === 0) return;
     world.elevation[i] = clamp(world.elevation[i] + amount, -1, 1);
-    if (amount > 0 && kind !== UpliftKind.None) world.upliftKind[i] = kind;
+    if (amount > 0 && kind !== UpliftKind.None && world.upliftKind[i] !== UpliftKind.ActiveVolcano) world.upliftKind[i] = kind;
     world.terrainDirty = true;
   }
 
@@ -66,7 +69,7 @@ namespace SE {
    * zero, and above the 16-bit resolution of the save, but too small to
    * raise it measurably (0.4 % of a belt's height in 12,000 ticks).
    */
-  const UPLIFT_TRACE = 1e-4;
+  export const UPLIFT_TRACE = 1e-4;
 
   /** A belt within this many tiles of the sea is a coastal range over a subduction zone. */
   export const ARC_SHORE = 8;
@@ -97,6 +100,7 @@ namespace SE {
     const kinds = TerrainGenerator.takeBeltKinds();
     if (epoch === 'today' || !kinds) {
       classifyBelts(world);
+      if (epoch === 'today') markActiveVolcanoes(world);
     } else {
       world.upliftKind.set(kinds);
       if (epoch === 'youngEarth') {

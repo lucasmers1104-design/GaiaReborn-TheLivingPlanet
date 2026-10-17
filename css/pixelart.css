@@ -1,0 +1,9 @@
+/* Big pictures (evolution steps, species portraits) drawn into a small canvas
+   by pixelArt() and scaled up by their existing CSS size. */
+canvas.pixel-art { display: block; image-rendering: pixelated; }
+
+/* Canvas twins of the svg/img rules in fauna.css and speciesstrip.css. */
+.fauna-pic canvas, .fauna-toast-pic canvas { width: 100%; height: 100%; }
+.fauna-pic canvas.is-icon { transform: scale(0.84); }
+.fauna-pic.is-unknown canvas { opacity: 0.5; }
+.fauna-pic.is-extinct canvas, .fauna-tile.is-extinct .fauna-pic canvas { filter: grayscale(0.85); opacity: 0.75; }

@@ -3,8 +3,8 @@
  * -----------------------------------------------------------------------------
  * A city over its capacity starves back towards it; a full city with nowhere
  * to send settlers risks an epidemic that spreads to its neighbours
- * (docs/zivilisation-spec.md §2.7). Independent of the old plague disaster in
- * geo.ts, which stays as it is.
+ * (docs/zivilisation-spec.md §2.7). The only natural plague: the old one in
+ * geo.ts is gone (decision E5); the player's plague tool still uses it.
  * ========================================================================== */
 
 namespace SE {

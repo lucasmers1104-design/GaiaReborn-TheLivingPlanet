@@ -466,7 +466,7 @@ namespace SE {
       let producers = 0;
       for (let i = 0; i < TILE_COUNT; i++) {
         const li = i * LIFE_COUNT + Life.Prokaryote;
-        if (world.lifeStage[li] === CYANOBACTERIA_STAGE) producers += world.lifeDensity[li];
+        if (OXYGENIC_STAGE[world.lifeStage[li]]) producers += world.lifeDensity[li];
       }
       producers /= TILE_COUNT;
       const oceanProductivity = world.oceanFraction * clamp(producers / CYANO_PRODUCTIVITY_BIOMASS, 0, 1);

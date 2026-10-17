@@ -182,7 +182,8 @@ namespace SE {
       if (t <= this.tempLo[g]) return 'es ist dort zu kalt';
       if (t >= this.tempHi[g]) return 'es ist dort zu heiß';
       if (def.realm === 'fresh' && this.suit(world, g, i) <= 0) return 'braucht einen Fluss oder ein Feuchtgebiet';
-      if (def.realm === 'land') {
+      // Only explain a suitability too low to spread into: these checks are coarser than suit().
+      if (def.realm === 'land' && this.suit(world, g, i) < SPREAD_MIN) {
         if (this.wetness[i] <= (this.cactusGround(world, g, i) ? CACTUS_WET_MIN : def.wet[0])) return 'es ist dort zu trocken';
         if (def.needsWater >= 0.6 && this.waterAccess[i] < 0.5) return 'braucht Wasser in der Nähe (Ufer, Fluss oder Feuchtgebiet)';
         if (e > def.maxElevation + 0.1) return 'das Gelände liegt zu hoch';
@@ -207,7 +208,34 @@ namespace SE {
       const start = this.suit(world, g, i) * floraStature(world, g) * strength;
       const before = world.vegetation[i];
       if (start > world.vegetation[i]) world.vegetation[i] = start;
+      world.floraTop[i] = this.leader(world, i);
       return !had || world.vegetation[i] > before + 1e-6;
+    }
+
+    /** Cover a group reaches on a tile of suitability `s` (pollinators and insects included). */
+    private reach(world: WorldState, g: Flora, s: number, pollinated: boolean, insects: boolean): number {
+      let stature = floraStature(world, g);
+      if (pollinated && ((1 << g) & POLLINATED_MASK)) stature *= POLLINATION_COVER;
+      if (g === Flora.Carnivorous) stature *= insects ? 1.4 : 0.7;
+      return s * stature;
+    }
+
+    /** The group that leads a tile, as the step picks it — without its die-back roll. */
+    private leader(world: WorldState, i: number): Flora {
+      const pollinated = world.lifeDensity[i * LIFE_COUNT + Life.Pollinator] > POLLINATOR_PRESENT;
+      const insects = world.lifeDensity[i * LIFE_COUNT + Life.Insect] > POLLINATOR_PRESENT;
+      let top = Flora.None;
+      let topScore = 0;
+      let m = world.flora[i];
+      while (m !== 0) {
+        const g = 31 - Math.clz32(m & -m);
+        m &= m - 1;
+        const s = this.suit(world, g as Flora, i);
+        if (s < DIEBACK) continue;
+        const score = this.reach(world, g as Flora, s, pollinated, insects) * (1 + g * 0.03);
+        if (score > topScore) { topScore = score; top = g as Flora; }
+      }
+      return top;
     }
 
     /** Would `plant` change this tile? (Not already there at that cover.) */
@@ -269,10 +297,7 @@ namespace SE {
             if (rng.chance(0.06)) mask &= ~(1 << g);
             continue;
           }
-          let stature = floraStature(world, g as Flora);
-          if (pollinated && ((1 << g) & POLLINATED_MASK)) stature *= POLLINATION_COVER;
-          if (g === Flora.Carnivorous) stature *= insects ? 1.4 : 0.7;
-          const k = s * stature;
+          const k = this.reach(world, g as Flora, s, pollinated, insects);
           if (k > cap) cap = k;
           const score = k * (1 + g * 0.03);
           if (score > topScore) { topScore = score; top = g as Flora; }

@@ -90,6 +90,8 @@ namespace SE {
     sig: number;
     /** Whether any layer in it moves; a still chunk is composed once, as frame 0. */
     moving: boolean;
+    /** Distinct pictures it cycles through: the most frames of any texture in it. */
+    readonly period: number;
     readonly frames: (HTMLCanvasElement | null)[];
     /** The last picture composed, shown while a new one waits for its turn. */
     stale: HTMLCanvasElement | null;
@@ -190,25 +192,29 @@ namespace SE {
       const ty0 = cy * LAND_CHUNK;
       const keys = this.keys;
       let sig = 0x811c9dc5;
-      let moving = false;
+      let period = 1;
       for (let l = 0; l < GRID; l++) {
         const ty = clampY(ty0 + l - 1);
         for (let k = 0; k < GRID; k++) {
           const v = this.keyOf(world, ty * GRID_W + wrapX(tx0 + k - 1));
           keys[l * GRID + k] = v;
-          if (v !== 0 && art.texture(GROUND_LAYERS[v - 1].tex).length > 1) moving = true;
+          if (v !== 0) period = Math.max(period, art.texture(GROUND_LAYERS[v - 1].tex).length);
           sig = Math.imul(sig ^ v, 0x01000193);
         }
       }
+      // Embers and flood water have 2 frames: their chunks need only 2 distinct pictures, not FRAMES.
+      if (FRAMES % period !== 0) period = FRAMES;
+      const moving = period > 1;
       sig = (sig ^ land.field.signature(tx0, ty0, LAND_CHUNK, LAND_CHUNK, 0)) >>> 0;
       const n = cy * CHUNKS_X + cx;
       let c = this.chunks.get(n);
       if (!c || c.sig !== sig) {
         const stale = c ? c.frames.find((f) => f !== null) ?? c.stale : null;
-        c = { sig, moving, frames: new Array<HTMLCanvasElement | null>(FRAMES).fill(null), stale };
+        c = { sig, moving, period, frames: new Array<HTMLCanvasElement | null>(FRAMES).fill(null), stale };
         this.chunks.set(n, c);
       }
-      const g = c.moving ? now : 0;
+      const step = FRAMES / c.period;
+      const g = c.moving ? Math.floor(now / step) * step : 0;
       const hit = c.frames[g];
       if (hit) return hit;
       if (this.budget <= 0) return c.frames.find((f) => f !== null) ?? c.stale;

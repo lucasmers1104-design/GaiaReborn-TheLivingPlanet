@@ -715,6 +715,12 @@ namespace SE {
    */
   export const SUBSPECIES_PER_CLASS = 8;
   export const CYANOBACTERIA_STAGE = 4;
+  /**
+   * Prokaryote stages with oxygenic photosynthesis: the cyanobacteria and the
+   * thrombolites they build. Sulphur and iron bacteria are not oxygenic; the
+   * early stromatolites and mats predate it here.
+   */
+  export const OXYGENIC_STAGE: readonly boolean[] = [false, false, false, false, true, false, false, true];
 
   /** Largest share of a class that may stand at or above each stage. */
   export const STAGE_MAX_SHARE: readonly number[] = [1.0, 0.8, 0.62, 0.48, 0.36, 0.27, 0.2, 0.14];
@@ -1001,6 +1007,20 @@ namespace SE {
   export const SAVANNA_TREE_REACH = 6;
   /** Share of savanna trees that are baobabs; the others are Schirmbäume. */
   export const SAVANNA_BAOBAB_SHARE = 1 / 8;
+
+  /* ------------------------------------------------------ beaches, palms -- */
+  // src/beaches.ts: tropical sandy beaches and coconut palms, drawn only.
+
+  /** Land below this elevation can be beach (higher coasts are cliffs). */
+  export const BEACH_MAX_ELEVATION = 0.06;
+  /** Threshold of the coast noise (0..1) under which a warm coast is beach: stretches, not every tile. */
+  export const BEACH_SHARE = 0.55;
+  /** Years after the flowering plants until palms show (first palms ~85 Ma). */
+  export const PALM_DELAY_YEARS = 45e6;
+  /** Share of tropical and of warm beach tiles that show palms, and of those a pair. */
+  export const PALM_SHARE_TROPICAL = 0.6;
+  export const PALM_SHARE_WARM = 0.3;
+  export const PALM_PAIR_SHARE = 0.3;
 
   /* ----------------------------------------------------------- time scale -- */
 

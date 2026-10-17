@@ -19,7 +19,7 @@ genannt.
 | Auslösung | Werkzeug „Ereignis auslösen“, 50 Ω. Die Zielvorschau ist ein Quadrat mit `EVENT_RADIUS` 4–8, also 9×9 bis 17×17 Kacheln | `app.ts` (`EVENT_RADIUS`, `brushRadius`, `Tool.TriggerEvent`) |
 | Berechnung | `EventSystem.trigger` wendet alles in einem Aufruf als quadratischen Pinsel an. Es gibt weder Phasen noch Ausbreitung | `geo.ts`, Klasse `EventSystem` |
 | Natürliche Ereignisse | Vulkan 0,0004/Tick an Magma-Maxima, Meteorit 0,00018/Tick überall, Seuche ab `totalCityPop`. Den Atomschlag löst `CivSystem.warfare` über `civEventSink` aus | `geo.ts`, `civ.ts` |
-| Darstellung | ein 8×8-Symbol pro Kachel (`EVENT_SPRITES`), 12 Ticks lang (`eventKind`/`eventTtl`), im Grundbild | `sprites.ts`, `tilecache.ts`, `render.ts` (`drawTileTop`) |
+| Darstellung | ein 8×8-Symbol pro Kachel (`EVENT_SPRITES`), 12 Ticks lang (`eventKind`/`eventTtl`), im Grundbild (für Vulkane seit Okt. 2026 entfallen, siehe §2) | `sprites.ts`, `tilecache.ts`, `render.ts` (`drawTileTop`) |
 | Zeichenschleife | Das Grundbild (Gelände-Chunks mit eingebackenen Pflanzen, Städte, Marker) wird höchstens alle 250 ms neu gezeichnet. Pro Frame kommen darüber: Herden, Siedler, Wolken und Pings, Cursor | `render.ts` (`EditView.render`) |
 | Ticks | feste Schrittweite 2500 / 1000 / 400 / 150 ms je Tempo, höchstens 64 Ticks pro Frame | `app.ts` (`frame`) |
 | Pixel-Gelände | Dual-Grid. Bodenschlüssel = Materialrang × 4 + Dichte, dazu 16 Randmasken. Chunks aus 16×16 Kacheln werden nur bei geänderter Signatur neu aufgebaut. Objekte werden zeilenweise sortiert und in den Chunk gebacken. Bäume und Städte ragen ≤ 4 px in die Kachel darüber | `landcompose.ts`, `landfield.ts`, `landobjects.ts`, `landview.ts`, `citylayer.ts` |
@@ -92,6 +92,12 @@ Anfrage (Spieler · natürlich · Zivilisation · Kette)  →  requestHazard(kin
 
 Die Klasse `EventSystem` in `geo.ts` behält nur die natürlichen Würfe und leitet sie an `requestHazard` weiter.
 Ihre Pinsel-Funktionen entfallen.
+
+**Stand Oktober 2026 (Vulkan):** Natürliche Ausbrüche laufen über `hazardSink` (`geo.ts`, gesetzt in `app.ts`)
+durch das `HazardSystem`. Der Schlot rückt auf den höchsten Landpunkt im Umkreis 2 (`EventSystem.coneTile`), auf
+offener See bleibt er, wo er ist. Das 8×8-Symbol und der 9×9-Tafelberg des alten Pinsels gibt es für Vulkane nicht
+mehr; ohne `hazardSink` (Headless-Läufe) bleibt der alte Pinsel. Der Kegel ist Relief der Karte
+(`hoehe-spec.md` §3.8).
 
 **Felder pro Kachel** (`world.hazards`, Klasse `HazardState` in `hazardstate.ts`; gespeichert und mit der Drift
 erst nach dem Merge der Höhen-Aufgabe, K1):
@@ -573,7 +579,7 @@ endet.
 | Städte (Darstellung) | Verdecker, fahle Seuchen-Überlagerung | **neu:** `CityLayer.drawCityAt(ctx, tile, clip)` |
 | Zivilisation | Stadtschaden über `cityPop`/`tech` (geht heute schon, `reconcileCities` meldet den Verlust) | nach dem Merge, über den Civ-Lead: `damageCity(world, tile, share, cause)` in `cities.ts`, `startOutbreak` (`breakOut` exportieren), Feld `from` im Ausbruchseintrag für die Verbindungslinie |
 | Drift | Bodenzustände fahren mit | 4 Zeilen `rollU8` in `GeoSystem.drift`; Einträge der Ereignisliste verschieben sich mit ihrer Platte |
-| `geo.ts` | natürliche Würfe | `EventSystem` leitet nur noch weiter, die Pinsel-Funktionen entfallen. **Erst nach dem Merge des Geologie-Agenten** (K1) |
+| `geo.ts` | natürliche Würfe | `EventSystem` leitet nur noch weiter, die Pinsel-Funktionen entfallen. **Erst nach dem Merge des Geologie-Agenten** (K1). Vulkan umgesetzt (Okt. 2026): `hazardSink` + `coneTile` |
 | App | Werkzeug, Einstellungen, Meldungen | Pinselradius 0 (genau eine Kachel); Bedingungen und Kosten vor dem Vorzeichen; `hazardSink` (wie `civEventSink`); Einstellung „Effekte reduzieren“ (Standard aus `prefers-reduced-motion`); Meldung beim Start; bei natürlichen Ereignissen eine Karte mit „Zum Ereignis springen“ (`flyTo` + Ping). Das Menü „Zum letzten Ereignis springen“ nutzt künftig die Ereignisliste und die Kamerafahrt |
 | Speicher | neue Felder | `SAVE_FORMAT` + 1 (8 oder 9, je nachdem, wer zuerst merged) mit Migration: alte Stände bekommen leere Felder. Gespeichert werden `scar`, `scarAge`, `scarFrom`, `scarNext`, `tile` und `level` (Bytes, Base64) sowie `hazards` als kompakte Liste (K7) |
 | Untersuchen-Fenster | Anzeige | zeigt das laufende Ereignis bzw. den Bodenzustand, z. B. „Verbrannte Erde, wächst nach“ (`panels.ts`, 1–2 Zeilen) |

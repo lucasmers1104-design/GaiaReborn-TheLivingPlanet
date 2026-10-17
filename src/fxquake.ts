@@ -213,6 +213,7 @@ namespace SE {
         p = { st, quake: null, tones: waveTones(world, st.x, st.y) };
         playing.set(st.id, p);
       }
+      if (s.once(`${st.id}:rumble`)) playSfx('cracking-earthquake');
       if (t < TREMOR_OUTER_MS) s.shake(st.x, st.y, TREMOR_RADIUS, 1);
       if (t < TREMOR_MS) s.shake(st.x, st.y, TREMOR_CORE, 2);
       else if (t < SETTLE_MS) s.shake(st.x, st.y, TREMOR_CORE, 1);

@@ -41,9 +41,16 @@ namespace SE {
   /** Wall-clock rest between two steps, so the fastest speed doesn't make them scurry. */
   const STEP_GAP_MS = 1500;
   const GLIDE_MS = 400;
-  /** Most creatures drawn in the view; a crowded view shows a stable random subset. */
-  const VIEW_CAP = 600;
-  /** Classes with at most this many markers are never thinned out of the view. */
+  /**
+   * Least distance between two drawn creatures in CSS pixels, and in tiles
+   * when zoomed far in: a crowded view keeps a stable, evenly spread subset,
+   * so at 16 px per tile the icons stay a scatter instead of a carpet.
+   */
+  const GAP_PX = 64;
+  const GAP_TILES = 1.6;
+  /** Each creature stands off its tile's corner by up to half this, so they don't line up on the grid. */
+  const JITTER = 0.6;
+  /** Classes with at most this many markers go first when a crowded view is thinned. */
   const RARE_MARKERS = 12;
 
   export interface HerdMarker {
@@ -106,6 +113,12 @@ namespace SE {
     private readonly xs = new Float32Array(TILE_COUNT);
     private readonly ys = new Float32Array(TILE_COUNT);
     private readonly ids = new Int32Array(TILE_COUNT);
+    /** Per marker: where it stands (tiles, for the gap) and its turn when thinning. */
+    private readonly gx = new Float32Array(TILE_COUNT);
+    private readonly gy = new Float32Array(TILE_COUNT);
+    private readonly order = new Float64Array(TILE_COUNT);
+    /** Screen cells of the creatures drawn this frame (marker index + 1). */
+    private gapGrid = new Int32Array(0);
 
     constructor(private readonly still = prefersReducedMotion()) {
       for (let c = 0; c < LIFE_COUNT; c++) {
@@ -155,36 +168,65 @@ namespace SE {
 
     draw(
       ctx: CanvasRenderingContext2D, view: AmbientView, world: WorldState, now: number,
-      tiles: TileCache, regions: BiomeRegions,
+      tiles: TileCache, regions: BiomeRegions, skip?: (m: HerdMarker) => boolean,
     ): void {
       const size = view.tilePx;
       const big = size * SHADOW_SPAN;
       const cols = view.cols;
       const rows = view.rows;
-      const { markers: ms, xs, ys, ids } = this;
+      const { markers: ms, xs, ys, gx, gy, ids, order } = this;
       let n = 0;
-      let inView = 0;
       for (let k = 0; k < ms.length; k++) {
         const m = ms[k];
         const rest = this.still ? 0 : 1 - smoothstep(clamp((now - m.since) / GLIDE_MS, 0, 1));
-        let rx = (m.tile % GRID_W) - m.dx * rest - view.scrollX;
-        rx -= Math.floor(rx / GRID_W) * GRID_W;
-        if (rx > GRID_W - SHADOW_SPAN) rx -= GRID_W;
-        const ry = ((m.tile / GRID_W) | 0) - m.dy * rest - view.scrollY;
-        if (rx >= cols || ry <= -SHADOW_SPAN || ry >= rows) continue;
-        for (let x = rx; x < cols; x += GRID_W) inView++;
-        xs[n] = rx;
-        ys[n] = ry;
+        // A stable offset per marker, from its rank, so the herds don't stand on a lattice.
+        let sx = (m.tile % GRID_W) + ((m.rank * 7919) % 1 - 0.5) * JITTER - view.scrollX;
+        sx -= Math.floor(sx / GRID_W) * GRID_W;
+        if (sx > GRID_W - SHADOW_SPAN) sx -= GRID_W;
+        const sy = ((m.tile / GRID_W) | 0) + ((m.rank * 104729) % 1 - 0.5) * JITTER - view.scrollY;
+        const rx = sx - m.dx * rest;
+        const ry = sy - m.dy * rest;
+        if (rx >= cols || ry <= -SHADOW_SPAN || ry >= rows || skip?.(m)) continue;
+        xs[k] = rx;
+        ys[k] = ry;
+        gx[k] = sx;
+        gy[k] = sy;
+        order[k] = this.rare[m.c] ? m.rank - 1 : m.rank;
         ids[n++] = k;
       }
-      const keep = inView > VIEW_CAP ? VIEW_CAP / inView : 1;
-      for (let v = 0; v < n; v++) {
-        const m = ms[ids[v]];
-        if (m.rank >= keep && !this.rare[m.c]) continue;
+      // Rare classes first, then by rank, each a gap away from those already in. The gap
+      // counts where a marker stands, not where it glides, so none pops in or out mid-step.
+      const shown = ids.subarray(0, n).sort((a, b) => order[a] - order[b]);
+      const gap = Math.max(GAP_PX, size * GAP_TILES) / size;
+      const cell = gap / Math.SQRT2;
+      const gw = Math.ceil(cols / cell) + 8;
+      const gh = Math.ceil(rows / cell) + 8;
+      if (this.gapGrid.length < gw * gh) this.gapGrid = new Int32Array(gw * gh);
+      const grid = this.gapGrid;
+      grid.fill(0, 0, gw * gh);
+      for (let v = 0; v < shown.length; v++) {
+        const k = shown[v];
+        const cx = Math.floor(gx[k] / cell) + 4;
+        const cy = Math.floor(gy[k] / cell) + 4;
+        if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || this.crowded(k, cx, cy, gw, gap)) continue;
+        grid[cy * gw + cx] = k + 1;
+        const m = ms[k];
         const pic = tiles.life(m.c, m.stage, animalSpecialist(regions, world, m.tile, m.c, m.stage), m.flip);
-        const sy = Math.round(ys[v] * size);
-        for (let x = xs[v]; x < cols; x += GRID_W) ctx.drawImage(pic, Math.round(x * size), sy, big, big);
+        const py = Math.round(ys[k] * size);
+        for (let x = xs[k]; x < cols; x += GRID_W) ctx.drawImage(pic, Math.round(x * size), py, big, big);
       }
+    }
+
+    /** A creature drawn this frame stands within `gap` tiles of marker k (grid cell cx, cy). */
+    private crowded(k: number, cx: number, cy: number, gw: number, gap: number): boolean {
+      const { gapGrid: grid, gx, gy } = this;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const o = grid[(cy + dy) * gw + cx + dx] - 1;
+          if (o >= 0 && (gx[o] - gx[k]) ** 2 + (gy[o] - gy[k]) ** 2 < gap * gap) return true;
+        }
+      }
+      return false;
     }
 
     private clear(): void {

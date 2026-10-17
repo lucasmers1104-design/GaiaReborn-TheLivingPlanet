@@ -43,7 +43,7 @@ namespace SE {
 
   /** What the sea does with the oxygen of its producers right now. */
   function seaOxygenNote(w: WorldState): string {
-    if (w.lifeStageCounts[Life.Prokaryote * SUBSPECIES_PER_CLASS + CYANOBACTERIA_STAGE] === 0) return 'Aktuell keine Cyanobakterien: Die übrigen Mikroben setzen keinen Sauerstoff frei.';
+    if (!OXYGENIC_STAGE.some((on, s) => on && w.lifeStageCounts[Life.Prokaryote * SUBSPECIES_PER_CLASS + s] > 0)) return 'Aktuell keine Cyanobakterien: Die übrigen Mikroben setzen keinen Sauerstoff frei.';
     if (w.oceanIron >= IRON_DEPLETED) return 'Noch bindet gelöstes Eisen einen großen Teil des Sauerstoffs im Wasser.';
     if (w.oceanO2 < OCEAN_O2_RISEN) return 'Das Eisen ist verbraucht – jetzt reichert sich Sauerstoff an.';
     return 'Tauscht Sauerstoff mit der Luft aus, bis beide im Gleichgewicht sind.';
@@ -130,7 +130,9 @@ namespace SE {
         mid.append(img(d.icon, 'ico'), make('span', 'dial-value', d.value));
         face.appendChild(mid);
         const text = make('div', 'dial-text');
-        text.append(make('div', 'dial-label', d.label), make('div', 'dial-scale', d.scale), make('p', 'dial-note', d.note));
+        const label = make('div', 'dial-label', d.label);
+        label.style.setProperty('--chars', String(Math.max(...d.label.split(/[\s-]/).map((w) => w.length))));
+        text.append(label, make('div', 'dial-scale', d.scale), make('p', 'dial-note', d.note));
         card.append(face, text);
         grid.appendChild(card);
       }

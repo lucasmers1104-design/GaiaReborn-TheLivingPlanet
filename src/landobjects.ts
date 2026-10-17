@@ -13,7 +13,7 @@
  * a closed canopy, each over a small ramp-shift shadow on the ground. On a
  * lifted mountain range (landridgedraw.ts) an object stands as high as the
  * ground under its foot and hides behind nearer ground; plants stop at the
- * crest's tree line. Volcanic cones stand on their tiles like any object.
+ * crest's tree line. Volcanic cones are relief, not objects (landridges.ts).
  * ========================================================================== */
 
 namespace SE {
@@ -49,17 +49,12 @@ namespace SE {
   const CACTUS_SLOT = 10;
   /** A savanna tree's slot: the quarter the first three slots (the rock's and a cactus's among them) leave free. */
   const SAVANNA_TREE_SLOT = 11;
-  /** Foot row of a volcanic cone in its tile: its 16 rows reach 1 px into the tile above. */
-  const VOLCANO_FOOT = 14;
+  /** Coconut palms' slots 12–13 (beach tiles carry no other plants). */
+  const PALM_SLOT = 12;
   /** Ground rows a shadow may lie from its object's foot on lifted ground. */
   const SHADOW_DEPTH = 2;
-  /**
-   * Ground rows in front of its foot that still leave an object in view. A
-   * cone stands on the highest tile around: nothing in front of it rises
-   * high enough to hide it, except the noise of the crests, so it is never hidden.
-   */
+  /** Ground rows in front of its foot that still leave an object in view. */
   const DEPTH_SLACK = 1;
-  const CONE_DEPTH_SLACK = Infinity;
 
   /** Objects of tiles [x0, x1] × [y0, y1] (inclusive, x unwrapped), sorted for drawing. */
   export function placeLandObjects(f: TerrainField, art: LandArt, x0: number, y0: number, x1: number, y1: number, out: LandPlacement[]): void {
@@ -73,21 +68,16 @@ namespace SE {
   function placeTile(f: TerrainField, art: LandArt, x: number, y: number, out: LandPlacement[]): void {
     const xw = wrapX(x);
     const i = y * GRID_W + xw;
-    const cone = f.volcano[i];
-    if (cone > 0) {
-      const vars = art.sprites.volcano;
-      // On a range the cone stands on its crest, else low in its tile.
-      const crest = f.ridges.crest[i] !== 0;
-      const fx = x * 16 + (crest ? crestOffset(xw, y, 0) : 8);
-      const fy = y * 16 + (crest ? crestOffset(xw, y, 1) : VOLCANO_FOOT);
-      out.push({ sprite: vars[Math.min(cone, vars.length) - 1], fx, fy, water: false, seq: (y * GRID_W + xw) * 16 + 15 });
-    }
+    const palms = f.palm[i];
+    if (palms > 0 && art.sprites.coconut_palm) placePalms(f, art, xw, x, y, palms, out);
     const scene = f.scene[i];
     if (scene === LAND_SCENE_NONE) return;
     const T = LandTables.shared();
     const counts = T.counts[scene];
     const edge = f.edge[i];
     const d = f.density[i];
+    // A volcano's tile and the ones in front of and behind it keep its cone in view: young trees only, no boulders.
+    const cone = f.volcano[i] !== 0 || (y > 0 && f.volcano[i - GRID_W] !== 0) || (y < GRID_H - 1 && f.volcano[i + GRID_W] !== 0);
     let slot = 0;
     for (let kind = 0; kind < counts.length; kind++) {
       const c = counts[kind];
@@ -99,7 +89,7 @@ namespace SE {
         let id = pick(f, T, i, scene, mantle ? LAND_KIND_BUSH : kind, xw, y, slot);
         // No bush grows here: a young tree stands at the edge instead.
         if (!id && mantle) id = pick(f, T, i, scene, kind, xw, y, slot);
-        if (id) out.push(spot(art, id, xw, x, y, slot, edge, mantle));
+        if (id) out.push(spot(art, id, xw, x, y, slot, edge, mantle || cone));
       }
     }
     const cacti = T.cactusIds;
@@ -108,9 +98,42 @@ namespace SE {
     }
     if (f.savannaTree[i]) out.push(spot(art, savannaTreeId(art, xw, y), xw, x, y, SAVANNA_TREE_SLOT, edge, false));
     const rate = T.abioticRate[scene];
-    if (rate > 0 && landHash(xw, y, 800) < rate) {
+    if (rate > 0 && !cone && landHash(xw, y, 800) < rate) {
       const ids = T.abioticIds[scene];
       if (ids.length > 0) out.push(spot(art, ids[Math.floor(landHash(xw, y, 801) * ids.length)], xw, x, y, 9, 2, false));
+    }
+  }
+
+  /**
+   * Coconut palms on a beach tile: feet set back from the sea onto the dry
+   * sand, a pair spread along the shore (a tall one, a younger one), crowns
+   * curving toward the sea (form 0 curves left, 1 right).
+   */
+  function placePalms(f: TerrainField, art: LandArt, xw: number, x: number, y: number, n: number, out: LandPlacement[]): void {
+    let sx = 0;
+    let sy = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      const ny = y + dy;
+      if (ny < 0 || ny >= GRID_H) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        if (f.key[ny * GRID_W + wrapX(xw + dx)] === 0) { sx += dx; sy += dy; }
+      }
+    }
+    sx = Math.sign(sx);
+    sy = Math.sign(sy);
+    // Along the shore: across the way to the sea.
+    const ax = sx === 0 && sy === 0 ? 1 : -sy;
+    const ay = sx;
+    const vars = art.sprites.coconut_palm;
+    for (let s = 0; s < n; s++) {
+      const slot = PALM_SLOT + s;
+      const p = spot(art, 'coconut_palm', xw, x, y, slot, s === 0 ? 2 : 1, false);
+      const side = n === 1 ? 0 : s === 0 ? -1 : 1;
+      const jitter = Math.floor((landHash(xw, y, 960 + slot) - 0.5) * 3);
+      const fx = clamp(x * 16 + 8 - sx * 4 + side * ax * 4 + jitter, x * 16 + 2, x * 16 + 14);
+      const fy = clamp(y * 16 + 10 - sy * 4 + side * ay * 3, y * 16 + 4, y * 16 + 14);
+      const sprite = sx === 0 ? p.sprite : vars.find((v) => v.size === p.sprite.size && v.form === (sx > 0 ? 1 : 0)) ?? p.sprite;
+      out.push({ ...p, sprite, fx, fy });
     }
   }
 
@@ -187,11 +210,10 @@ namespace SE {
         if (z > 0) {
           // Trees end at the crest's tree line, every other plant at its rock line.
           const s = rise.seg[k];
-          if (look.plant && z >= (look.tree ? rise.ridges.zTree[s] : rise.ridges.zRock[s])) continue;
+          if (landObjectAboveLine(art, t, rise.ridges, s, z)) continue;
           fy = ground - ((z + 0.5) | 0);
         }
       }
-      const slack = look.cone ? CONE_DEPTH_SLACK : DEPTH_SLACK;
       if (!p.water) {
         const sx = look.shadowX;
         const sy = look.shadowY;
@@ -235,15 +257,20 @@ namespace SE {
         const k = y * w + x;
         if (p.water && water[k] !== 1) continue;
         // Nearer ground shows here (riseDepth, inlined: this runs for every sprite pixel).
-        if (depth && y >= (top as Int16Array)[x] && y <= (bottom as Int32Array)[x] && depth[k] > ground + slack) continue;
+        if (depth && y >= (top as Int16Array)[x] && y <= (bottom as Int32Array)[x] && depth[k] > ground + DEPTH_SLACK) continue;
         px[k] = uv[n];
         occupied[k] = 1;
       }
     }
   }
 
-  /** Whether a plant stands above its line on a crest of segment `seg` at lift z: trees end at the tree line, other plants at the rock line. */
+  /**
+   * Whether an object stands above its line on a crest of segment `seg` at
+   * lift z: trees end at the tree line, other plants at the rock line, and a
+   * volcano cone carries nothing at all, so its outline reads at a glance.
+   */
   export function landObjectAboveLine(art: LandArt, t: LandSprite, ridges: RidgePaths, seg: number, z: number): boolean {
+    if (ridges.crater[seg] > 0) return true;
     const look = spriteLook(art, t);
     return look.plant && z >= (look.tree ? ridges.zTree[seg] : ridges.zRock[seg]);
   }
@@ -252,7 +279,7 @@ namespace SE {
   interface SpriteLook {
     readonly x: Uint8Array; readonly y: Uint8Array; readonly v: Uint8Array;
     readonly shadowX: Int8Array; readonly shadowY: Int8Array;
-    readonly plant: boolean; readonly tree: boolean; readonly cone: boolean;
+    readonly plant: boolean; readonly tree: boolean;
   }
   const LOOKS = new WeakMap<LandSprite, SpriteLook>();
 
@@ -284,7 +311,7 @@ namespace SE {
     const look: SpriteLook = {
       x: Uint8Array.from(xs), y: Uint8Array.from(ys), v: Uint8Array.from(vs),
       shadowX: Int8Array.from(dxs), shadowY: Int8Array.from(dys),
-      plant: ob.group !== null, tree: ob.kind === 'tree', cone: ob.kind === 'mountain',
+      plant: ob.group !== null, tree: ob.kind === 'tree',
     };
     LOOKS.set(t, look);
     return look;

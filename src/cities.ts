@@ -245,18 +245,6 @@ namespace SE {
   }
 
   /**
-   * Science moves cities up the tech levels (spec §2.4). Each people invents
-   * in its leading city — the most populous at its best level. A level new to
-   * the planet comes at the planet's rate times the people's share of the
-   * planet's population, so the pace does not grow with the number of
-   * peoples; one known elsewhere at the full rate. A planet with fewer cities
-   * than the level calls for invents more slowly. A people's best level first
-   * has to spread to TECH_SPREAD_SHARE of its cities before it invents the
-   * next. A city behind the best of its people catches up by exchange, one
-   * behind a neighbouring people by trade. Returns the highest level any city
-   * reached this tick.
-   */
-  /**
    * Cooldowns are not saved. Spread by tile over one cooldown, so a loaded
    * planet does not send every full city's settlers out on the same tick.
    */
@@ -268,6 +256,18 @@ namespace SE {
     return world.ticks + (h >>> 0) % Math.max(1, SETTLER_COOLDOWN[world.tech[tile]] ?? 1);
   }
 
+  /**
+   * Science moves cities up the tech levels (spec §2.4). Each people invents
+   * in its leading city — the most populous at its best level. A level new to
+   * the planet comes at the planet's rate times the people's share of the
+   * planet's population, so the pace does not grow with the number of
+   * peoples; one known elsewhere at the full rate. A planet with fewer cities
+   * than the level calls for invents more slowly. A people's best level first
+   * has to spread to TECH_SPREAD_SHARE of its cities before it invents the
+   * next. A city behind the best of its people catches up by exchange, one
+   * behind a neighbouring people by trade. Returns the highest level any city
+   * reached this tick.
+   */
   export function advanceCityTech(world: WorldState, params: ModelParams): Tech {
     const civ = world.civ;
     const rng = world.rng;

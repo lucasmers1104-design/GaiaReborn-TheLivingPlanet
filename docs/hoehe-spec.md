@@ -293,9 +293,23 @@ Alles läuft im bestehenden Pixel-Renderer und Generator: dieselbe Palette, Lich
   - **Der Berg ist Boden:** Seine Hänge zeigen die Landschaft ihrer Höhenstufe (Wald, alpine Matte, Schutt,
     Schnee). Bäume stehen als normale Objekte auf den Flanken, so wachsen die Pflanzen natürlich am Berg.
   - **Durchgehend:** Lange Gebirgszüge laufen ohne Bruch über Kachel- und Chunkgrenzen und über die Datumsgrenze.
-  - **Vulkane:** Einzelne Vulkane bleiben Kegel-Sprites, ruhend oder frisch (dunkler Basalt). Sie stehen auf
-    vulkanischen Gebirgstypen.
-    - Auf Schlot-Kacheln der Ereignisse steht kein zweiter Kegel; dort zeichnet die Effektebene den Schlot.
+  - **Vulkane** (umgesetzt Okt. 2026, `landridges.ts`, `landridgedraw.ts`): Der Kegel ist Relief wie ein Kamm,
+    kein Sprite mehr. Ein Punktsegment mit Krater, Höhe H = clamp(Kammhub + 10, 20, 28) px, Fußradius 2 + 0,5 · H.
+    - **Wo** (`landfield.ts` `volcanoes()`): jeder Schlot an Land; sonst die höchste Landkachel im Umkreis 2 auf
+      Inselbogen, Hotspot oder Küstengebirge (dort nur ab Magma 0,3), und auf jeder Landkachel, deren Magma
+      0,45 über dem Planetenmittel liegt (Hotspots der Epoche „Heute“: Hawaii, Island, Galápagos). Nie auf Fluss
+      oder Stadt. Frisch, solange Basalt liegt oder der Schlot jung ist, sonst ruhend.
+    - **Aussehen:** ab 15 % der Höhe kahl, ruhend Schutt, frisch Basalt; darunter der Boden der Kachel; Schnee
+      über der Schneegrenze. Bewachsene Flanken oder alpine Matte ließen den Kegel im Wald verschwinden oder
+      als hellen Buckel erscheinen. Der ganze Kegel ist eine Stufe dunkler, die Lichtseite höchstens eine Stufe
+      heller, dazu eine zwei Stufen dunkle Umrisslinie: so hebt er sich von hellem Fels ab und wirkt nicht wie
+      ein Findling. Dunkler Krater mit hellem Rand, Rinnen als Schattierung.
+    - Liegt Meer neben dem Kegel, rückt er um 4 px ins Land, damit das Meer seine Vorderflanke nicht als Wand
+      abschneidet. Ein Kamm sinkt auf der Kegelkachel auf 0, eine Kachel daneben auf 75 % der Kegelhöhe: Der Vulkan
+      steht als eigener Gipfel im Gebirge.
+    - **Objekte:** Auf dem Kegel steht nichts. Auf seiner Kachel und den Kacheln davor und dahinter wachsen
+      nur junge Bäume, Findlinge gibt es dort nicht.
+    - Ausbrüche zeichnet die Effektebene in den Krater (`volcanoMouth`, `fxvolcano.ts`).
   - **Maßstab:** 10 px je km Relief über dem Kachelmittel, höchstens 28 px Hub.
     Die Kammsuche läuft auf Hochland, also Höhe ≥ 0,2 mit Hebungsgürtel oder Höhe ≥ 0,42.
   - **Verdeckung:** Ein Tiefenpuffer pro Pixel sorgt dafür, dass Objekte hinter einem näheren Hang verdeckt sind.

@@ -174,7 +174,7 @@ test('the young Earth types its island arcs, today\'s Earth its belts', () => {
   const today = new SE.WorldState();
   today.reset(1, SE.OCEAN_FRACTION, 'today');
   for (let i = 0; i < SE.TILE_COUNT; i++) {
-    if (today.uplift[i] > 0) assert.ok(today.upliftKind[i] === 1 || today.upliftKind[i] === 2, 'every belt is a fold belt or a coastal range');
+    if (today.uplift[i] > 0) assert.ok([1, 2, 5].includes(today.upliftKind[i]), 'every belt is a fold belt, a coastal range or an active volcano');
   }
 });
 
@@ -315,4 +315,52 @@ test('the river network is rebuilt right after a plate shift, not up to 31 ticks
   let orphans = 0;
   for (let i = 0; i < SE.TILE_COUNT; i++) if (w.elevation[i] >= 0 && w.riverDown[i] < 0) orphans++;
   assert.equal(orphans, 0, 'every land tile drains somewhere');
+});
+
+test('erosion on a plate-shift tick carries its load down the shifted rivers', () => {
+  const run = (fresh) => {
+    const s = makeSim(777);
+    const w = s.world;
+    assert.equal(w.ticks % SE.EROSION_INTERVAL, 0, 'an erosion tick');
+    s.geo.driftOffsets = [0.9999, 0, 0, -0.9999];
+    if (!fresh) { s.geo.step(w, s.params); return w.elevation; }
+    // The same tick by hand, with the rivers rebuilt between drift and erosion.
+    s.geo.drift(w, SE.mul(s.params.geo.drift) * SE.geoTimeFactor(w));
+    SE.RiverSystem.rebuild(w);
+    s.geo.vertical(w, s.params, SE.mul(s.params.geo.coreHeat));
+    return w.elevation;
+  };
+  const stepped = run(false);
+  const fresh = run(true);
+  let diff = 0;
+  for (let i = 0; i < SE.TILE_COUNT; i++) diff = Math.max(diff, Math.abs(stepped[i] - fresh[i]));
+  assert.equal(diff, 0, `elevation off by up to ${diff}`);
+});
+
+test('plates stand still in human time scales, like erosion and uplift', () => {
+  const s = makeSim(777);
+  const w = s.world;
+  w.timeScale = SE.TimeScale.Civilized;
+  s.geo.driftOffsets = [0.9999, 0, 0, 0];
+  const shifts = w.driftShifts;
+  s.geo.step(w, s.params);
+  assert.equal(w.driftShifts, shifts, '100 years do not move a plate by a tile');
+});
+
+test('Kernwärme off 0.5 neither empties nor saturates the mantle field', () => {
+  const spread = (heat) => {
+    const s = makeSim(12345);
+    s.params.geo.coreHeat = heat;
+    s.params.geo.drift = 0;
+    const w = s.world;
+    for (let t = 0; t < 400; t++) { s.geo.step(w, s.params); w.ticks++; }
+    let lo = 1, hi = 0;
+    for (const v of w.magma) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    return hi - lo;
+  };
+  const calibrated = spread(0.5);
+  for (const heat of [0.4, 0.6]) {
+    const sp = spread(heat);
+    assert.ok(sp > calibrated * 0.8, `core heat ${heat}: magma spread ${sp.toFixed(3)}, calibrated ${calibrated.toFixed(3)}`);
+  }
 });

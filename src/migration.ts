@@ -215,11 +215,14 @@ namespace SE {
       if (world.ticks < c.settleAfter) continue;
       const pop = world.cityPop[c.tile];
       if (pop < SETTLER_DEPART_SHARE * c.capacity) continue;
-      // A people's only city on land too poor ever to reach the usual size
-      // still sends its settlers, or the civilization never leaves it.
-      if (pop < SETTLER_DEPART_POP && (pop < SETTLER_POP + CITY_ABANDON_POP || !loneCity(civ, c))) continue;
-      if (settlersOf(civ, c.tribe) >= SETTLERS_PER_TRIBE) continue;
       const tech = world.tech[c.tile] as Tech;
+      // A people's only city on land too poor ever to reach the usual size
+      // still sends its settlers, or the civilization never leaves it; so does
+      // any such city while the planet has too few cities to invent the next
+      // level, or two poor cities stay in the Stone Age for good.
+      const stuck = loneCity(civ, c) || civ.cities.length < TECH_CITIES_MIN[tech];
+      if (pop < SETTLER_DEPART_POP && (pop < SETTLER_POP + CITY_ABANDON_POP || !stuck)) continue;
+      if (settlersOf(civ, c.tribe) >= SETTLERS_PER_TRIBE) continue;
       const route = findSettlerRoute(world, c.tile, tech);
       c.settleAfter = world.ticks + (route ? SETTLER_COOLDOWN[tech] : SETTLER_RETRY);
       c.cramped = route === null;

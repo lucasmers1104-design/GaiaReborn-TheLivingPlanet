@@ -2,8 +2,8 @@
  * SimEarth 2.0 — volcanic eruption art
  * -----------------------------------------------------------------------------
  * The eruption column with its lava fountain, lava splashes, the drifting
- * ash cloud, the vent cone with its crater and the three ground textures of
- * a cooling flow.
+ * ash cloud, the lava pool glowing in an active crater (the cone itself is
+ * landscape relief) and the three ground textures of a cooling flow.
  * Light from the upper left; glow is bright palette steps inside a darker
  * edge, never a blur. Animations loop seamlessly:
  *   column   puffs rise one pixel a frame, COLUMN_FRAMES pixels apart, and
@@ -117,58 +117,44 @@ function ashCloud(f) {
   return fx.crumble(t, f >= 4 ? [0.3, 0.55, 0.8][f - 4] : 0, 41);
 }
 
-/* -------------------------------------------------------------- vent -- */
+/* ------------------------------------------------------------ crater -- */
 
-/** Half width of the cone at row y (concave flanks, a little ragged); the crater rim sits on its top. */
-function coneHalf(y) {
-  if (y < 5) return -1;
-  return 5.6 + 6.4 * Math.pow((y - 5) / 18, 1.4) + (k.hash(y, 0, 59) < 0.3 ? -0.5 : 0);
-}
+/** Half axes of the lava pool: seen at 3/4, so wider than deep. */
+const POOL_RX = 5.6;
+const POOL_RY = 3.3;
+/** Core swell by frame: the pool breathes in and out, so frame 4 is frame 0. */
+const POOL_PULSE = [0, 1, 2, 1];
 
-/** Basalt, darkest first: the cone is fresh volcanic rock. */
-const BASALT = ['pine0', 'rock0', 'rock1', 'rock2'];
-const GREEN = ['leaf0', 'leaf1', 'meadow1', 'meadow2'];
-
-/** The rivulet of an active vent down its front flank: x by row. */
-function rivulet(y) {
-  return y < 9 || y > 22 ? -1 : Math.round(13 + Math.sin(y * 0.7) * 0.8 + (y - 9) * 0.12);
-}
-
-/** Variant 0: active (glowing crater, a lava rivulet), 1: fresh basalt, 2: overgrown flanks. */
-function ventCone(v) {
-  const t = new k.Tex(24, 24);
-  const inside = (x, y) => y < 24 && Math.abs(x + 0.5 - 12) <= coneHalf(y);
-  const moss = k.fbm(24, 3, 2, 61);
-  const cx = 12;
-  const cy = 7.2;
+/**
+ * The lava pool in an erupting volcano's crater, which the landscape draws as
+ * relief: a dark seam, bands that brighten inwards, a core that swells and
+ * ebbs, and sparks that rise one phase step a frame.
+ */
+function craterGlow(f) {
+  const t = new k.Tex(16, 16);
+  const p = POOL_PULSE[f];
+  const wobble = k.fbm(16, 4, 2, 73);
   t.each((x, y) => {
-    if (!inside(x, y)) return undefined;
-    const dx = (x + 0.5 - cx) / 4.4;
-    const dy = (y + 0.5 - cy) / 1.9;
-    const crater = dx * dx + dy * dy;
-    if (crater <= 1) {
-      // The far inner wall faces the light; the floor glows or lies in shadow.
-      if (dy < -0.1) return P.c('rock1');
-      if (v === 0) return P.c(crater < 0.25 ? 'yellow0' : crater < 0.6 ? 'orange0' : 'red1');
-      return P.c(crater < 0.5 ? 'pine0' : 'rock0');
-    }
-    const rx = (x + 0.5 - cx) / 5.6;
-    const ry = (y + 0.5 - cy) / 2.8;
-    if (rx * rx + ry * ry <= 1) return P.c(rx < 0.1 && ry < 0.6 ? 'rock3' : 'rock2');
-    if (v === 0) {
-      const rv = rivulet(y);
-      if (x === rv) return P.c(y < 15 ? 'orange0' : 'red1');
-      if (x === rv + 1) return P.c('red0');
-    }
-    const half = coneHalf(y);
-    const nx = (x + 0.5 - cx) / half;
-    const rimRight = !inside(x + 1, y) || !inside(x, y + 1);
-    let tone = nx < -0.5 ? 3 : nx < 0 ? 2 : nx < 0.5 ? 1 : 0;
-    if (rimRight) tone = 0;
-    else if (y > 9 && y < 21 && k.hash(x, 0, 63) < 0.3 && (x + y) % 2 === 0) tone = Math.max(0, tone - 1);
-    const green = v === 2 && !rimRight && moss(x, y) + (y - 12) * 0.025 + (nx < 0 ? 0.06 : -0.06) > 0.58;
-    return P.c((green ? GREEN : BASALT)[tone]);
+    const dx = (x + 0.5 - 8) / POOL_RX;
+    const dy = (y + 0.5 - 9) / POOL_RY;
+    const d = dx * dx + dy * dy + (wobble(x, y) - 0.5) * 0.3;
+    if (d > 1) return undefined;
+    // The near rim lies in the wall's shadow; the far rim catches the glow.
+    if (d > 0.78) return P.c(dy > 0.2 || dx > 0.5 ? 'soil0' : 'red0');
+    if (d > 0.5) return P.c('red1');
+    if (p > 0 && d < p * 0.035) return P.c('white0');
+    if (d < 0.16 + p * 0.05) return P.c('yellow0');
+    // A crust seam drifts across the pool and is gone again after four frames.
+    if ((x - y + f * 2 + 16) % 8 === 0) return P.c('red1');
+    return P.c('orange0');
   });
+  for (let n = 0; n < 3; n++) {
+    const phase = (f / POOL_PULSE.length + n / 3 + k.hash(n, 1, 77) * 0.1) % 1;
+    const x = Math.round(5 + k.hash(n, 2, 77) * 6 + Math.sin(phase * 3 + n) * 0.6);
+    const y = Math.round(5 - phase * 5);
+    if (y < 0) continue;
+    t.set(x, y, P.c(phase < 0.35 ? 'yellow0' : phase < 0.7 ? 'orange0' : 'red1'));
+  }
   return t;
 }
 
@@ -220,6 +206,6 @@ function lavaCrust(f) {
 }
 
 module.exports = {
-  sprites: { volcano_column: column, lava_splash: lavaSplash, ash_cloud: ashCloud, vent_cone: ventCone },
+  sprites: { volcano_column: column, lava_splash: lavaSplash, ash_cloud: ashCloud, crater_glow: craterGlow },
   textures: { lava_hot: lavaHot, lava_dim: lavaDim, lava_crust: lavaCrust },
 };
