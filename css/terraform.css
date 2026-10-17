@@ -1,0 +1,11 @@
+/* Terraforming brush: the size slider under the Anheben / Absenken options. */
+.brush-size {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px;
+}
+.brush-size-label { font-weight: 600; font-size: 14px; }
+.brush-size-value { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 6.5em; text-align: right; }
+.brush-size input[type="range"] { min-width: 0; }

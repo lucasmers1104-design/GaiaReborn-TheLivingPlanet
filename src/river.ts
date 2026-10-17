@@ -128,6 +128,9 @@ namespace SE {
      * still hold tile indices from the previous rebuild.
      */
     private static orderCount = 0;
+    /** Tiles the flood under way has taken so far, and floods started (a stale split rebuild sees the count move). */
+    private static fillCount = 0;
+    private static fills = 0;
     private static readonly settled = new Uint8Array(TILE_COUNT);
     private static readonly heap = new TileHeap();
 
@@ -163,6 +166,33 @@ namespace SE {
     }
 
     /**
+     * `rebuild` in steps for callers that spread it over frames (the
+     * terraforming brush's settle): the flood in halves, the routing, the
+     * classification. The scratch is shared: if anything rebuilds in
+     * between (a tick), that full rebuild stands and the rest is skipped.
+     */
+    static rebuildSteps(world: WorldState): (() => void)[] {
+      let fill = -1;
+      const live = (): boolean => fill === RiverSystem.fills;
+      return [
+        () => {
+          RiverSystem.fillStart(world);
+          fill = RiverSystem.fills;
+          RiverSystem.fillOn(world, TILE_COUNT / 4);
+        },
+        () => { if (live()) RiverSystem.fillOn(world, TILE_COUNT / 3); },
+        () => { if (live()) RiverSystem.fillOn(world, Infinity); },
+        () => { if (live()) RiverSystem.route(world); },
+        () => {
+          if (!live()) return;
+          RiverSystem.classify(world);
+          world.terrainDirty = false;
+          RiverSystem.builtShifts.set(world, world.driftShifts);
+        },
+      ];
+    }
+
+    /**
      * Priority-flood (Barnes, Lehman & Mulla): start from the sea and walk
      * inland always taking the lowest frontier tile, raising anything below the
      * level you arrived at. A tile is therefore fixed at the height of the
@@ -174,10 +204,17 @@ namespace SE {
      * provably drains to the sea.
      */
     private static fillDepressions(world: WorldState): void {
+      RiverSystem.fillStart(world);
+      RiverSystem.fillOn(world, Infinity);
+    }
+
+    /** Seed the flood with the sea. */
+    private static fillStart(world: WorldState): void {
       const { elevation } = world;
       const filled = RiverSystem.filled;
       const settled = RiverSystem.settled;
       const heap = RiverSystem.heap;
+      RiverSystem.fills++;
 
       heap.clear();
       settled.fill(0);
@@ -189,11 +226,19 @@ namespace SE {
           heap.push(0, i); // the sea is the outlet, at sea level
         }
       }
+      RiverSystem.fillCount = 0;
+    }
 
+    /** Flood on for at most `budget` tiles; true once the flood is done. */
+    private static fillOn(world: WorldState, budget: number): boolean {
+      const { elevation } = world;
+      const filled = RiverSystem.filled;
+      const settled = RiverSystem.settled;
+      const heap = RiverSystem.heap;
       const order = RiverSystem.order;
-      let n = 0;
+      let n = RiverSystem.fillCount;
 
-      while (heap.size > 0) {
+      while (heap.size > 0 && budget-- > 0) {
         const level = heap.peekKey();
         const i = heap.pop();
         order[n++] = i;
@@ -206,6 +251,8 @@ namespace SE {
         RiverSystem.raise(idx(x, clampY(y + 1)), level, elevation, filled, settled, heap);
       }
 
+      RiverSystem.fillCount = n;
+      if (heap.size > 0) return false;
       RiverSystem.orderCount = n;
 
       // A land tile the flood could not reach has no sea to drain to at all —
@@ -214,6 +261,7 @@ namespace SE {
       for (let i = 0; i < TILE_COUNT; i++) {
         if (!settled[i]) filled[i] = 1;
       }
+      return true;
     }
 
     private static raise(

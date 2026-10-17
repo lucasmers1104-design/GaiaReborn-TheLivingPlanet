@@ -7,11 +7,13 @@
  * ========================================================================== */
 
 namespace SE {
-  export type MusicScene = 'title' | 'game';
+  export type MusicScene = 'title' | 'intro' | 'game';
 
   /** Track per scene: a file name in assets/audio/music/ without ".mp3". */
   export const MUSIC_TRACKS: Readonly<Record<MusicScene, string>> = {
     title: 'lumiere-du-matin',
+    // INTRO_CUES are measured against this track.
+    intro: 'IntroMusic',
     game: 'lumiere-du-matin',
   };
 
@@ -20,8 +22,10 @@ namespace SE {
   const MUSIC_FADE_MS = 1200;
 
   export class MusicPlayer {
-    private readonly audio = new Audio();
+    private audio = new Audio();
     private track = '';
+    /** The timer that cuts to the track playThen loaded ahead. */
+    private queueTimer = 0;
     private enabled: boolean;
     private fadeTimer = 0;
     /** The player's volume slider, 0..1, on top of MUSIC_VOLUME. */
@@ -45,15 +49,55 @@ namespace SE {
       });
     }
 
-    /** Switch to a scene's track; the same track simply keeps playing. */
-    play(scene: MusicScene): void {
+    /** Switch to a scene's track; the same track simply keeps playing, unless `at` (seconds into it) is given. */
+    play(scene: MusicScene, at?: number): void {
+      this.cancelQueued();
       const track = MUSIC_TRACKS[scene];
       if (track !== this.track) {
         this.track = track;
         this.audio.src = `assets/audio/music/${track}.mp3`;
         this.audio.volume = 0;
       }
+      // Before the new file's metadata is in, this sets where playback will start.
+      if (at !== undefined) this.audio.currentTime = at;
       if (this.enabled) this.resume();
+    }
+
+    /**
+     * Let the current track play to `at` seconds, where it has died away, then
+     * cut straight to `scene`'s track at full level: loaded ahead, so it starts
+     * on the dot.
+     */
+    playThen(scene: MusicScene, at: number): void {
+      this.cancelQueued();
+      const track = MUSIC_TRACKS[scene];
+      const next = new Audio(`assets/audio/music/${track}.mp3`);
+      next.loop = true;
+      next.preload = 'auto';
+      const cut = (): void => {
+        const left = at - this.audio.currentTime;
+        // Paused (tab hidden, autoplay blocked) the track stands still: keep waiting.
+        if (this.enabled && (this.audio.paused || left > 0.015)) {
+          this.queueTimer = window.setTimeout(cut, this.audio.paused ? 250 : left * 1000);
+          return;
+        }
+        window.clearInterval(this.fadeTimer);
+        this.audio.pause();
+        this.audio = next;
+        this.track = track;
+        next.volume = MUSIC_VOLUME * this.level;
+        if (this.wantsSound()) next.play().catch(() => undefined);
+      };
+      this.queueTimer = window.setTimeout(cut, Math.max(0, (at - this.audio.currentTime) * 1000));
+    }
+
+    private cancelQueued(): void {
+      window.clearTimeout(this.queueTimer);
+    }
+
+    /** Seconds into the playing track, or null while it is silent (off, blocked, paused). */
+    time(): number | null {
+      return this.enabled && !this.audio.paused ? this.audio.currentTime : null;
     }
 
     setEnabled(on: boolean): void {
@@ -157,5 +201,19 @@ namespace SE {
     audio.volume = Math.min(1, volume);
     audio.play().catch(() => undefined);
     return true;
+  }
+
+  /** The click files are normalized to a 0.7 peak; this trims them against the music. */
+  const CLICK_LEVEL = 0.9;
+  const CLICK_COUNT = 8;
+
+  /** One of the eight interface clicks, picked at random. */
+  export function playClick(): void {
+    const volume = CLICK_LEVEL * SFX.volume();
+    if (volume <= 0 || document.hidden) return;
+    const n = String(1 + Math.floor(Math.random() * CLICK_COUNT)).padStart(2, '0');
+    const audio = new Audio(`assets/audio/sfx/SimEarth2_Interface_Click_${n}.wav`);
+    audio.volume = Math.min(1, volume);
+    audio.play().catch(() => undefined);
   }
 }

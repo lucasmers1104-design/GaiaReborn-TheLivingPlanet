@@ -100,6 +100,12 @@ namespace SE {
   const RELIEF_MIN = 0.02;
   /** How long the zoom must rest before the map is redrawn at the new size. */
   const ZOOM_SETTLE_MS = 140;
+  /**
+   * Brushed tiles are recomposed at most this often (about every second
+   * frame at 60 Hz): composing their chunks is most of a stroke frame, and
+   * the dissolve (landfade.ts) hides the lower rate.
+   */
+  const TILE_REDRAW_MS = 45;
   /** Extra light per unit of elevation, so highlands read paler than lowland. */
   const ALTITUDE_LIGHT = 0.1;
   /** Peak-to-peak strength of the per-tile grain. */
@@ -301,6 +307,14 @@ namespace SE {
     brushRadius = 0;
     /** Outline colour of the brush preview. */
     brushColor = 'rgba(255,255,255,0.9)';
+    /** Drawn instead of the tool cursor, last, with identity transform (device pixels). */
+    decor: ((ctx: CanvasRenderingContext2D, cam: LandCamera, now: number) => void) | null = null;
+    /** Tiles to redraw on the next frame without a full redraw: x0, y0, x1, y1 (x may run past the wrap). */
+    private dirtyTiles: [number, number, number, number] | null = null;
+    /** A brush stroke runs: the world's progress waits with its full redraws (30–100 ms) until it ends. */
+    holdWorld = false;
+    /** When brushed tiles were last recomposed. */
+    private tilesAt = -Infinity;
 
     static readonly MIN_TILE = 10;
     static readonly MAX_TILE = 48;
@@ -369,6 +383,18 @@ namespace SE {
       this.dirty = true;
     }
 
+    /** Read the world into the terrain field and regions now, so the next full redraw has less to do. */
+    warm(world: WorldState): void {
+      if (this.pixelTerrain) this.land.refresh(world, this.layers.oceans);
+      this.regions.refresh(world);
+    }
+
+    /** Redraw only tiles [x0, x1] × [y0, y1] on the next frame (a brush changing the ground live). */
+    markDirtyTiles(x0: number, y0: number, x1: number, y1: number): void {
+      const d = this.dirtyTiles;
+      this.dirtyTiles = d ? [Math.min(d[0], x0), Math.min(d[1], y0), Math.max(d[2], x1), Math.max(d[3], y1)] : [x0, y0, x1, y1];
+    }
+
     /** The pixel terrain draws the ground; with the Biomes layer off the map shows flat colours as before. */
     private get pixelTerrain(): boolean {
       return TERRAIN_STYLE === 'pixel' && this.layers.biomes && !this.land.failed;
@@ -430,6 +456,21 @@ namespace SE {
       this.clampScroll();
     }
 
+    /**
+     * Set the zoom around the viewport's centre, fractions allowed: frames
+     * stretch the last full picture as during a wheel zoom, so a glide called
+     * every frame stays smooth; the real redraw follows once it rests.
+     */
+    glideZoom(px: number): void {
+      const cx = this.scrollX + this.cols / 2;
+      const cy = this.scrollY + this.rows / 2;
+      this.tilePx = px;
+      this.zoomedAt = performance.now();
+      this.scrollX = cx - this.cols / 2;
+      this.scrollY = cy - this.rows / 2;
+      this.clampScroll();
+    }
+
     /** Rings spreading from a tile for a few seconds, to show where something happened. */
     ping(x: number, y: number, color: string): void {
       this.ambient.ping(x, y, color, performance.now());
@@ -481,10 +522,13 @@ namespace SE {
         // A full redraw on a huge screen can take tens of milliseconds; the
         // slower it is, the less often the world's progress triggers one.
         const interval = Math.max(250, this.drawCost * 8);
-        const worldMoved = world.ticks !== this.baseTick && now - this.baseTime > interval;
+        const worldMoved = !this.holdWorld && world.ticks !== this.baseTick && now - this.baseTime > interval;
         const scrolled = this.scrollX !== this.baseScrollX || this.scrollY !== this.baseScrollY;
         if (this.dirty || key !== this.baseKey || worldMoved || (scrolled && !this.shiftBase(world, dpr))) {
           const t0 = performance.now();
+          const box = this.dirtyTiles;
+          if (box && this.pixelTerrain) this.land.refreshBox(world, this.layers.oceans, box[0], Math.max(0, box[1]), box[2], Math.min(GRID_H - 1, box[3]));
+          this.dirtyTiles = null;
           this.drawBase(world, dpr);
           this.drawCost = performance.now() - t0;
           this.baseKey = key;
@@ -494,6 +538,18 @@ namespace SE {
           this.baseScrollY = this.scrollY;
           this.baseTilePx = this.tilePx;
           this.dirty = false;
+        } else {
+          // Brushed ground dissolving into its new picture (landfade.ts) is redrawn every frame until done.
+          // Not when the world changed meanwhile (a settle): drawing would re-read the whole field; its full redraw follows.
+          const fade = this.pixelTerrain && this.land.current(world, this.layers.oceans) ? this.land.fadeBox() : null;
+          // Brushed tiles are re-read and recomposed (most of a stroke frame) at most every
+          // TILE_REDRAW_MS; the dissolve keeps moving on the frames between.
+          const changed = now - this.tilesAt >= TILE_REDRAW_MS ? this.dirtyTiles : null;
+          // A slow field read leaves the drawing (composing chunks, as slow) to the next frame.
+          if ((changed || fade) && this.redrawTiles(world, dpr, changed, fade) && changed) {
+            this.dirtyTiles = null;
+            this.tilesAt = now;
+          }
         }
         // The terrain or the cities ran out of time for composing: finish next frame.
         if ((this.pixelTerrain && this.land.pending) || this.cities.pending) this.dirty = true;
@@ -540,7 +596,47 @@ namespace SE {
         fx.drawTop(ctx, cam);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
-      this.drawCursor(ctx, this.tilePx);
+      if (this.decor) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.decor(ctx, cam, now);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      } else {
+        this.drawCursor(ctx, this.tilePx);
+      }
+    }
+
+    /**
+     * Redraw a box of changed tiles into the base picture, with the margin a
+     * tile's picture reads its neighbours from, together with the box `more`
+     * of tiles to draw again without re-reading them.
+     */
+    private redrawTiles(world: WorldState, dpr: number, changed: readonly [number, number, number, number] | null,
+      more: readonly [number, number, number, number] | null = null): boolean {
+      const pad = 4; // SIGNATURE_REACH (landfield.ts) + 1
+      if (changed && this.pixelTerrain && this.land.refreshBox(world, this.layers.oceans, changed[0], Math.max(0, changed[1]), changed[2], Math.min(GRID_H - 1, changed[3]))) return false;
+      let box = changed ?? more;
+      if (!box) return true;
+      if (changed && more) {
+        const s = Math.round((changed[0] - more[0]) / GRID_W) * GRID_W;
+        box = [Math.min(changed[0], more[0] + s), Math.min(changed[1], more[1]), Math.max(changed[2], more[2] + s), Math.max(changed[3], more[3])];
+      }
+      const span = box[2] - box[0] + 1 + 2 * pad;
+      if (span > GRID_W / 2) {
+        this.drawBase(world, dpr);
+        return true;
+      }
+      const size = this.tilePx;
+      // The copy of the box on the wrapping map that meets the view.
+      let rx = (((box[0] - pad - this.scrollX) % GRID_W) + GRID_W) % GRID_W;
+      if (rx > this.cols) rx -= GRID_W;
+      if (!this.pixelTerrain) {
+        this.tiles.setDeviceTile(size * dpr);
+        this.regions.refresh(world);
+      }
+      this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.baseCtx.imageSmoothingEnabled = false;
+      this.drawRegion(world, rx * size, (box[1] - pad - this.scrollY) * size, (rx + span) * size, (box[3] + 1 + pad - this.scrollY) * size);
+      return true;
     }
 
     /**

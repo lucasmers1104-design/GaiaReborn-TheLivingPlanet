@@ -200,7 +200,7 @@ namespace SE {
       let canvas: HTMLCanvasElement | null = null;
       if (list.length > 0 && row < GRID_H) {
         const px = new Uint8Array(w * h);
-        drawLandObjects(list, landArt, px, new Uint8Array(w * h), new Uint8Array(w * h), w, h, left, bottom - h);
+        drawLandObjects(list, landArt, px, new Uint8Array(w * h), new Uint8Array(w * h), w, h, left, bottom - h, null, null, f.shade);
         if (px.some((v) => v !== 0)) {
           canvas = document.createElement('canvas');
           canvas.width = w;

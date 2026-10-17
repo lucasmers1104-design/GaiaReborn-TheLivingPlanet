@@ -1,9 +1,8 @@
 /* =============================================================================
  * SimEarth 2.0 — settings
  * -----------------------------------------------------------------------------
- * The player's lasting preferences, defined once and shown twice: as check
- * items in the "Optionen" menu, and as the "Einstellungen" dialog on the title
- * screen, where the menu bar is out of reach.
+ * The player's lasting preferences, defined once and shown as the
+ * "Einstellungen" dialog, opened from the menu "Spiel" and the title screen.
  * ========================================================================== */
 
 namespace SE {
@@ -19,21 +18,6 @@ namespace SE {
     | { readonly kind: 'toggle'; readonly label: string; readonly icon: string; readonly iconOff?: string; readonly on: () => boolean; readonly toggle: () => void; readonly volume?: VolumeControl }
     | { readonly kind: 'choice'; readonly label: string; readonly options: readonly SettingOption[] }
   );
-
-  /** The settings as check items of a menu, with separators between blocks. */
-  export function settingMenuItems(defs: readonly SettingDef[]): MenuItem[] {
-    const items: MenuItem[] = [];
-    for (const d of defs) {
-      if (d.group && items.length > 0) items.push({ separator: true, label: '' });
-      if (d.kind === 'toggle') {
-        items.push({ label: d.label, icon: d.icon, iconOff: d.iconOff, action: d.toggle, checked: d.on });
-        const on = d.on;
-        if (d.volume) items.push({ label: `${d.label}: Lautstärke`, slider: d.volume, disabled: () => !on() });
-      }
-      else for (const o of d.options) items.push({ label: o.label, icon: o.icon, action: o.choose, checked: o.on });
-    }
-    return items;
-  }
 
   let settingSeq = 0;
 

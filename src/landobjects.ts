@@ -178,18 +178,22 @@ namespace SE {
     return { sprite, fx, fy, water, seq: (y * GRID_W + xw) * 16 + slot };
   }
 
+  /** Objects take this share of their tile's ground shading (TerrainField.shade), rounded to whole steps. */
+  const OBJECT_RELIEF = 0.6;
+
   /**
    * Draw placements into an index buffer of width `w` whose pixel (0, 0) is
    * world pixel (ox, oy): first each shadow on bare ground (never on water,
    * never twice), then the sprite. With `rise`, objects stand on the lifted
    * ground and every pixel whose screen shows nearer ground stays hidden.
    * `lifts`, when given, is the lift under each foot (the caller has dropped
-   * the plants above their line); else it is read from `rise`.
+   * the plants above their line); else it is read from `rise`. `shade`, the
+   * field's ground shading, tones each object like its tile's ground.
    */
   export function drawLandObjects(
     list: readonly LandPlacement[], art: LandArt,
     px: Uint8Array, water: Uint8Array, occupied: Uint8Array, w: number, h: number, ox: number, oy: number,
-    rise: LandRise | null = null, lifts: Float32Array | null = null,
+    rise: LandRise | null = null, lifts: Float32Array | null = null, shade: Float32Array | null = null,
   ): void {
     const shadow = art.shift[LAND_SHIFT_MAX + SHADOW_SHIFT];
     const top = rise ? rise.top : null;
@@ -228,6 +232,12 @@ namespace SE {
           occupied[k] = 2;
         }
       }
+      // The relief of the tile it stands on, in whole steps: hills read through a forest too.
+      let tone: Uint8Array | null = null;
+      if (shade) {
+        const s = Math.round(shade[clampY(Math.floor(p.fy / 16)) * GRID_W + wrapX(Math.floor(p.fx / 16))] * OBJECT_RELIEF);
+        if (s !== 0) tone = art.shift[LAND_SHIFT_MAX + clamp(s, -LAND_SHIFT_MAX, LAND_SHIFT_MAX)];
+      }
       const left = fx - t.ax;
       const up = fy - t.ay;
       const ux = look.x;
@@ -245,7 +255,7 @@ namespace SE {
         const base = up * w + left;
         for (let n = 0; n < uv.length; n++) {
           const k = base + uy[n] * w + ux[n];
-          px[k] = uv[n];
+          px[k] = tone ? tone[uv[n]] : uv[n];
           occupied[k] = 1;
         }
         continue;
@@ -258,7 +268,7 @@ namespace SE {
         if (p.water && water[k] !== 1) continue;
         // Nearer ground shows here (riseDepth, inlined: this runs for every sprite pixel).
         if (depth && y >= (top as Int16Array)[x] && y <= (bottom as Int32Array)[x] && depth[k] > ground + DEPTH_SLACK) continue;
-        px[k] = uv[n];
+        px[k] = tone ? tone[uv[n]] : uv[n];
         occupied[k] = 1;
       }
     }

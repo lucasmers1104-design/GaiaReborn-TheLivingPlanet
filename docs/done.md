@@ -9,3 +9,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-16 v0.8.2 feat(ui): title screen redesign and savanna trees
 - 2026-10-16 v0.8.3 feat(audio): background music on title screen and in game
 - 2026-10-17 v0.8.4 feat(world): Earth land bridges, active volcanoes, whales and beaches
+- 2026-10-18 v0.9.0 feat(game): cinematic intro, terraform brush, tool rail UI and WASD camera

@@ -376,7 +376,8 @@ namespace SE {
       SuccessionSystem.reset(world, i, Landscape.Rock);
     }
 
-    private static reset(world: WorldState, i: number, l: Landscape): void {
+    /** Put landscape `l` on the tile at once, with no succession under way. */
+    static reset(world: WorldState, i: number, l: Landscape): void {
       world.landscape[i] = l;
       world.landscapeNext[i] = l;
       world.landscapeHold[i] = 0;
@@ -509,31 +510,82 @@ namespace SE {
      * and climax target it gives.
      */
     private static classify(world: WorldState): void {
-      const { elevation, flora, soil } = world;
-      const zones = world.landscapeZone;
       const woody = woodyFloraMask(world);
       const cacti = cactiArrived(world);
-      for (let k = 0; k < landCount; k++) {
-        const i = landList[k];
-        let s1 = 0;
-        let s2 = 0;
-        let s3 = 0;
-        const base = i * 8;
+      for (let k = 0; k < landCount; k++) SuccessionSystem.classifyTile(world, landList[k], woody, cacti);
+    }
+
+    /** One land tile of `classify`. */
+    private static classifyTile(world: WorldState, i: number, woody: number, cacti: boolean): void {
+      const { elevation, flora, soil } = world;
+      const zones = world.landscapeZone;
+      let s1 = 0;
+      let s2 = 0;
+      let s3 = 0;
+      const base = i * 8;
+      for (let q = 0; q < 8; q++) {
+        const j = NB[base + q];
+        if (j < 0) continue;
+        const f = flora[j];
+        s3 |= s2 & f;
+        s2 |= s1 & f;
+        s1 |= f;
+      }
+      const p = flora[i] | s3;
+      present[i] = p;
+      const z = landscapeZone(tempSm[i], moistSm[i], landElev[i], zoneCover(world, i), zones[i], elevation[i], world.terraformed[i] !== 0);
+      allowedTemp[i] = lagged(allowedTemp[i], tempSm[i], SCHMITT_TEMP);
+      allowedMoist[i] = lagged(allowedMoist[i], moistSm[i], SCHMITT_MOISTURE);
+      zones[i] = z;
+      target[i] = ladderTarget(fillLadder(z, p, soil[i] >= SOIL_EARTH_U8, lad, woody, cacti), lad);
+    }
+
+    /**
+     * Smoothed climate, zone, target, substrate and density of the land
+     * tiles in `tiles` only, read off their own neighbourhood as the full
+     * pass reads it but without its coherence filters: the terraforming
+     * brush's settle, where a full pass would stall a frame. The next full
+     * target refresh (every SUCCESSION_TARGET_INTERVAL ticks) redoes them.
+     * Only valid for the world the last full pass targeted; otherwise the
+     * next tick refreshes everything anyway.
+     */
+    static refreshTiles(world: WorldState, tiles: readonly number[]): void {
+      const { elevation, temperature, moisture, vegetation } = world;
+      const R = LANDSCAPE_SMOOTH_RADIUS;
+      const lapse = LAPSE_RATE * ELEVATION_KM;
+      for (const i of tiles) {
+        if (elevation[i] < 0) continue;
+        let sum = elevation[i];
+        let n = 1;
         for (let q = 0; q < 8; q++) {
-          const j = NB[base + q];
-          if (j < 0) continue;
-          const f = flora[j];
-          s3 |= s2 & f;
-          s2 |= s1 & f;
-          s1 |= f;
+          const j = NB[i * 8 + q];
+          if (j >= 0 && elevation[j] >= 0) { sum += elevation[j]; n++; }
         }
-        const p = flora[i] | s3;
-        present[i] = p;
-        const z = landscapeZone(tempSm[i], moistSm[i], landElev[i], zoneCover(world, i), zones[i], elevation[i]);
-        allowedTemp[i] = lagged(allowedTemp[i], tempSm[i], SCHMITT_TEMP);
-        allowedMoist[i] = lagged(allowedMoist[i], moistSm[i], SCHMITT_MOISTURE);
-        zones[i] = z;
-        target[i] = ladderTarget(fillLadder(z, p, soil[i] >= SOIL_EARTH_U8, lad, woody, cacti), lad);
+        landElev[i] = sum / n;
+      }
+      const woody = woodyFloraMask(world);
+      const cacti = cactiArrived(world);
+      for (const i of tiles) {
+        if (elevation[i] < 0) continue;
+        const x = i % GRID_W;
+        const y = (i / GRID_W) | 0;
+        let st = 0;
+        let sm = 0;
+        let sc = 0;
+        let n = 0;
+        for (let yy = Math.max(0, y - R); yy <= Math.min(GRID_H - 1, y + R); yy++) {
+          for (let dx = -R; dx <= R; dx++) {
+            const j = yy * GRID_W + wrapX(x + dx);
+            const e = elevation[j];
+            if (e >= 0) { st += temperature[j] + lapse * e; sm += moisture[j]; sc += vegetation[j]; n++; }
+          }
+        }
+        tempSm[i] = st / n - altitudeCooling(landElev[i]);
+        moistSm[i] = sm / n;
+        coverSm[i] = Math.max(0, sc / n);
+        SuccessionSystem.classifyTile(world, i, woody, cacti);
+        world.substrate[i] = SuccessionSystem.substrateFor(world, i, world.landscapeZone[i], moistSm[i]);
+        SuccessionSystem.densityAt(world, i);
       }
     }
 
@@ -617,6 +669,7 @@ namespace SE {
         m + SCHMITT_MOISTURE >= WETLAND_MOISTURE && e - SCHMITT_ELEVATION < WETLAND_MAX_ELEVATION);
       const bare = flagOptions(c + SCHMITT_COVER < BARE_COVER, c - SCHMITT_COVER < BARE_COVER);
       const soilOk = world.soil[i] >= SOIL_EARTH_U8;
+      const brushed = world.terraformed[i] !== 0;
       const p = present[i];
       let mask = 0;
       for (let t = 0; t <= TempClass.Tropical; t++) {
@@ -625,8 +678,9 @@ namespace SE {
           const snowT = snowTemp(mc);
           // The lowland (belt 0) if the tile may count as low, and the
           // mountain belts its temperature band spans if it may count as high.
-          const low = mountainBelt(T + SCHMITT_TEMP, snowT);
-          const top = mountain ? mountainBelt(T - SCHMITT_TEMP, snowT) : 0;
+          const summit = brushed && mc !== MoistClass.Dry;
+          const low = summit && h - SCHMITT_ELEVATION >= SUMMIT_SNOW_ELEVATION ? 4 : mountainBelt(T + SCHMITT_TEMP, snowT);
+          const top = !mountain ? 0 : summit && h + SCHMITT_ELEVATION >= SUMMIT_SNOW_ELEVATION ? 4 : mountainBelt(T - SCHMITT_TEMP, snowT);
           for (let a = lowland ? 0 : low; a <= top; a = a === 0 ? low : a + 1) {
             for (let f = 0; f < 4; f++) {
               if (!((wet >> (f & 1)) & 1) || !((bare >> ((f >> 1) & 1)) & 1)) continue;
@@ -794,13 +848,7 @@ namespace SE {
           // Dry, low land that is not cold is sand, blown by the wind with or
           // without plants; polar deserts stay gravel. Soil the plants built
           // stays Erde.
-          const z = zones[i];
-          const s = soil[i];
-          substrate[i] = (z & ZONE_WETLAND) ? Substrate.Mire
-            : (z & ZONE_ROCKBELT) ? Substrate.Rock
-              : s <= SOIL_REGOLITH_U8 && moistSm[i] < SAND_MOISTURE && elevation[i] < SAND_MAX_ELEVATION &&
-                zoneTemp(z) >= TempClass.Cool ? Substrate.Sand
-                : s < SOIL_EARTH_U8 ? Substrate.Rock : Substrate.Soil;
+          substrate[i] = SuccessionSystem.substrateFor(world, i, zones[i], moistSm[i]);
         }
         // Most tiles rest at their target: nothing to step.
         const cur = landscape[i];
@@ -813,6 +861,17 @@ namespace SE {
         // ticks only a changed landscape needs it at once.
         if (full || changed) SuccessionSystem.densityAt(world, i);
       }
+    }
+
+    /** Substrate of land tile i in zone `z` at moisture `moist`; the brush's low coasts are sand (terraformSand). */
+    static substrateFor(world: WorldState, i: number, z: number, moist: number): Substrate {
+      if (terraformSand(world, i)) return Substrate.Sand;
+      const s = world.soil[i];
+      return (z & ZONE_WETLAND) ? Substrate.Mire
+        : (z & ZONE_ROCKBELT) ? Substrate.Rock
+          : s <= SOIL_REGOLITH_U8 && moist < SAND_MOISTURE && world.elevation[i] < SAND_MAX_ELEVATION &&
+            zoneTemp(z) >= TempClass.Cool ? Substrate.Sand
+            : s < SOIL_EARTH_U8 ? Substrate.Rock : Substrate.Soil;
     }
 
     /** One tile's step of `settle`. */
@@ -891,7 +950,7 @@ namespace SE {
     /* ----------------------------------------------------------- density -- */
 
     /** Density step of a land tile from its plant cover, with a band in favour of the current step. */
-    private static densityAt(world: WorldState, i: number): void {
+    static densityAt(world: WorldState, i: number): void {
       const steps = LANDSCAPE_DENSITIES[world.landscape[i]];
       if (steps <= 1) { world.landscapeDensity[i] = 0; return; }
       // Forests know light and dense only, split at the upper bound.

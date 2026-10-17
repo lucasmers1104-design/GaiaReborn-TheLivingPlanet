@@ -10,12 +10,26 @@ namespace SE {
   const SPEED_NAMES = ['Pause', 'Sehr langsam', 'Langsam', 'Mittel', 'Schnell'];
   /** Wall-clock milliseconds per simulation tick, index-aligned with SPEED_NAMES. */
   const SPEED_TICK_MS = [0, 2500, 1000, 400, 150];
-  const SPEED_ICONS = ['pause', 'speed-slow', 'speed-slow', 'speed-normal', 'speed-fast'];
+  /** Keyboard shortcut of each tool, index-aligned with TOOL_NAMES (wired in wireKeyboard). */
+  const TOOL_KEYS = ['U', 'V', 'H', 'P', 'L', 'K'];
+  /** The overview-map legend that matches a climate overlay's colours (winds and currents are arrows). */
+  const OVERLAY_LEGEND_MODES: readonly (MapMode | null)[] = [MapMode.AirTemp, MapMode.Rainfall, null, null, MapMode.OceanTemp, null];
   /** Unsaved play is written to the autosave slot this often while running. */
   const AUTOSAVE_MS = 3 * 60 * 1000;
   const SETTINGS_KEY = 'simearth2.settings';
   /** Minimum gap between flat overview-map redraws. */
   const MAP_RENDER_MS = 250;
+  /** A finger held this long without moving starts the terraforming brush. */
+  const TOUCH_HOLD_MS = 150;
+  /** WASD by KeyboardEvent.code: the direction each key pans the map. */
+  const PAN_KEYS: Readonly<Record<string, readonly [number, number]>> = {
+    KeyW: [0, -1], KeyA: [-1, 0], KeyS: [0, 1], KeyD: [1, 0],
+  };
+  /** Screen pixels per second the held keys pan at full speed, reached over PAN_EASE_MS: a tap nudges, holding sweeps. */
+  const PAN_PX_PER_S = 900;
+  const PAN_EASE_MS = 200;
+  /** A tap with the brush pushes as long as a hold of this many ms. */
+  const TAP_PUSH_MS = 150;
 
   /** Footprint radius of each disaster, matching EventSystem's brushes. */
   const EVENT_RADIUS: readonly number[] = [8, 8, 6, 4, 6, 6, 6, 8];
@@ -62,6 +76,10 @@ namespace SE {
     epoch: EpochId;
     /** "Effekte reduzieren": disasters without shaking or flashes, no surf or river current. */
     reduceEffects: boolean;
+    /** The full intro has played (or been skipped); it only comes before the first world, later ones get the short intro. */
+    introSeen: boolean;
+    /** Developer mode (INTRO_DEV) only: every "Spiel starten" plays the short intro; otherwise the full one. */
+    introDevOff: boolean;
   }
 
   export class App {
@@ -109,6 +127,11 @@ namespace SE {
     private canvas!: HTMLCanvasElement;
     private dock!: HTMLElement;
     private toolTitle!: HTMLElement;
+    private toolKey!: HTMLElement;
+    private layerPop!: HTMLElement;
+    private layerBtn!: HTMLButtonElement;
+    private mapBtn!: HTMLButtonElement;
+    private overlayLegend!: HTMLElement;
     private toolHint!: HTMLElement;
     private toolOptions!: HTMLElement;
     private goalEl!: HTMLElement;
@@ -129,7 +152,7 @@ namespace SE {
     /* ---- state ---- */
     private speed = 3;
     private lastRunningSpeed = 3;
-    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion() };
+    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
     private mapShowsInfo = false;
     private selection: ToolSelection = {
       tool: Tool.Examine, altitudeRaise: true, flora: Flora.LandPlants, clearing: false,
@@ -144,7 +167,16 @@ namespace SE {
     private readonly touches = new Map<number, { x: number; y: number }>();
     private pinch: { d: number; px: number } | null = null;
     /** A finger that has touched the map but not yet tapped, stroked or pinched. */
-    private touchPending: { id: number; x: number; y: number } | null = null;
+    private touchPending: { id: number; x: number; y: number; t: number } | null = null;
+    /** The terraforming brush, and where the pointer holding it is (client pixels). */
+    private readonly terraform = new TerraformTool();
+    private strokeAt: { x: number; y: number } | null = null;
+    /** WASD keys held down (KeyboardEvent.code), and how far the pan has eased in, 0..1. */
+    private readonly panKeys = new Set<string>();
+    private panEase = 0;
+    private lastNudge = 0;
+    /** A finished stroke whose settling waits a frame, so releasing the brush never stalls the frame that shows it. */
+    private settleDue: { world: WorldState; steps: (() => void)[]; phase: 0 | 1 | 2 } | null = null;
     /** Progress made since the last save — guards New Planet and Load. */
     private unsaved = false;
     private savingNow = false;
@@ -172,6 +204,9 @@ namespace SE {
       this.loadSettings();
       this.music = new MusicPlayer(this.settings.music, this.settings.musicVolume);
       SFX.volume = () => (this.settings.sound ? this.settings.soundVolume : 0);
+      // Every press anywhere, UI or map: capture phase, so stopPropagation can't swallow it.
+      // Not under the intro: its music has the stage.
+      document.addEventListener('pointerdown', (e) => { if (e.button === 0 && !activeIntro) playClick(); }, { capture: true });
 
       this.windows = new WindowManager(this.stage);
       this.notifier = new Notifier(el<HTMLElement>('toasts'), el<HTMLElement>('milestones'), {
@@ -233,34 +268,49 @@ namespace SE {
       this.hazards.onStart = (h) => this.hazardNews.push(h);
       this.wireCanvas(canvas);
 
-      /* ---- tool dock ---- */
-      const dock = make('aside', 'dock glass');
+      /* ---- tool rail and the active tool's card ---- */
+      const dock = make('aside', 'dock');
       dock.setAttribute('aria-label', 'Werkzeuge');
       this.dock = dock;
-      const tools = make('div', 'dock-tools');
+      const tools = make('div', 'dock-tools glass');
       tools.setAttribute('role', 'toolbar');
       tools.setAttribute('aria-label', 'Werkzeuge');
+      tools.setAttribute('aria-orientation', 'vertical');
       for (let t = 0; t < TOOL_NAMES.length; t++) {
         const tool = t as Tool;
         const b = button({
-          label: TOOL_NAMES[t], icon: uiIcon(TOOL_ICONS[t]), cls: 'tool-btn',
-          title: `${TOOL_NAMES[t]} (Taste ${['U', 'V', 'H', 'P', 'L', 'K'][t]})`,
-          onClick: () => this.selectTool(tool),
+          label: TOOL_NAMES[t], icon: uiIcon(TOOL_ICONS[t]), cls: 'tool-btn', showLabel: false,
+          title: `${TOOL_NAMES[t]} (Taste ${TOOL_KEYS[t]})`,
+          // The active tool's button opens and closes its card.
+          onClick: () => {
+            if (this.selection.tool === tool && !this.settings.dockCollapsed) this.setDockCollapsed(true);
+            else this.selectTool(tool);
+          },
         });
+        b.setAttribute('aria-keyshortcuts', TOOL_KEYS[t]);
+        const key = make('span', 'tool-key', TOOL_KEYS[t]);
+        key.setAttribute('aria-hidden', 'true');
+        b.appendChild(key);
         tools.appendChild(b);
         this.toolButtons.set(tool, b);
       }
-      const collapse = button({
-        label: 'Werkzeugbereich ein-/ausklappen', icon: uiIcon('chevron-right'), cls: 'icon-btn dock-collapse', showLabel: false,
-        onClick: () => this.setDockCollapsed(!this.settings.dockCollapsed),
-      });
-      tools.appendChild(collapse);
 
-      const panel = make('div', 'dock-panel');
+      const panel = make('section', 'dock-panel glass');
+      panel.id = 'tool-card';
+      const head = make('div', 'dock-head');
       this.toolTitle = make('h2', 'dock-title');
+      this.toolKey = make('span', 'kbd');
+      this.toolKey.setAttribute('aria-hidden', 'true');
+      const close = button({
+        label: 'Werkzeugkarte schließen', icon: uiIcon('close'), cls: 'icon-btn dock-close', showLabel: false,
+        onClick: () => this.setDockCollapsed(true),
+      });
+      head.append(this.toolTitle, this.toolKey, close);
+      panel.setAttribute('aria-labelledby', 'tool-card-title');
+      this.toolTitle.id = 'tool-card-title';
       this.toolHint = make('p', 'dock-hint');
       this.toolOptions = make('div', 'tool-options');
-      panel.append(this.toolTitle, this.toolHint, this.toolOptions, this.buildLayerBox());
+      panel.append(head, this.toolHint, this.toolOptions);
       dock.append(tools, panel);
       this.stage.appendChild(dock);
       this.setDockCollapsed(this.settings.dockCollapsed);
@@ -272,61 +322,138 @@ namespace SE {
       this.goalAnnounce.setAttribute('aria-live', 'polite');
       this.stage.appendChild(this.goalAnnounce);
 
-      /* ---- zoom controls for the map ---- */
+      /* ---- map controls: layers, overview map, zoom ---- */
       const zoom = make('div', 'map-zoom glass');
+      zoom.setAttribute('role', 'toolbar');
+      zoom.setAttribute('aria-label', 'Karte');
+      zoom.setAttribute('aria-orientation', 'vertical');
+      this.layerBtn = button({
+        label: 'Kartenebenen', icon: uiIcon('layers'), cls: 'icon-btn', showLabel: false, title: 'Kartenebenen und Klima-Überlagerung',
+        onClick: () => this.setLayersOpen(this.layerPop.hidden),
+      });
+      this.layerBtn.setAttribute('aria-expanded', 'false');
+      this.layerBtn.setAttribute('aria-controls', 'layer-pop');
+      this.mapBtn = button({
+        label: 'Übersichtskarte', icon: uiIcon('map'), cls: 'icon-btn', showLabel: false, title: 'Übersichtskarte (M)',
+        onClick: () => this.windows.toggle('map'),
+      });
       zoom.append(
-        button({ label: 'Hineinzoomen', icon: uiIcon('zoom-in'), cls: 'icon-btn', showLabel: false, onClick: () => this.zoomMap(1.25) }),
-        button({ label: 'Herauszoomen', icon: uiIcon('zoom-out'), cls: 'icon-btn', showLabel: false, onClick: () => this.zoomMap(0.8) }),
+        this.layerBtn, this.mapBtn, make('div', 'map-zoom-sep'),
+        button({ label: 'Hineinzoomen', icon: uiIcon('zoom-in'), cls: 'icon-btn', showLabel: false, title: 'Hineinzoomen (+)', onClick: () => this.zoomMap(1.25) }),
+        button({ label: 'Herauszoomen', icon: uiIcon('zoom-out'), cls: 'icon-btn', showLabel: false, title: 'Herauszoomen (−)', onClick: () => this.zoomMap(0.8) }),
       );
-      this.stage.appendChild(zoom);
+      this.layerPop = this.buildLayerPopover();
+      this.stage.append(this.layerPop, zoom);
+      // A click anywhere else closes the popover, as a menu would.
+      document.addEventListener('pointerdown', (e) => {
+        if (this.layerPop.hidden || !(e.target instanceof Node)) return;
+        if (!this.layerPop.contains(e.target) && !this.layerBtn.contains(e.target)) this.setLayersOpen(false);
+      });
 
       this.hoverTip = make('div', 'hover-tip');
       this.hoverTip.setAttribute('aria-hidden', 'true');
       this.stage.appendChild(this.hoverTip);
 
-      this.selectTool(Tool.Examine);
+      this.selectTool(Tool.Examine, false);
     }
 
-    private buildLayerBox(): HTMLElement {
-      const box = document.createElement('details');
-      box.className = 'layer-box';
-      // Open where there is room for it; on a phone the dock stays short.
-      box.open = this.stage.clientWidth >= NARROW_PX;
-      const summary = document.createElement('summary');
-      summary.append(img(uiIcon('layers'), 'ico'), make('span', undefined, 'Kartenebenen'));
-      box.appendChild(summary);
+    /** The map-layers popover beside the map controls: additive layers and one climate overlay. */
+    private buildLayerPopover(): HTMLElement {
+      const pop = make('section', 'layer-pop glass');
+      pop.id = 'layer-pop';
+      pop.hidden = true;
+      pop.setAttribute('aria-labelledby', 'layer-pop-title');
+      const head = make('div', 'layer-pop-head');
+      const title = make('h2', 'layer-pop-title', 'Kartenebenen');
+      title.id = 'layer-pop-title';
+      head.append(img(uiIcon('layers'), 'ico'), title, button({
+        label: 'Kartenebenen schließen', icon: uiIcon('close'), cls: 'icon-btn layer-pop-close', showLabel: false,
+        onClick: () => this.setLayersOpen(false, true),
+      }));
 
-      const layers = make('div', 'chip-grid');
+      const layers = make('div', 'layer-grid');
+      layers.setAttribute('role', 'group');
+      layers.setAttribute('aria-label', 'Ebenen, beliebig kombinierbar');
       const keys: (keyof EditView['layers'])[] = ['oceans', 'biomes', 'cities', 'life', 'events', 'clouds'];
       DATA_LAYERS.forEach((name, i) => {
         const key = keys[i];
         const b = button({
-          label: name, icon: uiIcon(DATA_LAYER_ICONS[i]), cls: 'chip-btn',
+          label: name, icon: uiIcon(DATA_LAYER_ICONS[i]), cls: 'layer-tg',
           onClick: () => { this.editView.layers[key] = !this.editView.layers[key]; this.syncLayerButtons(); this.editView.markDirty(); },
         });
         layers.appendChild(b);
         this.layerButtons.push(b);
       });
-      const overlays = make('div', 'chip-grid');
-      OVERLAY_NAMES.forEach((name, i) => {
-        const ov = i as Overlay;
-        const b = button({
-          label: name, icon: uiIcon(OVERLAY_ICONS[i]), cls: 'chip-btn',
-          onClick: () => { this.editView.overlay = this.editView.overlay === ov ? Overlay.None : ov; this.syncLayerButtons(); this.editView.markDirty(); },
-        });
+
+      const overlays = make('div', 'overlay-list');
+      overlays.setAttribute('role', 'radiogroup');
+      overlays.setAttribute('aria-labelledby', 'overlay-h');
+      const radio = (ov: Overlay, name: string, icon: string | null): void => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'overlay-radio';
+        b.setAttribute('role', 'radio');
+        b.append(make('i', 'overlay-dot'), icon ? img(icon, 'ico') : make('span', 'ico'), make('span', undefined, name));
+        b.addEventListener('click', () => { this.editView.overlay = ov; this.syncLayerButtons(); this.editView.markDirty(); });
         overlays.appendChild(b);
         this.overlayButtons.set(ov, b);
+      };
+      radio(Overlay.None, 'Keine', null);
+      OVERLAY_NAMES.forEach((name, i) => radio(i as Overlay, name, uiIcon(OVERLAY_ICONS[i])));
+      const overlayHead = make('div', 'layer-h', 'Klima-Überlagerung · eine zur Zeit');
+      overlayHead.id = 'overlay-h';
+      this.overlayLegend = make('div', 'map-legend overlay-legend');
+      pop.append(head, layers, overlayHead, overlays, this.overlayLegend);
+      pop.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.setLayersOpen(false, true); }
       });
-      box.append(make('div', 'layer-h', 'Ebenen (beliebig kombinierbar)'), layers, make('div', 'layer-h', 'Klima-Überlagerung (eine)'), overlays);
-      return box;
+      return pop;
+    }
+
+    private setLayersOpen(open: boolean, refocus = false): void {
+      this.layerPop.hidden = !open;
+      setPressed(this.layerBtn, open);
+      this.layerBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) this.syncLayerButtons();
+      if (refocus) this.layerBtn.focus();
     }
 
     private syncLayerButtons(): void {
       const keys: (keyof EditView['layers'])[] = ['oceans', 'biomes', 'cities', 'life', 'events', 'clouds'];
       this.layerButtons.forEach((b, i) => setPressed(b, this.editView.layers[keys[i]]));
-      for (const [ov, b] of this.overlayButtons) setPressed(b, this.editView.overlay === ov);
+      for (const [ov, b] of this.overlayButtons) {
+        const on = this.editView.overlay === ov;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      }
+      // The layers button glows while the map shows a climate overlay.
+      this.layerBtn.classList.toggle('lit', this.editView.overlay !== Overlay.None);
+      this.renderOverlayLegend();
     }
 
+    /** The colour scale of the active climate overlay, under its radio list. */
+    private renderOverlayLegend(): void {
+      const host = this.overlayLegend;
+      const ov = this.editView.overlay;
+      const mode = ov === Overlay.None ? null : OVERLAY_LEGEND_MODES[ov];
+      host.hidden = ov === Overlay.None;
+      if (mode !== null) { renderMapLegend(host, this.world, mode, false); return; }
+      host.innerHTML = '';
+      if (ov === Overlay.Magma) {
+        const box = make('div', 'legend-strip');
+        const bar = make('div', 'legend-strip-bar');
+        bar.style.background = `linear-gradient(90deg, ${MAGMA_RAMP.map(([v, c]) => `${rgbCss(c)} ${v * 100}%`).join(', ')})`;
+        const marks = make('div', 'legend-strip-labels');
+        marks.append(make('span', undefined, 'wenig Magma'), make('span', undefined, 'viel'));
+        box.append(bar, marks);
+        host.appendChild(box);
+      } else if (ov !== Overlay.None) {
+        host.appendChild(make('p', 'overlay-note', 'Pfeile zeigen die Richtung.'));
+      }
+    }
+
+    /** Closes or reopens the active tool's card; the rail stays. */
     private setDockCollapsed(on: boolean): void {
       this.settings.dockCollapsed = on;
       this.dock.classList.toggle('collapsed', on);
@@ -350,6 +477,7 @@ namespace SE {
             // about to do with the tool is cancelled, and nothing is charged.
             this.touchPending = null;
             this.painting = false;
+            this.endStroke();
             const [a, b] = Array.from(this.touches.values());
             this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, px: this.editView.tilePx };
             this.panState = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, sx: this.editView.scrollX, sy: this.editView.scrollY, id: -1 };
@@ -362,7 +490,7 @@ namespace SE {
           }
           // One finger: wait to see whether this is a tap, a stroke or the
           // start of a pinch before the tool does anything.
-          this.touchPending = { id: e.pointerId, x: e.clientX, y: e.clientY };
+          this.touchPending = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
           return;
         }
         // Only the primary button uses the tool. Middle and right drag the
@@ -375,6 +503,10 @@ namespace SE {
           canvas.classList.add('panning');
           return;
         }
+        if (this.selection.tool === Tool.SetAltitude) {
+          this.beginStroke(e.clientX, e.clientY, e.shiftKey);
+          return;
+        }
         this.painting = true;
         this.lastPainted = null;
         this.applyAt(e.clientX, e.clientY);
@@ -382,6 +514,8 @@ namespace SE {
 
       canvas.addEventListener('pointermove', (e) => {
         this.editView.hover = this.editView.tileAt(e.clientX, e.clientY);
+        const box = canvas.getBoundingClientRect();
+        this.terraform.pointer = this.editView.hover ? { x: e.clientX - box.left, y: e.clientY - box.top } : null;
         this.updateHoverTip(e);
         if (e.pointerType === 'touch' && this.touches.has(e.pointerId)) {
           this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -405,6 +539,8 @@ namespace SE {
             if (App.isSingleShot(this.selection.tool)) {
               // Dragging with a one-shot tool moves the map, as any map app does.
               this.panState = { x: pending.x, y: pending.y, sx: this.editView.scrollX, sy: this.editView.scrollY, id: e.pointerId };
+            } else if (this.selection.tool === Tool.SetAltitude) {
+              this.beginStroke(pending.x, pending.y, false);
             } else {
               this.painting = true;
               this.lastPainted = null;
@@ -417,6 +553,11 @@ namespace SE {
           this.editView.scrollX = this.panState.sx + (this.panState.x - e.clientX) / size;
           this.editView.scrollY = this.panState.sy + (this.panState.y - e.clientY) / size;
           this.editView.scrollBy(0, 0);
+          return;
+        }
+        if (e.pointerType === 'mouse') this.terraform.invert = e.shiftKey;
+        if (this.strokeAt) {
+          this.strokeAt = { x: e.clientX, y: e.clientY };
           return;
         }
         if (this.painting && !App.isSingleShot(this.selection.tool)) this.applyAt(e.clientX, e.clientY);
@@ -436,6 +577,7 @@ namespace SE {
         if (this.panState && (this.panState.id === e.pointerId || this.touches.size === 0)) this.panState = null;
         this.painting = false;
         this.lastPainted = null;
+        this.endStroke();
         canvas.classList.remove('panning');
         if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
       };
@@ -443,11 +585,16 @@ namespace SE {
       canvas.addEventListener('pointercancel', (e) => stop(e, false));
       canvas.addEventListener('pointerleave', () => {
         this.editView.hover = null;
+        this.terraform.pointer = null;
         this.hoverTip.classList.remove('show');
       });
       canvas.addEventListener('contextmenu', (e) => e.preventDefault());
       canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
+        if (e.altKey && this.selection.tool === Tool.SetAltitude) {
+          this.resizeBrush(e.deltaY < 0 ? 1 : -1);
+          return;
+        }
         this.editView.zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
       }, { passive: false });
       canvas.addEventListener('keydown', (e) => {
@@ -460,7 +607,8 @@ namespace SE {
 
     private updateHoverTip(e: PointerEvent): void {
       const tile = this.editView.hover;
-      if (!tile || e.pointerType !== 'mouse' || this.panState) {
+      // The brush shows stage and height in its own label.
+      if (!tile || e.pointerType !== 'mouse' || this.panState || this.selection.tool === Tool.SetAltitude) {
         this.hoverTip.classList.remove('show');
         return;
       }
@@ -572,7 +720,7 @@ namespace SE {
       buildGlossary(glossBody);
 
       // Examine
-      const exam = this.windows.create({ id: 'examine', title: 'Untersuchen', icon: uiIcon('examine'), x: 100, y: 12, width: 398, height: 540, cls: 'win-examine', docked: true, onShow: () => revealExaminedTile() });
+      const exam = this.windows.create({ id: 'examine', title: 'Untersuchen', icon: uiIcon('examine'), x: 84, y: 12, width: 398, height: 540, cls: 'win-examine', docked: true, onShow: () => revealExaminedTile() });
       const revealExaminedTile = installExamineDock(exam, this.editView, this.canvas, () => this.examineTile);
       const examBody = make('div', 'examine-body');
       exam.body.appendChild(examBody);
@@ -776,15 +924,19 @@ namespace SE {
         checked: () => this.windows.isVisible(id),
       });
 
+      // Three menus with text; speed lives in the status bar, map layers at the map.
       const defs: MenuDef[] = [
         {
-          title: 'Datei', icon: uiIcon('menu-file'),
+          title: 'Spiel', icon: uiIcon('menu-file'),
           items: [
             { label: 'Neuer Planet …', icon: uiIcon('new-planet'), action: () => void this.confirmNewPlanet() },
-            { label: 'Spielstände …', icon: uiIcon('slot'), hint: 'S', action: () => void this.openSaves() },
+            { label: 'Spielstände …', icon: uiIcon('slot'), hint: 'O', action: () => void this.openSaves() },
             { label: 'Schnell speichern', icon: uiIcon('save'), hint: 'Strg+S', action: () => void this.saveTo(this.settings.lastSlot) },
-            { separator: true, label: '' },
             { label: 'Schnappschuss der Karte', icon: uiIcon('snapshot'), action: () => this.snapshot() },
+            { separator: true, label: '' },
+            { label: 'Zum letzten Ereignis springen', icon: uiIcon('target'), action: () => this.gotoEvent() },
+            { separator: true, label: '' },
+            { label: 'Einstellungen …', icon: uiIcon('menu-options'), action: () => void openSettings(this.settingDefs()) },
           ],
         },
         {
@@ -792,65 +944,35 @@ namespace SE {
           items: [
             winItem('Evolutionsbaum', 'evolution', 'evolution', 'E'),
             winItem('Chronik', 'chronicle', 'chronicle', 'C'),
-            winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'A'),
+            winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'X'),
             winItem('Übersichtskarte', 'map', 'map', 'M'),
             winItem('Gaia', 'gaia', 'gaia'),
             winItem('Verlauf', 'history', 'history'),
             winItem('Bericht', 'report', 'report', 'B'),
             winItem('Glossar', 'glossary', 'glossary'),
             { separator: true, label: '' },
-            {
-              label: 'Werkzeugbereich anzeigen', icon: uiIcon('layers'),
-              action: () => this.setDockCollapsed(!this.settings.dockCollapsed),
-              checked: () => !this.settings.dockCollapsed,
-            },
             { label: 'Fenster zurücksetzen', icon: uiIcon('zoom-fit'), action: () => this.windows.resetLayout() },
           ],
         },
         {
-          title: 'Modelle', icon: uiIcon('menu-models'),
+          title: 'Planet', icon: uiIcon('menu-models'),
           items: [
-            modelItem('Geosphäre', 'model-geo'),
-            modelItem('Atmosphäre', 'model-atmo'),
-            modelItem('Biosphäre', 'model-bio'),
-            modelItem('Zivilisation', 'model-civ'),
-          ],
-        },
-        {
-          title: 'Diagramme', icon: uiIcon('menu-graphs'),
-          items: [
+            modelItem('Modell Geosphäre', 'model-geo'),
+            modelItem('Modell Atmosphäre', 'model-atmo'),
+            modelItem('Modell Biosphäre', 'model-bio'),
+            modelItem('Modell Zivilisation', 'model-civ'),
+            { separator: true, label: '' },
             winItem('Luftzusammensetzung', 'graph-air', 'overlay-wind'),
             winItem('Lebensraumanteile', 'graph-biomes', 'layer-biomes'),
             winItem('Lebensformen', 'graph-life', 'layer-life'),
             winItem('Technologie', 'graph-tech', 'layer-cities'),
           ],
         },
-        {
-          title: 'Optionen', icon: uiIcon('menu-options'),
-          items: [
-            { label: 'Zum letzten Ereignis springen', icon: uiIcon('target'), action: () => this.gotoEvent() },
-            {
-              label: 'Ereignisse auf der Karte zeigen', icon: uiIcon('layer-events'),
-              action: () => { this.editView.layers.events = !this.editView.layers.events; this.syncLayerButtons(); this.editView.markDirty(); },
-              checked: () => this.editView.layers.events,
-            },
-            { separator: true, label: '' },
-            ...settingMenuItems(this.settingDefs()),
-          ],
-        },
-        {
-          title: 'Tempo', icon: uiIcon('menu-speed'),
-          items: SPEED_NAMES.map((name, i): MenuItem => ({
-            label: name, icon: uiIcon(SPEED_ICONS[i]), hint: i === 0 ? 'Leertaste' : String(i),
-            action: () => this.setSpeed(i),
-            checked: () => this.speed === i,
-          })),
-        },
       ];
       this.menuBar = new MenuBar(el('menubar'), defs);
     }
 
-    /** The lasting preferences, for the "Optionen" menu and the title's settings dialog. */
+    /** The lasting preferences, for the "Einstellungen" dialog (menu "Spiel" and the title screen). */
     private settingDefs(): SettingDef[] {
       return [
         {
@@ -876,6 +998,15 @@ namespace SE {
           toggle: () => { this.settings.reduceEffects = !this.settings.reduceEffects; this.editView.reduceEffects = this.settings.reduceEffects; this.saveSettings(); },
         },
         {
+          kind: 'toggle', label: INTRO_DEV ? 'Studio- und Logo-Intro bei jedem Start zeigen (Dev)' : 'Ganzes Intro beim nächsten „Spiel starten“ zeigen', icon: uiIcon('play'),
+          on: () => this.fullIntroWanted,
+          toggle: () => {
+            if (INTRO_DEV) this.settings.introDevOff = !this.settings.introDevOff;
+            else this.settings.introSeen = !this.settings.introSeen;
+            this.saveSettings();
+          },
+        },
+        {
           kind: 'toggle', group: true, label: 'Meeresrauschen', icon: uiIcon('menu-sound-on'), iconOff: uiIcon('menu-sound'),
           on: () => this.settings.ambient,
           toggle: () => { this.settings.ambient = !this.settings.ambient; this.saveSettings(); },
@@ -898,11 +1029,19 @@ namespace SE {
 
     private syncWindowButtons(): void {
       setPressed(this.hud.evoBtn, this.windows.isVisible('evolution'));
+      setPressed(this.mapBtn, this.windows.isVisible('map'));
     }
 
     /* ======================================================= keyboard === */
 
     private wireKeyboard(): void {
+      // Shift flips the brush preview at once, not only on the next pointer move.
+      const shift = (e: KeyboardEvent): void => { if (e.key === 'Shift') this.terraform.invert = e.type === 'keydown'; };
+      document.addEventListener('keydown', shift);
+      document.addEventListener('keyup', shift);
+      document.addEventListener('keyup', (e) => { this.panKeys.delete(e.code); });
+      // A key released outside the window never sends its keyup.
+      window.addEventListener('blur', () => this.panKeys.clear());
       document.addEventListener('keydown', (e) => {
         if (Modal.open || e.defaultPrevented || this.title) return;
         // Quick save works wherever the focus is — a slider included.
@@ -913,13 +1052,25 @@ namespace SE {
         }
         const target = e.target instanceof HTMLElement ? e.target : document.body;
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+        // Before the modifier check: on a German keyboard [ and ] need AltGr.
+        if ((e.key === '[' || e.key === ']') && this.selection.tool === Tool.SetAltitude) {
+          this.resizeBrush(e.key === ']' ? 1 : -1);
+          return;
+        }
         if (e.ctrlKey || e.metaKey || e.altKey) return;
+        // WASD by key position, so it is the same block on any layout; works with a tool button focused too.
+        if (PAN_KEYS[e.code]) {
+          this.panKeys.add(e.code);
+          e.preventDefault();
+          return;
+        }
         // Let buttons and the tree keep their own keys.
         const inControl = !!target.closest('button, .tree-viewport, [role="menu"], [role="menubar"]');
         switch (e.key) {
           case 'Escape': {
             // An open menu takes the Escape for itself: one key, one thing closed.
             if (this.menuBar.isOpen) { this.menuBar.closeAll(); e.preventDefault(); return; }
+            if (!this.layerPop.hidden) { this.setLayersOpen(false); e.preventDefault(); return; }
             const top = this.windows.topmost();
             if (top) { top.hide(); e.preventDefault(); }
             return;
@@ -934,10 +1085,10 @@ namespace SE {
             return;
           case 'e': case 'E': this.windows.toggle('evolution'); return;
           case 'c': case 'C': this.windows.toggle('chronicle'); return;
-          case 'a': case 'A': this.windows.toggle('lexicon'); return;
+          case 'x': case 'X': this.windows.toggle('lexicon'); return;
           case 'm': case 'M': this.windows.toggle('map'); return;
           case 'b': case 'B': this.windows.toggle('report'); return;
-          case 's': case 'S': void this.openSaves(); return;
+          case 'o': case 'O': void this.openSaves(); return;
           case '+': this.zoomMap(1.25); return;
           case '-': this.zoomMap(0.8); return;
           case 'u': case 'U': this.selectTool(Tool.Examine); return;
@@ -952,13 +1103,18 @@ namespace SE {
 
     /* ========================================================== tools === */
 
-    private selectTool(tool: Tool): void {
+    /** Arm a tool; `reveal` reopens its card when the player closed it. */
+    private selectTool(tool: Tool, reveal = true): void {
+      this.endStroke();
       if (tool !== Tool.Examine) this.windows.hide('examine');
       this.selection.tool = tool;
+      this.editView.decor = tool === Tool.SetAltitude
+        ? (ctx, cam, now) => this.terraform.draw(ctx, cam, this.world, this.terraform.active ? this.terraform.sign : this.brushSign(), now)
+        : null;
       for (const [t, b] of this.toolButtons) setPressed(b, t === tool);
       this.canvas.dataset.tool = String(tool);
       this.buildToolOptions();
-      if (this.settings.dockCollapsed && this.windows.narrow) this.setDockCollapsed(false);
+      if (reveal && this.settings.dockCollapsed) this.setDockCollapsed(false);
     }
 
     /** Cost of one application of the armed tool. */
@@ -966,7 +1122,7 @@ namespace SE {
       const s = this.selection;
       switch (s.tool) {
         case Tool.Examine: return EXAMINE_COST;
-        case Tool.SetAltitude: return ALTITUDE_COST;
+        case Tool.SetAltitude: return 0; // paid by the elevation moved, see strokeFrame
         case Tool.PlantBiome: return BIOME_COST;
         case Tool.TriggerEvent: return EVENT_COST;
         case Tool.PlaceLife:
@@ -978,7 +1134,7 @@ namespace SE {
     private brushRadius(): number {
       const s = this.selection;
       switch (s.tool) {
-        case Tool.SetAltitude:
+        case Tool.SetAltitude: return Math.round(this.terraform.radius);
         case Tool.PlantBiome: return 2;
         case Tool.TriggerEvent: return HAZARD_RULES[s.event] ? 0 : EVENT_RADIUS[s.event]; // one tile for disasters with a rule (docs/ereignisse-spec.md)
         case Tool.PlaceLife: return s.lifeMode === 'terraformer' && s.terraformer === Terraformer.VaporGenerator ? 2 : 0;
@@ -990,35 +1146,45 @@ namespace SE {
     private buildToolOptions(): void {
       const s = this.selection;
       const host = this.toolOptions;
+      // A pick rebuilds the card; keep keyboard focus inside it.
+      const hadFocus = host.contains(document.activeElement);
       host.innerHTML = '';
       this.toolRevision = this.evolution.revision;
       this.toolTitle.textContent = TOOL_NAMES[s.tool];
+      this.toolKey.textContent = TOOL_KEYS[s.tool];
       this.toolHint.textContent = TOOL_HINTS[s.tool];
+      this.dock.dataset.tool = String(s.tool);
       this.editView.brushRadius = this.brushRadius();
       this.editView.brushColor = s.tool === Tool.TriggerEvent ? 'rgba(255,122,107,0.95)' : 'rgba(246,241,223,0.9)';
 
       const list = make('div', 'opt-list');
       list.setAttribute('role', 'listbox');
       list.setAttribute('aria-label', TOOL_NAMES[s.tool]);
-      const option = (o: {
+      type Option = {
         label: string; icon: string; cost?: number; active: boolean; locked?: string; sub?: string;
         onPick: () => void;
-      }): void => {
+      };
+      const costTag = (n: number): HTMLElement => {
+        const cost = make('span', 'opt-cost');
+        cost.append(make('span', undefined, fmt.int(n)), img(resIcon('energy'), 'ico'));
+        return cost;
+      };
+      // Locked choices fold into one row under the tiles; the chosen one gets the details.
+      const locked: Option[] = [];
+      let picked: Option | null = null;
+      let longestWord = 0;
+      const option = (o: Option): void => {
+        if (o.locked) { locked.push(o); return; }
+        if (o.active) picked = o;
+        longestWord = Math.max(longestWord, ...o.label.split(/[\s-]/).map((w) => w.length));
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = `opt${o.active ? ' on' : ''}${o.locked ? ' locked' : ''}`;
+        b.className = `opt-tile${o.active ? ' on' : ''}`;
         b.setAttribute('role', 'option');
         b.setAttribute('aria-selected', o.active ? 'true' : 'false');
-        const text = make('span', 'opt-text');
-        text.append(make('span', 'opt-label', o.label));
-        if (o.sub || o.locked) text.append(make('span', 'opt-sub', o.locked ?? o.sub ?? ''));
-        b.append(img(o.icon, 'opt-icon'), text);
-        if (o.cost !== undefined && o.cost > 0) {
-          const cost = make('span', 'opt-cost');
-          cost.append(make('span', undefined, fmt.int(o.cost)), img(resIcon('energy'), 'ico'));
-          b.appendChild(cost);
-        }
-        if (o.locked) b.appendChild(img(uiIcon('lock'), 'ico opt-lock'));
+        b.title = o.sub ? `${o.label} – ${o.sub}` : o.label;
+        b.append(img(o.icon, 'opt-icon'), make('span', 'opt-label', o.label));
+        if (o.cost !== undefined && o.cost > 0) b.appendChild(costTag(o.cost));
         b.addEventListener('click', () => { o.onPick(); this.buildToolOptions(); });
         list.appendChild(b);
       };
@@ -1037,8 +1203,8 @@ namespace SE {
 
       switch (s.tool) {
         case Tool.SetAltitude:
-          option({ label: 'Anheben', icon: uiIcon('tool-altitude'), cost: ALTITUDE_COST, active: s.altitudeRaise, sub: 'Land wächst, Küsten verschieben sich', onPick: () => { s.altitudeRaise = true; } });
-          option({ label: 'Absenken', icon: uiIcon('chevron-down'), cost: ALTITUDE_COST, active: !s.altitudeRaise, sub: 'Täler und neue Buchten', onPick: () => { s.altitudeRaise = false; } });
+          option({ label: 'Anheben', icon: uiIcon('tool-altitude'), active: s.altitudeRaise, sub: 'Land steigt aus dem Meer, hohe Gipfel tragen Schnee', onPick: () => { s.altitudeRaise = true; } });
+          option({ label: 'Absenken', icon: uiIcon('chevron-down'), active: !s.altitudeRaise, sub: 'Täler und Buchten, tief unten quillt Grundwasser', onPick: () => { s.altitudeRaise = false; } });
           break;
 
         case Tool.PlantBiome: {
@@ -1100,7 +1266,31 @@ namespace SE {
           host.appendChild(make('p', 'opt-note', cost));
         }
       }
+      // Words like "Informationszeitalter" don't fit three tiles a row in the pixel font.
+      list.classList.toggle('opt-list-wide', longestWord >= 17);
       if (list.childElementCount > 0) host.appendChild(list);
+      if (locked.length > 0) {
+        const first = locked[0];
+        const more = button({
+          label: `+${locked.length} noch nicht entwickelt`, icon: uiIcon('lock'), cls: 'opt-more',
+          title: `Im Evolutionsbaum: ${locked.map((o) => o.label).join(', ')}`,
+          onClick: () => first.onPick(),
+        });
+        more.appendChild(make('span', 'opt-more-go', 'Baum ›'));
+        host.appendChild(more);
+      }
+      const chosen = picked as Option | null;
+      if (chosen && (chosen.sub || chosen.cost)) {
+        const detail = make('div', 'opt-detail');
+        detail.appendChild(make('span', 'opt-detail-title', chosen.label));
+        if (chosen.cost) detail.appendChild(costTag(chosen.cost));
+        if (chosen.sub) detail.appendChild(make('span', 'opt-sub', chosen.sub));
+        host.appendChild(detail);
+      }
+      if (hadFocus) (host.querySelector<HTMLElement>('.opt-tile.on') ?? host.querySelector<HTMLElement>('button'))?.focus();
+      if (s.tool === Tool.SetAltitude) {
+        host.append(this.terraform.strengthControl(), this.terraform.sizeControl(), make('p', 'opt-note', TERRAFORM_NOTE));
+      }
       this.editView.brushRadius = this.brushRadius();
     }
 
@@ -1134,6 +1324,114 @@ namespace SE {
       return tool === Tool.Examine || tool === Tool.PlaceLife || tool === Tool.TriggerEvent;
     }
 
+    /* ---- terraforming brush ---- */
+
+    private brushSign(): 1 | -1 {
+      return this.selection.altitudeRaise !== this.terraform.invert ? 1 : -1;
+    }
+
+    private beginStroke(clientX: number, clientY: number, invert: boolean): void {
+      const tile = this.editView.tileAt(clientX, clientY);
+      if (!tile) return;
+      this.settle(true);
+      this.terraform.invert = invert;
+      this.terraform.begin(this.world, this.brushSign(), tile.x, tile.y);
+      this.strokeAt = { x: clientX, y: clientY };
+      this.editView.holdWorld = true;
+    }
+
+    /** One frame of a held brush: dab along the pointer's way, pay for the elevation moved, redraw those tiles. */
+    private strokeFrame(deltaMs: number): void {
+      const at = this.strokeAt;
+      const tile = at && this.editView.tileAt(at.x, at.y);
+      if (!tile) return;
+      const w = this.world;
+      const t = this.terraform;
+      // The brush slows down to what the energy left can pay, from what the last frame cost per second.
+      const perSecond = t.perSecond * TERRAFORM_COST_PER_UNIT;
+      if (w.omega < 1) {
+        this.notifier.message(`Zu wenig Energie – ${fmt.int(Math.max(1, perSecond))} Ω je Sekunde benötigt, ${fmt.int(w.omega)} Ω vorhanden.`, 'warn');
+        this.endStroke(true);
+        return;
+      }
+      const dt = perSecond > 0 ? Math.min(deltaMs / 1000, w.omega / perSecond) : deltaMs / 1000;
+      const s = t.step(w, tile.x, tile.y, dt);
+      if (s.moved === 0) return;
+      // ponytail: the first dab of a stroke is paid after the fact (no rate known yet), so it can overdraw by one frame; clamped at 0.
+      w.omega = Math.max(0, w.omega - s.moved * TERRAFORM_COST_PER_UNIT);
+      this.editView.markDirtyTiles(s.x0, s.y0, s.x1, s.y1);
+      const now = performance.now();
+      if ((s.emerged > 0 || s.flooded > 0) && now - this.lastNudge > 900) {
+        this.lastNudge = now;
+        if (!this.settings.reduceEffects) {
+          this.canvas.animate([
+            { transform: 'translate(0, 0)' }, { transform: 'translate(1px, -2px)' },
+            { transform: 'translate(-1px, 1px)' }, { transform: 'translate(0, 0)' },
+          ], { duration: 160 });
+        }
+      }
+    }
+
+    /** Pointer up: the slow consequences over everything the stroke touched, as after any edit. */
+    private endStroke(quiet = false): void {
+      const tiles = this.terraform.end();
+      this.strokeAt = null;
+      if (!tiles) return;
+      if (this.terraform.moved === 0) {
+        this.editView.holdWorld = false;
+        if (!quiet) this.notifier.message(this.terraform.sign > 0 ? 'Hier ist bereits die größte Höhe erreicht.' : 'Hier ist bereits die größte Tiefe erreicht.', 'warn');
+        return;
+      }
+      const w = this.world;
+      const steps = terraformSettleSteps(w, tiles);
+      // What afterEdit does, spread over frames too: the evolution statuses
+      // alone cost a frame, and while the world runs its tick rebuilds them
+      // a few times a second anyway, so only a paused world pays for them here.
+      steps.push(
+        () => { this.civ.sync(w, this.params); w.refreshDerived(); },
+        () => {
+          this.examinePanel.invalidate();
+          if (this.speed === 0) this.evolution.refresh(w, this.params, true);
+          this.unsaved = true;
+          this.civNews();
+        },
+      );
+      this.settleDue = { world: w, steps, phase: 0 };
+    }
+
+    /**
+     * Settle a finished stroke one step per frame, so its costs never pile
+     * onto one frame: the frame that shows the release, then the settling,
+     * then re-reading the map's field, then (next render) the full redraw.
+     * `all` does what is left at once, before a new stroke starts.
+     */
+    private settle(all = false): void {
+      const due = this.settleDue;
+      if (!due) return;
+      const w = this.world;
+      if (due.world === w) {
+        if (due.phase === 0 && !all) { due.phase = 1; return; }
+        if (due.phase <= 1) {
+          // One settle step a frame (terraformSettleSteps: none stalls a frame alone).
+          while (due.steps.length > 0) {
+            due.steps.shift()!();
+            if (!all) return;
+          }
+          due.phase = 2;
+          if (!all) return;
+        }
+        if (!all) this.editView.warm(w);
+        this.editView.markDirty();
+      }
+      this.settleDue = null;
+      this.editView.holdWorld = this.terraform.active;
+    }
+
+    private resizeBrush(dir: 1 | -1): void {
+      this.terraform.resize(dir);
+      this.buildToolOptions();
+    }
+
     /** After any edit: derived state, map, open panels and tree all at once. */
     private afterEdit(): void {
       const w = this.world;
@@ -1165,35 +1463,12 @@ namespace SE {
           this.windows.show('examine');
           break;
 
-        case Tool.SetAltitude: {
-          // Measure first, charge only for a real change: a brush pressed
-          // against the height limit would otherwise cost energy for nothing.
-          const sign = s.altitudeRaise ? 1 : -1;
-          const changes: [number, number][] = [];
-          for (let dy = -2; dy <= 2; dy++) {
-            const yy = y + dy;
-            if (yy < 0 || yy >= GRID_H) continue;
-            for (let dx = -2; dx <= 2; dx++) {
-              const j = idx(wrapX(x + dx), yy);
-              const d = Math.max(Math.abs(dx), Math.abs(dy));
-              const amount = d === 0 ? 0.14 : d === 1 ? 0.10 : 0.05;
-              const next = clamp(w.elevation[j] + sign * amount, -1, 1);
-              if (next !== w.elevation[j]) changes.push([j, next]);
-            }
-          }
-          if (changes.length === 0) {
-            this.notifier.message(s.altitudeRaise ? 'Hier ist bereits die größte Höhe erreicht.' : 'Hier ist bereits die größte Tiefe erreicht.', 'warn');
-            return;
-          }
-          if (!this.spend(ALTITUDE_COST)) return;
-          for (const [j, v] of changes) w.elevation[j] = v;
-          RiverSystem.rebuild(w);
-          BiomeSystem.step(w, false);
-          this.civ.sync(w, this.params);
-          this.afterEdit();
-          this.civNews();
+        case Tool.SetAltitude:
+          // A tap (touch): a short push, as if the brush were held for a moment.
+          this.beginStroke(clientX, clientY, false);
+          this.strokeFrame(TAP_PUSH_MS);
+          this.endStroke();
           break;
-        }
 
         case Tool.PlantBiome:
           this.plantAt(x, y);
@@ -1867,6 +2142,23 @@ namespace SE {
       h.oceanO2.textContent = `${fmt.int(w.oceanO2)} %`;
     }
 
+    /** Held WASD keys glide the map, at the same screen speed at every zoom; opposite keys cancel out. */
+    private panFrame(delta: number): void {
+      let dx = 0;
+      let dy = 0;
+      for (const code of this.panKeys) {
+        dx += PAN_KEYS[code][0];
+        dy += PAN_KEYS[code][1];
+      }
+      if (dx === 0 && dy === 0) {
+        this.panEase = 0;
+        return;
+      }
+      this.panEase = Math.min(1, this.panEase + delta / PAN_EASE_MS);
+      const tiles = (PAN_PX_PER_S * (delta / 1000) * smoothstep(this.panEase)) / (Math.hypot(dx, dy) * this.editView.tilePx);
+      this.editView.scrollBy(dx * tiles, dy * tiles);
+    }
+
     private frame = (now: number): void => {
       const delta = Math.min(250, now - this.lastFrame);
       this.lastFrame = now;
@@ -1885,6 +2177,14 @@ namespace SE {
         this.accumulator = 0;
       }
 
+      // A finger held still on the map starts the brush.
+      const held = this.touchPending;
+      if (held && this.selection.tool === Tool.SetAltitude && now - held.t > TOUCH_HOLD_MS) {
+        this.touchPending = null;
+        this.beginStroke(held.x, held.y, false);
+      }
+      this.strokeFrame(delta);
+      this.panFrame(delta);
       this.editView.editRectInto(this.mapView);
       this.editView.render(this.world);
       if (now - this.lastSurfCheck > 400) {
@@ -1910,6 +2210,7 @@ namespace SE {
         this.lastUi = now;
         this.updateUi();
       }
+      this.settle();
       if (this.speed > 0 && this.unsaved && now - this.lastAutosave > AUTOSAVE_MS && this.world.evo.developed.size > 0) {
         this.lastAutosave = now;
         void this.writeSave(AUTOSAVE_KEY, true);
@@ -1944,6 +2245,8 @@ namespace SE {
         if (typeof s.oceanShare === 'number' && Number.isFinite(s.oceanShare)) this.settings.oceanShare = clamp(s.oceanShare, OCEAN_SHARE_MIN, OCEAN_SHARE_MAX);
         if (isEpochId(s.epoch)) this.settings.epoch = s.epoch;
         if (typeof s.reduceEffects === 'boolean') this.settings.reduceEffects = s.reduceEffects;
+        if (typeof s.introSeen === 'boolean') this.settings.introSeen = s.introSeen;
+        if (typeof s.introDevOff === 'boolean') this.settings.introDevOff = s.introDevOff;
       } catch {
         // Settings are a convenience; defaults are fine.
       }
@@ -2160,14 +2463,64 @@ namespace SE {
         openSaves: () => this.openSaves(),
         openSettings: () => openSettings(this.settingDefs()),
         reduceEffects: () => this.settings.reduceEffects,
-        start: () => {
+        start: (fresh) => {
           this.title = null;
-          this.music.play('game');
-          this.setSpeed(running, true);
-          if (!this.windows.narrow) this.windows.show('map', false);
-          this.canvas.focus({ preventScroll: true });
+          if (fresh) {
+            this.playIntro(running, this.fullIntroWanted);
+          } else {
+            this.music.play('game');
+            this.enterGame(running);
+          }
         },
       });
+    }
+
+    /** Whether "Spiel starten" plays the full intro (studio card, logo): in developer mode as switched, else only before the first world. */
+    private get fullIntroWanted(): boolean {
+      return INTRO_DEV ? !this.settings.introDevOff : !this.settings.introSeen;
+    }
+
+    private enterGame(speed: number): void {
+      this.setSpeed(speed, true);
+      if (!this.windows.narrow) this.windows.show('map', false);
+      this.canvas.focus({ preventScroll: true });
+    }
+
+    /**
+     * The intro before a new world: `full` with studio card and logo, else from
+     * INTRO_SHORT_FROM. It hands over on the map at the tile it dived into: the
+     * map glides in from INTRO_GLIDE_FROM while the clouds part, and the world
+     * only starts turning once the intro is gone.
+     */
+    private playIntro(speed: number, full: boolean): void {
+      if (full && !INTRO_DEV) {
+        this.settings.introSeen = true;
+        this.saveSettings();
+      }
+      const from = full ? 0 : INTRO_SHORT_FROM;
+      this.music.play('intro', from);
+      const view = this.editView;
+      const zoom = view.tilePx;
+      new IntroPlayer(document.body, {
+        world: () => this.world,
+        reduceEffects: () => this.settings.reduceEffects,
+        musicTime: () => this.music.time(),
+        land: (x, y, skipped) => {
+          // Played through, the intro track dies away over the map and the game's music follows on the dot.
+          if (skipped) this.music.play('game');
+          else this.music.playThen('game', INTRO_MUSIC_END);
+          if (!skipped) view.glideZoom(INTRO_GLIDE_FROM);
+          view.centerOn(x, y);
+          // A fresh picture at this zoom for the glide to stretch, not the title's stale one.
+          view.markDirty();
+        },
+        // The first stretch stays put: the map composes its picture while the white still covers it.
+        reveal: (p) => view.glideZoom(lerp(INTRO_GLIDE_FROM, zoom, 1 - Math.pow(1 - introSpan(p, 0.12, 1), 3))),
+        done: () => {
+          view.glideZoom(zoom);
+          this.enterGame(speed);
+        },
+      }, from);
     }
 
     /** Save the whole planet, in the overview map's current mode, as a PNG. */

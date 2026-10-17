@@ -187,7 +187,7 @@ namespace SE {
     return elev > 0 ? LAPSE_RATE * ELEVATION_KM * elev : 0;
   }
 
-  /** Summit snow threshold (°C): in dry air the snow line lies higher. */
+  /** Summit snow threshold (°C): in dry air the snow line lies higher. Brushed peaks above SUMMIT_SNOW_ELEVATION carry snow anyway. */
   export function snowTemp(m: MoistClass): number {
     return m === MoistClass.Dry ? SNOW_TEMP - SNOW_DRY_SHIFT : SNOW_TEMP;
   }
@@ -204,7 +204,7 @@ namespace SE {
    * mountain is frozen (ice sheet) only where the sea-level climate is
    * frozen as well; frozen by its height alone it carries summit snow.
    */
-  export function landscapeZone(temp: number, moist: number, elev: number, cover: number, prev: number, wetElev = elev): number {
+  export function landscapeZone(temp: number, moist: number, elev: number, cover: number, prev: number, wetElev = elev, brushed = false): number {
     const known = prev !== ZONE_NONE;
     const pt = known ? zoneTemp(prev) : -1;
     const tSea = temp + altitudeCooling(elev);
@@ -220,11 +220,12 @@ namespace SE {
     let z = t | (m << 3);
     if (mountain) {
       z |= ZONE_MOUNTAIN;
-      if (temp < TREELINE_TEMP - flagBand(prev, ZONE_TREELINE) * SCHMITT_TEMP) {
+      const summit = brushed && m !== MoistClass.Dry && elev >= SUMMIT_SNOW_ELEVATION + flagBand(prev, ZONE_SNOW) * SCHMITT_ELEVATION;
+      if (summit || temp < TREELINE_TEMP - flagBand(prev, ZONE_TREELINE) * SCHMITT_TEMP) {
         z |= ZONE_TREELINE;
-        if (temp < ROCKBELT_TEMP - flagBand(prev, ZONE_ROCKBELT) * SCHMITT_TEMP) {
+        if (summit || temp < ROCKBELT_TEMP - flagBand(prev, ZONE_ROCKBELT) * SCHMITT_TEMP) {
           z |= ZONE_ROCKBELT;
-          if (temp < snowTemp(m) - flagBand(prev, ZONE_SNOW) * SCHMITT_TEMP) z |= ZONE_SNOW;
+          if (summit || temp < snowTemp(m) - flagBand(prev, ZONE_SNOW) * SCHMITT_TEMP) z |= ZONE_SNOW;
         }
       }
     }

@@ -201,6 +201,16 @@ namespace SE {
   export const SNOW_TEMP = -15;
   /** Degrees colder the snow line needs in dry air (moisture class dry): it lies higher there. */
   export const SNOW_DRY_SHIFT = 2;
+  /**
+   * Mean height (3 × 3 land block) from which a summit the player raised
+   * (`WorldState.terraformed`) carries snow whatever the climate, as
+   * equatorial peaks do above ~4.8 km (Kilimanjaro, Rwenzori, Andes). The
+   * elevation scale ends at 4.5 km: 3.8 km of block mean is a summit at the
+   * top of it. 0.9 left a brushed peak a one- or two-tile cap the coherence
+   * filter took back. Not in dry air (moisture class dry). Natural relief
+   * keeps the climate snow line alone.
+   */
+  export const SUMMIT_SNOW_ELEVATION = 0.85;
   /*
    * Rain shadow (docs/hoehe-spec.md §3.5): air that has crossed a crest
    * sinks, warms and dries. The crest's elevation (LEE_MIN_CREST: none,
@@ -1348,8 +1358,8 @@ namespace SE {
   ];
   export const TOOL_HINTS: readonly string[] = [
     'Tippe auf ein Feld, um Lebensraum, Arten und Klima zu sehen.',
-    'Ziehe die Karte. Mausrad oder zwei Finger zoomen.',
-    'Hebt oder senkt das Gelände in einem 5 × 5-Feld.',
+    'Ziehe die Karte oder fahre mit W A S D. Das Mausrad zoomt.',
+    'Formt das Gelände mit dem Pinsel: hebt Land aus dem Meer oder senkt es ab.',
     'Siedelt eine entwickelte Pflanzengruppe in einem 5 × 5-Feld an, wo sie wachsen kann.',
     'Siedelt eine entwickelte Tiergruppe, eine Stadt oder einen Terraformer an.',
     'Löst eine Naturkatastrophe am gewählten Ort aus.',

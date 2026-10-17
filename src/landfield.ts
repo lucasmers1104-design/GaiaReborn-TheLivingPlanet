@@ -94,8 +94,23 @@ namespace SE {
     const n = landOctave(x, y, GRID_W, 64, 977) * 0.6 + landOctave(x, y, GRID_W, 128, 978) * 0.4;
     return temp + (n - 0.5) * 2 * ICE_WOBBLE < ICE_TEMP;
   }
-  /** Highlands a little lighter, lowlands a little darker, in steps per unit of elevation. */
-  const ALTITUDE_GAIN = 0.5;
+  /**
+   * Highlands lighter, lowlands darker, in steps per unit of elevation around
+   * ALTITUDE_MID, limited to [ALTITUDE_LOW, ALTITUDE_HIGH] steps: a brushed
+   * plateau reads higher than the plain it rose from, also inside one landscape.
+   */
+  const ALTITUDE_GAIN = 2.5;
+  const ALTITUDE_MID = 0.2;
+  const ALTITUDE_LOW = -0.5;
+  const ALTITUDE_HIGH = 0.6;
+  /**
+   * Ridges and knolls lighter, hollows darker: steps per unit of curvature
+   * (elevation above the mean of the four neighbours) beyond a dead zone.
+   * Measured on land: the middle half lies within ±0.013, the outer tenth beyond ±0.04–0.06.
+   */
+  const CURVE_GAIN = 8;
+  const CURVE_DEAD = 0.015;
+  const CURVE_LIMIT = 0.75;
   /** Macro variation: value-noise lattice cells around the planet (8 tiles each). */
   const MACRO_CELLS = 32;
   /** |noise| where a patch starts to shift, and the band over which it reaches one step. */
@@ -212,8 +227,43 @@ namespace SE {
     private readonly rank = new Uint8Array(TILE_COUNT);
     private readonly low = new Uint8Array(TILE_COUNT);
     private readonly wide = new Uint8Array(TILE_COUNT);
+    private ridgesAt = -Infinity;
 
     refresh(world: WorldState): void {
+      this.read(world, 0, 0, GRID_W, GRID_H, true);
+      this.edges(0, 0, GRID_W, GRID_H);
+      this.volcanoes(world);
+      this.paths.build(world);
+      this.ridges.build(world, this.volcano);
+      this.sign(0, 0, GRID_W, GRID_H);
+    }
+
+    /**
+     * Re-read only tiles [x0, x1) × [y0, y1) (x may run past the wrap) after
+     * their elevation changed, as a terraforming brush does every frame: a
+     * full refresh costs 10–20 ms. Rivers and the savanna's reach keep their
+     * last state; mountain ridges and cones are rebuilt, they follow the height.
+     * True when the ridges were rebuilt this time.
+     */
+    refreshBox(world: WorldState, x0: number, y0: number, x1: number, y1: number): boolean {
+      const ya = Math.max(0, y0 - 1);
+      const yb = Math.min(GRID_H, y1 + 1);
+      this.read(world, x0 - 1, ya, x1 + 1, yb, false);
+      this.edges(x0 - 3, Math.max(0, ya - 2), x1 + 3, Math.min(GRID_H, yb + 2));
+      // The ranges are found planet-wide (1–11 ms): at most ten times a second.
+      const now = performance.now();
+      const ridges = now - this.ridgesAt > 100;
+      if (ridges) {
+        this.ridgesAt = now;
+        this.volcanoes(world);
+        this.ridges.build(world, this.volcano);
+      }
+      // Ridge lines and cones can move a little past the box.
+      this.sign(x0 - 8, Math.max(0, y0 - 8), x1 + 8, Math.min(GRID_H, y1 + 8));
+      return ridges;
+    }
+
+    private read(world: WorldState, x0: number, y0: number, x1: number, y1: number, all: boolean): void {
       const T = LandTables.shared();
       const { elevation: e, biome, landscape, landscapeDensity, substrate, flora, floraTop, vegetation, riverLevel, tech } = world;
       const algae = floraBit(Flora.FreshwaterAlgae);
@@ -224,8 +274,9 @@ namespace SE {
       const cacti = cactiArrived(world);
       const trees = savannaTreesArrived(world);
       const palms = palmsArrived(world);
-      if (trees) this.reach.update(world);
-      for (let i = 0; i < TILE_COUNT; i++) {
+      if (trees && all) this.reach.update(world);
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = y * GRID_W + wrapX(x);
         const h = e[i];
         let key = 0;
         let scene = LAND_SCENE_NONE;
@@ -311,13 +362,14 @@ namespace SE {
         this.savannaTree[i] = scene === LAND_SCENE_NONE ? 0 : tree;
         this.palm[i] = scars[i] === ScarKind.None ? palm : 0;
       }
-      this.edges();
-      this.volcanoes(world);
-      this.paths.build(world);
-      this.ridges.build(world, this.volcano);
+    }
+
+    /** The per-tile signatures over [x0, x1) × [y0, y1). */
+    private sign(x0: number, y0: number, x1: number, y1: number): void {
       const lines = this.paths.sig;
       const ridges = this.ridges.sig;
-      for (let i = 0; i < TILE_COUNT; i++) {
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = y * GRID_W + wrapX(x);
         let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
         s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22) ^ (this.palm[i] << 23), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
         s ^= Math.imul((this.depth[i] * QUANT) ^ (((this.shade[i] + LAND_SHIFT_MAX) * QUANT) << 8), 0xc2b2ae3d);
@@ -333,13 +385,19 @@ namespace SE {
     private relief(e: Float32Array, i: number): number {
       const x = i % GRID_W;
       const y = (i / GRID_W) | 0;
-      const slope = Math.max(0, e[idx(wrapX(x + 1), y)]) - Math.max(0, e[idx(wrapX(x - 1), y)]) +
-        Math.max(0, e[idx(x, clampY(y + 1))]) - Math.max(0, e[idx(x, clampY(y - 1))]);
+      const r = Math.max(0, e[idx(wrapX(x + 1), y)]);
+      const l = Math.max(0, e[idx(wrapX(x - 1), y)]);
+      const d = Math.max(0, e[idx(x, clampY(y + 1))]);
+      const u = Math.max(0, e[idx(x, clampY(y - 1))]);
+      const slope = r - l + d - u;
       const m = mountainness(e[i]);
       const raw = slope * RELIEF_GAIN * (1 + m);
       const s = Math.sign(raw) * Math.max(0, Math.abs(raw) - RELIEF_DEAD * (1 - m));
       const limit = RELIEF_LIMIT + m;
-      return clamp(s + (e[i] - 0.3) * ALTITUDE_GAIN, -limit, limit);
+      const curve = e[i] - (r + l + d + u) / 4;
+      const c = clamp(Math.sign(curve) * Math.max(0, Math.abs(curve) - CURVE_DEAD) * CURVE_GAIN, -CURVE_LIMIT, CURVE_LIMIT);
+      const altitude = clamp((e[i] - ALTITUDE_MID) * ALTITUDE_GAIN, ALTITUDE_LOW, ALTITUDE_HIGH);
+      return clamp(s + c + altitude, -limit, limit);
     }
 
     /**
@@ -380,15 +438,20 @@ namespace SE {
       }
     }
 
-    /** Chebyshev distance (0, 1, 2+) to a tile of lower material rank — water counts as rank 0. */
-    private edges(): void {
+    /**
+     * Chebyshev distance (0, 1, 2+) to a tile of lower material rank — water
+     * counts as rank 0 — over [x0, x1) × [y0, y1), whose rank changed at least
+     * two tiles inside the edge.
+     */
+    private edges(x0: number, y0: number, x1: number, y1: number): void {
       const { rank, low, edge } = this;
-      const min3 = (src: Uint8Array, dst: Uint8Array): void => {
-        for (let y = 0; y < GRID_H; y++) {
+      const min3 = (src: Uint8Array, dst: Uint8Array, ya0: number, ya1: number, xa0: number, xa1: number): void => {
+        for (let y = Math.max(0, ya0); y < Math.min(GRID_H, ya1); y++) {
           const ya = clampY(y - 1) * GRID_W;
           const yb = y * GRID_W;
           const yc = clampY(y + 1) * GRID_W;
-          for (let x = 0; x < GRID_W; x++) {
+          for (let u = xa0; u < xa1; u++) {
+            const x = wrapX(u);
             const xa = wrapX(x - 1);
             const xc = wrapX(x + 1);
             dst[yb + x] = Math.min(src[ya + xa], src[ya + x], src[ya + xc], src[yb + xa], src[yb + x], src[yb + xc],
@@ -396,9 +459,14 @@ namespace SE {
           }
         }
       };
-      min3(rank, low);
-      min3(low, this.wide);
-      for (let i = 0; i < TILE_COUNT; i++) edge[i] = low[i] < rank[i] ? 0 : this.wide[i] < rank[i] ? 1 : 2;
+      // The full map needs no margin; a box reads `low` one tile around its `wide`.
+      const m = x1 - x0 >= GRID_W ? 0 : 1;
+      min3(rank, low, y0 - m, y1 + m, x0 - m, x1 + m);
+      min3(low, this.wide, y0, y1, x0, x1);
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = y * GRID_W + wrapX(x);
+        edge[i] = low[i] < rank[i] ? 0 : this.wide[i] < rank[i] ? 1 : 2;
+      }
     }
 
     /** Signature of everything that reaches into tiles [tx0, tx0 + tw) × [ty0, ty0 + th). */

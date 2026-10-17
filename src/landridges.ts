@@ -532,6 +532,8 @@ namespace SE {
       }
       const keys = this.turfKeys;
       const turf = (flora & TURF_FLORA) !== 0 ? keys[level >= 3 ? 1 : 0] : level >= 1 ? keys[2] : 0;
+      // Summit snow on a brushed peak (SUMMIT_SNOW_ELEVATION) covers the whole crest.
+      if (world.terraformed[t] !== 0 && z !== ZONE_NONE && (z & ZONE_SNOW) !== 0 && world.elevation[t] >= SUMMIT_SNOW_ELEVATION) return { tree: 0, rock: 0, snow: 0, upper: turf };
       return { tree: above(TREELINE_TEMP), rock: above(ROCKBELT_TEMP), snow: above(snowLine), upper: turf };
     }
 

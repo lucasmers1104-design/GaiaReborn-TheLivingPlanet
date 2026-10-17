@@ -262,6 +262,31 @@ class Cdp {
   }
 }
 
+/** Headless Chrome with a fresh profile in `work`, at w × h. */
+function launchChrome(chrome, work, w, h) {
+  return spawn(chrome, [
+    '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
+    '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
+    '--remote-debugging-port=0', `--user-data-dir=${path.join(work, 'profile')}`, `--window-size=${w},${h}`, 'about:blank',
+  ], { stdio: 'ignore' });
+}
+
+/** The DevTools connection to the launched Chrome's page, sized w × h at device scale 1. */
+async function connect(work, w, h) {
+  const portFile = path.join(work, 'profile', 'DevToolsActivePort');
+  for (let k = 0; k < 100 && !fs.existsSync(portFile); k++) await sleep(100);
+  const port = fs.readFileSync(portFile, 'utf8').split('\n')[0].trim();
+  const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const target = list.find((t) => t.type === 'page');
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((ok, ko) => { ws.onopen = ok; ws.onerror = ko; });
+  const cdp = new Cdp(ws);
+  await cdp.send('Page.enable');
+  await cdp.send('Runtime.enable');
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+  return { ws, cdp };
+}
+
 const PAGE = (bundle) => `<!DOCTYPE html>
 <html lang="de"><head><meta charset="UTF-8"><base href="${pathToUrl(ROOT)}/">
 <link rel="stylesheet" href="styles.css">
@@ -315,23 +340,9 @@ async function main() {
   if (a.epoch) q.set('epoch', a.epoch);
 
   const release = await lock();
-  const proc = spawn(chrome, [
-    '--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
-    '--remote-debugging-port=0', `--user-data-dir=${path.join(work, 'profile')}`, `--window-size=${a.w},${a.h}`, 'about:blank',
-  ], { stdio: 'ignore' });
+  const proc = launchChrome(chrome, work, a.w, a.h);
   try {
-    const portFile = path.join(work, 'profile', 'DevToolsActivePort');
-    for (let k = 0; k < 100 && !fs.existsSync(portFile); k++) await sleep(100);
-    const port = fs.readFileSync(portFile, 'utf8').split('\n')[0].trim();
-    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    const target = list.find((t) => t.type === 'page');
-    const ws = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((ok, ko) => { ws.onopen = ok; ws.onerror = ko; });
-    const cdp = new Cdp(ws);
-    await cdp.send('Page.enable');
-    await cdp.send('Runtime.enable');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: a.w, height: a.h, deviceScaleFactor: 1, mobile: false });
+    const { ws, cdp } = await connect(work, a.w, a.h);
     await cdp.send('Page.navigate', { url: `${pathToUrl(html)}?${q}` });
     for (let k = 0; k < 600; k++) {
       await sleep(250);
@@ -409,4 +420,6 @@ async function main() {
   }
 }
 
-main().catch((e) => fail(e.stack || e.message));
+module.exports = { CHROMES, ROOT, apng, contactSheet, lock, launchChrome, connect, pathToUrl, sleep };
+
+if (require.main === module) main().catch((e) => fail(e.stack || e.message));

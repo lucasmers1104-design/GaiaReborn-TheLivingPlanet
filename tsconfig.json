@@ -144,6 +144,7 @@
     "src/hazardchain.ts",
     "src/coalsave.ts",
     "src/save.ts",
+    "src/terraform.ts",
     "src/sprites.ts",
     "src/terrainatlas.ts",
     "src/landatlas.ts",
@@ -160,6 +161,7 @@
     "src/landriverdraw.ts",
     "src/landsurf.ts",
     "src/landcompose.ts",
+    "src/landfade.ts",
     "src/landview.ts",
     "src/examinetile.ts",
     "src/examineview.ts",
@@ -270,6 +272,12 @@
     "src/titleplanet.ts",
     "src/title.ts",
     "src/music.ts",
+    "src/terraformsound.ts",
+    "src/terraformtool.ts",
+    "src/intro.ts",
+    "src/introtitle.ts",
+    "src/introcosmos.ts",
+    "src/introflight.ts",
     "src/app.ts"
   ]
 }

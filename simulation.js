@@ -185,6 +185,16 @@ var SE;
     SE.SNOW_TEMP = -15;
     /** Degrees colder the snow line needs in dry air (moisture class dry): it lies higher there. */
     SE.SNOW_DRY_SHIFT = 2;
+    /**
+     * Mean height (3 × 3 land block) from which a summit the player raised
+     * (`WorldState.terraformed`) carries snow whatever the climate, as
+     * equatorial peaks do above ~4.8 km (Kilimanjaro, Rwenzori, Andes). The
+     * elevation scale ends at 4.5 km: 3.8 km of block mean is a summit at the
+     * top of it. 0.9 left a brushed peak a one- or two-tile cap the coherence
+     * filter took back. Not in dry air (moisture class dry). Natural relief
+     * keeps the climate snow line alone.
+     */
+    SE.SUMMIT_SNOW_ELEVATION = 0.85;
     /*
      * Rain shadow (docs/hoehe-spec.md §3.5): air that has crossed a crest
      * sinks, warms and dries. The crest's elevation (LEE_MIN_CREST: none,
@@ -1201,8 +1211,8 @@ var SE;
     ];
     SE.TOOL_HINTS = [
         'Tippe auf ein Feld, um Lebensraum, Arten und Klima zu sehen.',
-        'Ziehe die Karte. Mausrad oder zwei Finger zoomen.',
-        'Hebt oder senkt das Gelände in einem 5 × 5-Feld.',
+        'Ziehe die Karte oder fahre mit W A S D. Das Mausrad zoomt.',
+        'Formt das Gelände mit dem Pinsel: hebt Land aus dem Meer oder senkt es ab.',
         'Siedelt eine entwickelte Pflanzengruppe in einem 5 × 5-Feld an, wo sie wachsen kann.',
         'Siedelt eine entwickelte Tiergruppe, eine Stadt oder einen Terraformer an.',
         'Löst eine Naturkatastrophe am gewählten Ort aus.',
@@ -15942,7 +15952,7 @@ var SE;
         return elev > 0 ? SE.LAPSE_RATE * SE.ELEVATION_KM * elev : 0;
     }
     SE.altitudeCooling = altitudeCooling;
-    /** Summit snow threshold (°C): in dry air the snow line lies higher. */
+    /** Summit snow threshold (°C): in dry air the snow line lies higher. Brushed peaks above SUMMIT_SNOW_ELEVATION carry snow anyway. */
     function snowTemp(m) {
         return m === 0 /* MoistClass.Dry */ ? SE.SNOW_TEMP - SE.SNOW_DRY_SHIFT : SE.SNOW_TEMP;
     }
@@ -15959,7 +15969,7 @@ var SE;
      * mountain is frozen (ice sheet) only where the sea-level climate is
      * frozen as well; frozen by its height alone it carries summit snow.
      */
-    function landscapeZone(temp, moist, elev, cover, prev, wetElev = elev) {
+    function landscapeZone(temp, moist, elev, cover, prev, wetElev = elev, brushed = false) {
         const known = prev !== SE.ZONE_NONE;
         const pt = known ? zoneTemp(prev) : -1;
         const tSea = temp + altitudeCooling(elev);
@@ -15976,11 +15986,12 @@ var SE;
         let z = t | (m << 3);
         if (mountain) {
             z |= SE.ZONE_MOUNTAIN;
-            if (temp < SE.TREELINE_TEMP - flagBand(prev, SE.ZONE_TREELINE) * SE.SCHMITT_TEMP) {
+            const summit = brushed && m !== 0 /* MoistClass.Dry */ && elev >= SE.SUMMIT_SNOW_ELEVATION + flagBand(prev, SE.ZONE_SNOW) * SE.SCHMITT_ELEVATION;
+            if (summit || temp < SE.TREELINE_TEMP - flagBand(prev, SE.ZONE_TREELINE) * SE.SCHMITT_TEMP) {
                 z |= SE.ZONE_TREELINE;
-                if (temp < SE.ROCKBELT_TEMP - flagBand(prev, SE.ZONE_ROCKBELT) * SE.SCHMITT_TEMP) {
+                if (summit || temp < SE.ROCKBELT_TEMP - flagBand(prev, SE.ZONE_ROCKBELT) * SE.SCHMITT_TEMP) {
                     z |= SE.ZONE_ROCKBELT;
-                    if (temp < snowTemp(m) - flagBand(prev, SE.ZONE_SNOW) * SE.SCHMITT_TEMP)
+                    if (summit || temp < snowTemp(m) - flagBand(prev, SE.ZONE_SNOW) * SE.SCHMITT_TEMP)
                         z |= SE.ZONE_SNOW;
                 }
             }
@@ -16778,6 +16789,13 @@ var SE;
              * landscape's Schmitt triggers. Derived, not saved.
              */
             this.landscapeZone = new Uint16Array(SE.TILE_COUNT).fill(SE.ZONE_NONE);
+            /**
+             * 1 on ground the player's terraforming brush has shaped: its summits
+             * carry snow whatever the climate (SUMMIT_SNOW_ELEVATION), its low coasts
+             * are sand (terraformSand). Natural relief never sets it. Rides the
+             * plates; saved as the optional `terraformed` field.
+             */
+            this.terraformed = new Uint8Array(SE.TILE_COUNT);
             /** Tick at which succession last advanced; it advances once per tick. */
             this.successionTick = -1;
             /** Plate shifts so far (bookkeeping): tells caches keyed by tile that the crust moved. */
@@ -16954,6 +16972,7 @@ var SE;
             this.substrate.fill(0);
             this.soil.fill(0);
             this.landscapeZone.fill(SE.ZONE_NONE);
+            this.terraformed.fill(0);
             this.successionTick = -1;
             this.driftShifts = 0;
             this.evo.reset();
@@ -17014,6 +17033,7 @@ var SE;
             this.substrate.set(o.substrate);
             this.soil.set(o.soil);
             this.landscapeZone.set(o.landscapeZone);
+            this.terraformed.set(o.terraformed);
             this.successionTick = o.successionTick;
             this.driftShifts = o.driftShifts;
             this.lifeDensity.set(o.lifeDensity);
@@ -18808,6 +18828,36 @@ var SE;
             RiverSystem.builtShifts.set(world, world.driftShifts);
         }
         /**
+         * `rebuild` in steps for callers that spread it over frames (the
+         * terraforming brush's settle): the flood in halves, the routing, the
+         * classification. The scratch is shared: if anything rebuilds in
+         * between (a tick), that full rebuild stands and the rest is skipped.
+         */
+        static rebuildSteps(world) {
+            let fill = -1;
+            const live = () => fill === RiverSystem.fills;
+            return [
+                () => {
+                    RiverSystem.fillStart(world);
+                    fill = RiverSystem.fills;
+                    RiverSystem.fillOn(world, SE.TILE_COUNT / 4);
+                },
+                () => { if (live())
+                    RiverSystem.fillOn(world, SE.TILE_COUNT / 3); },
+                () => { if (live())
+                    RiverSystem.fillOn(world, Infinity); },
+                () => { if (live())
+                    RiverSystem.route(world); },
+                () => {
+                    if (!live())
+                        return;
+                    RiverSystem.classify(world);
+                    world.terrainDirty = false;
+                    RiverSystem.builtShifts.set(world, world.driftShifts);
+                },
+            ];
+        }
+        /**
          * Priority-flood (Barnes, Lehman & Mulla): start from the sea and walk
          * inland always taking the lowest frontier tile, raising anything below the
          * level you arrived at. A tile is therefore fixed at the height of the
@@ -18819,10 +18869,16 @@ var SE;
          * provably drains to the sea.
          */
         static fillDepressions(world) {
+            RiverSystem.fillStart(world);
+            RiverSystem.fillOn(world, Infinity);
+        }
+        /** Seed the flood with the sea. */
+        static fillStart(world) {
             const { elevation } = world;
             const filled = RiverSystem.filled;
             const settled = RiverSystem.settled;
             const heap = RiverSystem.heap;
+            RiverSystem.fills++;
             heap.clear();
             settled.fill(0);
             for (let i = 0; i < SE.TILE_COUNT; i++) {
@@ -18832,9 +18888,17 @@ var SE;
                     heap.push(0, i); // the sea is the outlet, at sea level
                 }
             }
+            RiverSystem.fillCount = 0;
+        }
+        /** Flood on for at most `budget` tiles; true once the flood is done. */
+        static fillOn(world, budget) {
+            const { elevation } = world;
+            const filled = RiverSystem.filled;
+            const settled = RiverSystem.settled;
+            const heap = RiverSystem.heap;
             const order = RiverSystem.order;
-            let n = 0;
-            while (heap.size > 0) {
+            let n = RiverSystem.fillCount;
+            while (heap.size > 0 && budget-- > 0) {
                 const level = heap.peekKey();
                 const i = heap.pop();
                 order[n++] = i;
@@ -18845,6 +18909,9 @@ var SE;
                 RiverSystem.raise(SE.idx(x, SE.clampY(y - 1)), level, elevation, filled, settled, heap);
                 RiverSystem.raise(SE.idx(x, SE.clampY(y + 1)), level, elevation, filled, settled, heap);
             }
+            RiverSystem.fillCount = n;
+            if (heap.size > 0)
+                return false;
             RiverSystem.orderCount = n;
             // A land tile the flood could not reach has no sea to drain to at all —
             // an entirely landlocked world. Park it above everything so `route`
@@ -18853,6 +18920,7 @@ var SE;
                 if (!settled[i])
                     filled[i] = 1;
             }
+            return true;
         }
         static raise(j, level, elevation, filled, settled, heap) {
             if (settled[j])
@@ -19023,6 +19091,9 @@ var SE;
      * still hold tile indices from the previous rebuild.
      */
     RiverSystem.orderCount = 0;
+    /** Tiles the flood under way has taken so far, and floods started (a stale split rebuild sees the count move). */
+    RiverSystem.fillCount = 0;
+    RiverSystem.fills = 0;
     RiverSystem.settled = new Uint8Array(SE.TILE_COUNT);
     RiverSystem.heap = new TileHeap();
     /**
@@ -19159,6 +19230,7 @@ var SE;
                     this.rollU8(world.substrate, y, shift);
                     this.rollU8(world.soil, y, shift);
                     this.rollU16(world.landscapeZone, y, shift);
+                    this.rollU8(world.terraformed, y, shift);
                     this.rollLife(world, y, shift);
                 }
                 world.terrainDirty = true;
@@ -20890,6 +20962,7 @@ var SE;
             world.soil[i] = 0;
             SuccessionSystem.reset(world, i, SE.Landscape.Rock);
         }
+        /** Put landscape `l` on the tile at once, with no succession under way. */
         static reset(world, i, l) {
             world.landscape[i] = l;
             world.landscapeNext[i] = l;
@@ -21046,32 +21119,92 @@ var SE;
          * and climax target it gives.
          */
         static classify(world) {
-            const { elevation, flora, soil } = world;
-            const zones = world.landscapeZone;
             const woody = SE.woodyFloraMask(world);
             const cacti = SE.cactiArrived(world);
-            for (let k = 0; k < landCount; k++) {
-                const i = landList[k];
-                let s1 = 0;
-                let s2 = 0;
-                let s3 = 0;
-                const base = i * 8;
+            for (let k = 0; k < landCount; k++)
+                SuccessionSystem.classifyTile(world, landList[k], woody, cacti);
+        }
+        /** One land tile of `classify`. */
+        static classifyTile(world, i, woody, cacti) {
+            const { elevation, flora, soil } = world;
+            const zones = world.landscapeZone;
+            let s1 = 0;
+            let s2 = 0;
+            let s3 = 0;
+            const base = i * 8;
+            for (let q = 0; q < 8; q++) {
+                const j = NB[base + q];
+                if (j < 0)
+                    continue;
+                const f = flora[j];
+                s3 |= s2 & f;
+                s2 |= s1 & f;
+                s1 |= f;
+            }
+            const p = flora[i] | s3;
+            present[i] = p;
+            const z = SE.landscapeZone(tempSm[i], moistSm[i], landElev[i], zoneCover(world, i), zones[i], elevation[i], world.terraformed[i] !== 0);
+            allowedTemp[i] = lagged(allowedTemp[i], tempSm[i], SE.SCHMITT_TEMP);
+            allowedMoist[i] = lagged(allowedMoist[i], moistSm[i], SE.SCHMITT_MOISTURE);
+            zones[i] = z;
+            target[i] = SE.ladderTarget(SE.fillLadder(z, p, soil[i] >= SOIL_EARTH_U8, lad, woody, cacti), lad);
+        }
+        /**
+         * Smoothed climate, zone, target, substrate and density of the land
+         * tiles in `tiles` only, read off their own neighbourhood as the full
+         * pass reads it but without its coherence filters: the terraforming
+         * brush's settle, where a full pass would stall a frame. The next full
+         * target refresh (every SUCCESSION_TARGET_INTERVAL ticks) redoes them.
+         * Only valid for the world the last full pass targeted; otherwise the
+         * next tick refreshes everything anyway.
+         */
+        static refreshTiles(world, tiles) {
+            const { elevation, temperature, moisture, vegetation } = world;
+            const R = SE.LANDSCAPE_SMOOTH_RADIUS;
+            const lapse = SE.LAPSE_RATE * SE.ELEVATION_KM;
+            for (const i of tiles) {
+                if (elevation[i] < 0)
+                    continue;
+                let sum = elevation[i];
+                let n = 1;
                 for (let q = 0; q < 8; q++) {
-                    const j = NB[base + q];
-                    if (j < 0)
-                        continue;
-                    const f = flora[j];
-                    s3 |= s2 & f;
-                    s2 |= s1 & f;
-                    s1 |= f;
+                    const j = NB[i * 8 + q];
+                    if (j >= 0 && elevation[j] >= 0) {
+                        sum += elevation[j];
+                        n++;
+                    }
                 }
-                const p = flora[i] | s3;
-                present[i] = p;
-                const z = SE.landscapeZone(tempSm[i], moistSm[i], landElev[i], zoneCover(world, i), zones[i], elevation[i]);
-                allowedTemp[i] = lagged(allowedTemp[i], tempSm[i], SE.SCHMITT_TEMP);
-                allowedMoist[i] = lagged(allowedMoist[i], moistSm[i], SE.SCHMITT_MOISTURE);
-                zones[i] = z;
-                target[i] = SE.ladderTarget(SE.fillLadder(z, p, soil[i] >= SOIL_EARTH_U8, lad, woody, cacti), lad);
+                landElev[i] = sum / n;
+            }
+            const woody = SE.woodyFloraMask(world);
+            const cacti = SE.cactiArrived(world);
+            for (const i of tiles) {
+                if (elevation[i] < 0)
+                    continue;
+                const x = i % SE.GRID_W;
+                const y = (i / SE.GRID_W) | 0;
+                let st = 0;
+                let sm = 0;
+                let sc = 0;
+                let n = 0;
+                for (let yy = Math.max(0, y - R); yy <= Math.min(SE.GRID_H - 1, y + R); yy++) {
+                    for (let dx = -R; dx <= R; dx++) {
+                        const j = yy * SE.GRID_W + SE.wrapX(x + dx);
+                        const e = elevation[j];
+                        if (e >= 0) {
+                            st += temperature[j] + lapse * e;
+                            sm += moisture[j];
+                            sc += vegetation[j];
+                            n++;
+                        }
+                    }
+                }
+                tempSm[i] = st / n - SE.altitudeCooling(landElev[i]);
+                moistSm[i] = sm / n;
+                coverSm[i] = Math.max(0, sc / n);
+                SuccessionSystem.classifyTile(world, i, woody, cacti);
+                world.substrate[i] = SuccessionSystem.substrateFor(world, i, world.landscapeZone[i], moistSm[i]);
+                SuccessionSystem.densityAt(world, i);
             }
         }
         /**
@@ -21160,6 +21293,7 @@ var SE;
             const wet = flagOptions(m - SE.SCHMITT_MOISTURE >= SE.WETLAND_MOISTURE && e + SE.SCHMITT_ELEVATION < SE.WETLAND_MAX_ELEVATION, m + SE.SCHMITT_MOISTURE >= SE.WETLAND_MOISTURE && e - SE.SCHMITT_ELEVATION < SE.WETLAND_MAX_ELEVATION);
             const bare = flagOptions(c + SE.SCHMITT_COVER < SE.BARE_COVER, c - SE.SCHMITT_COVER < SE.BARE_COVER);
             const soilOk = world.soil[i] >= SOIL_EARTH_U8;
+            const brushed = world.terraformed[i] !== 0;
             const p = present[i];
             let mask = 0;
             for (let t = 0; t <= 4 /* TempClass.Tropical */; t++) {
@@ -21169,8 +21303,9 @@ var SE;
                     const snowT = SE.snowTemp(mc);
                     // The lowland (belt 0) if the tile may count as low, and the
                     // mountain belts its temperature band spans if it may count as high.
-                    const low = mountainBelt(T + SE.SCHMITT_TEMP, snowT);
-                    const top = mountain ? mountainBelt(T - SE.SCHMITT_TEMP, snowT) : 0;
+                    const summit = brushed && mc !== 0 /* MoistClass.Dry */;
+                    const low = summit && h - SE.SCHMITT_ELEVATION >= SE.SUMMIT_SNOW_ELEVATION ? 4 : mountainBelt(T + SE.SCHMITT_TEMP, snowT);
+                    const top = !mountain ? 0 : summit && h + SE.SCHMITT_ELEVATION >= SE.SUMMIT_SNOW_ELEVATION ? 4 : mountainBelt(T - SE.SCHMITT_TEMP, snowT);
                     for (let a = lowland ? 0 : low; a <= top; a = a === 0 ? low : a + 1) {
                         for (let f = 0; f < 4; f++) {
                             if (!((wet >> (f & 1)) & 1) || !((bare >> ((f >> 1) & 1)) & 1))
@@ -21363,13 +21498,7 @@ var SE;
                     // Dry, low land that is not cold is sand, blown by the wind with or
                     // without plants; polar deserts stay gravel. Soil the plants built
                     // stays Erde.
-                    const z = zones[i];
-                    const s = soil[i];
-                    substrate[i] = (z & SE.ZONE_WETLAND) ? SE.Substrate.Mire
-                        : (z & SE.ZONE_ROCKBELT) ? SE.Substrate.Rock
-                            : s <= SOIL_REGOLITH_U8 && moistSm[i] < SE.SAND_MOISTURE && elevation[i] < SE.SAND_MAX_ELEVATION &&
-                                SE.zoneTemp(z) >= 2 /* TempClass.Cool */ ? SE.Substrate.Sand
-                                : s < SOIL_EARTH_U8 ? SE.Substrate.Rock : SE.Substrate.Soil;
+                    substrate[i] = SuccessionSystem.substrateFor(world, i, zones[i], moistSm[i]);
                 }
                 // Most tiles rest at their target: nothing to step.
                 const cur = landscape[i];
@@ -21384,6 +21513,17 @@ var SE;
                 if (full || changed)
                     SuccessionSystem.densityAt(world, i);
             }
+        }
+        /** Substrate of land tile i in zone `z` at moisture `moist`; the brush's low coasts are sand (terraformSand). */
+        static substrateFor(world, i, z, moist) {
+            if (SE.terraformSand(world, i))
+                return SE.Substrate.Sand;
+            const s = world.soil[i];
+            return (z & SE.ZONE_WETLAND) ? SE.Substrate.Mire
+                : (z & SE.ZONE_ROCKBELT) ? SE.Substrate.Rock
+                    : s <= SOIL_REGOLITH_U8 && moist < SE.SAND_MOISTURE && world.elevation[i] < SE.SAND_MAX_ELEVATION &&
+                        SE.zoneTemp(z) >= 2 /* TempClass.Cool */ ? SE.Substrate.Sand
+                        : s < SOIL_EARTH_U8 ? SE.Substrate.Rock : SE.Substrate.Soil;
         }
         /** One tile's step of `settle`. */
         static advanceTile(world, i, run) {
@@ -27884,6 +28024,7 @@ var SE;
                 fauna: ctx.fauna ? ctx.fauna.toJSON() : undefined,
                 civ: SE.civToJSON(w),
                 coal: SE.coalToJSON(w),
+                terraformed: SE.terraformedToJSON(w),
                 paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
             };
         }
@@ -27992,6 +28133,8 @@ var SE;
             // (coalsave.ts). Before the landscapes are derived, which ask whether
             // the clubmosses still count as woody.
             SE.restoreCoal(ctx.world, raw.coal);
+            // Land the brush raised (optional field, terraform.ts): its summits keep their snow.
+            SE.restoreTerraformed(ctx.world, raw.terraformed);
             SE.RiverSystem.rebuild(ctx.world);
             SE.BiomeSystem.step(ctx.world, false);
             ctx.world.refreshDerived();
@@ -28488,6 +28631,565 @@ var SE;
         }
     }
     SE.SaveSystem = SaveSystem;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — terraforming brush (simulation side)
+ * -----------------------------------------------------------------------------
+ * The "Höhe ändern" tool as a brush: held down, it raises or lowers the
+ * ground continuously with a soft falloff. A stroke is many cheap dabs
+ * (terraformDab, every frame while the pointer is down) and one settle at the
+ * end (terraformSettle): rivers, biomes, snow on new peaks, groundwater in
+ * deep hollows, and life moving out of drowned or lifted ground.
+ *
+ * Live, per dab, on the brushed tiles only (what the map needs to redraw):
+ *   elevation    brush × ridge noise, then thermal erosion down to a talus
+ *                slope (no one-tile spikes; raised land builds ridges)
+ *   temperature  shifted by the lapse rate, so the sea-level climate stays
+ *                and the ridge layer's tree/rock/snow lines follow at once
+ *   stages       a land tile that crosses into another TERRAFORM_STAGES band
+ *                (with a band of hysteresis at the edges) takes that stage's
+ *                look, from the succession ladder of its climate and plants:
+ *                  Küste        sand (Strand on warm coasts), bare
+ *                  Tiefland,    soil, and the climax of its climate with the
+ *                  Hügel        plants of the land around it: meadow, steppe,
+ *                               savanna, forest, marsh … (bare Rohboden on a
+ *                               planet without land plants)
+ *                  Bergland     thin soil: pioneer crust (lichen and moss on
+ *                               rock, semi-desert), rock between
+ *                  Hochgebirge  bare rock (stony desert in dry, warm air)
+ *                  Gipfel       summit snow (WorldState.terraformed: at any
+ *                               latitude, SUMMIT_SNOW_ELEVATION), rock in
+ *                               dry air
+ *                ice, summit snow and the rock belt of the climate apply in
+ *                every stage; lowering walks the stages back down
+ *   water        only below sea level (water is elevation < 0): a dug basin
+ *                floods from its lowest tile outwards, a lowered coast turns
+ *                to sand first and goes under from the waterline inland
+ * At settle (pointer up):
+ *   life         land animals on drowned tiles flee to the nearest land, sea
+ *                life on risen tiles to the nearest water (half survive the
+ *                move); plants of the wrong realm die
+ *   rivers       RiverSystem.rebuild (in two steps)
+ *   landscapes   SuccessionSystem.refreshTiles over the touched tiles and
+ *                their climate neighbourhood (the stage looks stand, the
+ *                succession grows on from them);
+ *                touched tiles whose target is snow or ice take it at once,
+ *                snow below the snow line melts
+ *   cities       not here: the app calls civ.sync, which drowns cities on
+ *                water (reconcileCities)
+ * Not live: rivers (old channels stay drawn until settle), moisture (but
+ * risen land takes its neighbours').
+ *
+ * Node-safe: no DOM, no app; tests drive it directly (tests/terraform.test.js).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    SE.TERRAFORM_RADIUS_MIN = 1.5;
+    SE.TERRAFORM_RADIUS_MAX = 8;
+    /**
+     * Energy per unit of elevation moved: a quarter of the old tool's rate (its
+     * 5 × 5 click moved 1.74 for ALTITUDE_COST), so shaping land feels free enough to enjoy.
+     */
+    SE.TERRAFORM_COST_PER_UNIT = SE.ALTITUDE_COST / 1.74 / 4;
+    /** Elevation per second at the brush centre: ~0.15 in the first 0.2 s, a stage or more. */
+    const TERRAFORM_RATE = 0.75;
+    /**
+     * Steepest slope between neighbours erosion leaves, elevation per tile
+     * (~540 m): about a tenth of the planet's highland slopes are steeper, so
+     * brushing over a range softens it only a little.
+     */
+    const TERRAFORM_TALUS = 0.12;
+    /** Share of the slope beyond the talus that slides per second (a radius-1.5 spike stays within ~0.2 of its foot). */
+    const TERRAFORM_ERODE = 4;
+    /** Raising is scaled by 1 - RIDGE + 2·RIDGE·noise: ridges and passes instead of a dome, and no tile lags far behind. */
+    const TERRAFORM_RIDGE = 0.45;
+    /** Share of a fleeing population that survives the move. */
+    const TERRAFORM_REFUGE_KEEP = 0.5;
+    /** Farthest a population flees, in tiles. */
+    const TERRAFORM_REFUGE_REACH = Math.ceil(SE.TERRAFORM_RADIUS_MAX) + 1;
+    const SEA_FLORA = SE.floraBit(SE.Flora.MarineAlgae);
+    /* Per-dab scratch over the brush square. */
+    const SPAN = 2 * Math.ceil(SE.TERRAFORM_RADIUS_MAX) + 1;
+    const dabTile = new Int32Array(SPAN * SPAN);
+    const dabW = new Float32Array(SPAN * SPAN);
+    const dabBefore = new Float32Array(SPAN * SPAN);
+    const dabDelta = new Float32Array(SPAN * SPAN);
+    /** Slot of the square cell in the dab lists, -1 outside the disc. */
+    const dabSlot = new Int32Array(SPAN * SPAN);
+    /** Ridged value noise per tile for the world's seed, built on the first dab. */
+    let ridge = null;
+    let ridgeSeed = -1;
+    function ridgeField(seed) {
+        if (ridge && ridgeSeed === seed)
+            return ridge;
+        const out = ridge ?? new Float32Array(SE.TILE_COUNT);
+        const octave = (x, y, cell, salt) => {
+            const cw = SE.GRID_W / cell;
+            const lat = (cx, cy) => {
+                let h = Math.imul(((cx % cw) + cy * 977) ^ seed ^ salt, 0x85ebca6b);
+                h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+                return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+            };
+            const fx = x / cell;
+            const fy = y / cell;
+            const cx = Math.floor(fx);
+            const cy = Math.floor(fy);
+            const tx = SE.smoothstep(fx - cx);
+            const ty = SE.smoothstep(fy - cy);
+            return SE.lerp(SE.lerp(lat(cx, cy), lat(cx + 1, cy), tx), SE.lerp(lat(cx, cy + 1), lat(cx + 1, cy + 1), tx), ty);
+        };
+        for (let y = 0; y < SE.GRID_H; y++) {
+            for (let x = 0; x < SE.GRID_W; x++) {
+                const n = octave(x, y, 8, 0x3c6ef372) * 0.65 + octave(x, y, 4, 0x1b873593) * 0.35;
+                out[SE.idx(x, y)] = 1 - Math.abs(2 * n - 1);
+            }
+        }
+        ridge = out;
+        ridgeSeed = seed;
+        return out;
+    }
+    /* Stage indices of TERRAFORM_STAGES on land. */
+    const ST_COAST = 3;
+    const ST_LOW = 4;
+    const ST_HILL = 5;
+    const ST_UPLAND = 6;
+    /** A tile keeps its shown stage until it is this far past the band edge (no flicker at the edges). */
+    const TERRAFORM_STAGE_BAND = 0.012;
+    /** Share of the neighbours' mean plant cover new lowland, hills and upland start with. */
+    const TERRAFORM_GREEN_SHARE = 0.6;
+    const SOIL_EARTH_BYTE = Math.ceil(SE.SOIL_EARTH * 255);
+    /** Soil left on the upland: below Erde, so rock shows between its plants. */
+    const SOIL_UPLAND_BYTE = Math.floor(SOIL_EARTH_BYTE * 0.6);
+    const ladder = new Uint8Array(5);
+    /** Stage each brushed tile shows, 255 before the brush first touches it; per world, not saved. */
+    const shown = new WeakMap();
+    /** Whether the last shownStage call moved the tile into another stage. */
+    let stageMoved = false;
+    /** The stage tile i shows at elevation `e` (it was at `before`), with a band at the stage edges. */
+    function shownStage(world, i, e, before) {
+        let memo = shown.get(world);
+        if (!memo) {
+            memo = new Uint8Array(SE.TILE_COUNT).fill(255);
+            shown.set(world, memo);
+        }
+        const prev = memo[i] === 255 ? terraformStage(before) : memo[i];
+        const raw = terraformStage(e);
+        let s = raw;
+        // The water line itself is exact: water is elevation < 0.
+        if (Math.abs(raw - prev) === 1 && (prev < ST_COAST) === (e < 0) &&
+            Math.abs(e - SE.TERRAFORM_STAGES[Math.min(raw, prev)].to) < TERRAFORM_STAGE_BAND)
+            s = prev;
+        memo[i] = s;
+        stageMoved = s !== prev;
+        return s;
+    }
+    /** Is land tile i a low coast the brush made or reached: sand (SuccessionSystem.substrateFor). */
+    function terraformSand(world, i) {
+        const e = world.elevation[i];
+        return world.terraformed[i] !== 0 && e >= 0 && e < SE.TERRAFORM_STAGES[ST_COAST].to;
+    }
+    SE.terraformSand = terraformSand;
+    /** Climate zone of brushed land tile i, read like the succession reads it (at the 3 x 3 land mean height). */
+    function brushedZone(world, i) {
+        const e = world.elevation;
+        const x = i % SE.GRID_W;
+        const y = (i / SE.GRID_W) | 0;
+        let h = 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= SE.GRID_H)
+                continue;
+            for (let dx = -1; dx <= 1; dx++) {
+                const v = e[SE.idx(SE.wrapX(x + dx), yy)];
+                if (v >= 0) {
+                    h += v;
+                    n++;
+                }
+            }
+        }
+        h /= n;
+        const temp = world.temperature[i] + SE.altitudeCooling(e[i]) - SE.altitudeCooling(h);
+        return SE.landscapeZone(temp, world.moisture[i], h, 1, world.landscapeZone[i], e[i], true);
+    }
+    /**
+     * Land without plants takes those of the land around it, risen land its
+     * moisture too (sea water reads 1): the brush moves the ground, and what
+     * grows beside it grows on.
+     */
+    function inheritFromNeighbours(world, i, moisture) {
+        const x = i % SE.GRID_W;
+        const y = (i / SE.GRID_W) | 0;
+        let flora = 0;
+        let veg = 0;
+        let moist = 0;
+        let n = 0;
+        let best = -1;
+        for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= SE.GRID_H)
+                continue;
+            for (let dx = -1; dx <= 1; dx++) {
+                const j = SE.idx(SE.wrapX(x + dx), yy);
+                if (j === i || world.elevation[j] < 0)
+                    continue;
+                flora |= world.flora[j] & SE.LAND_FLORA_MASK;
+                veg += world.vegetation[j];
+                moist += world.moisture[j];
+                n++;
+                if (best < 0 || world.vegetation[j] > world.vegetation[best])
+                    best = j;
+            }
+        }
+        if (n === 0)
+            return;
+        if (moisture)
+            world.moisture[i] = moist / n;
+        if ((world.flora[i] & SE.LAND_FLORA_MASK) !== 0 || flora === 0)
+            return;
+        world.flora[i] |= flora;
+        world.floraTop[i] = world.floraTop[best];
+        world.vegetation[i] = Math.max(world.vegetation[i], (veg / n) * TERRAFORM_GREEN_SHARE);
+    }
+    /**
+     * The landscape a brushed land tile shows in stage `s`, from the succession
+     * ladder of its climate zone and plants, with the soil the stage leaves;
+     * the settle reads the same ladder, so it keeps the look.
+     */
+    function stageLandscape(world, i, s, z) {
+        if (SE.zoneTemp(z) === 0 /* TempClass.Frozen */)
+            return SE.Landscape.Ice;
+        if (z & SE.ZONE_SNOW)
+            return SE.Landscape.Snow;
+        const woody = SE.woodyFloraMask(world);
+        const cacti = SE.cactiArrived(world);
+        if (s === ST_COAST) {
+            SE.fillLadder(z, world.flora[i], world.soil[i] >= SOIL_EARTH_BYTE, ladder, woody, cacti);
+            return ladder[0];
+        }
+        if (s === ST_LOW || s === ST_HILL) {
+            inheritFromNeighbours(world, i, false);
+            world.soil[i] = Math.max(world.soil[i], SOIL_EARTH_BYTE);
+            return SE.ladderTarget(SE.fillLadder(z, world.flora[i], true, ladder, woody, cacti), ladder);
+        }
+        if (s === ST_UPLAND) {
+            inheritFromNeighbours(world, i, false);
+            world.soil[i] = Math.min(world.soil[i], SOIL_UPLAND_BYTE);
+            const climax = SE.fillLadder(z, world.flora[i], false, ladder, woody, cacti);
+            return (climax >= 1 && ladder[1] !== SE.LADDER_NONE ? ladder[1] : ladder[0]);
+        }
+        // High mountains, and a summit without snow (dry air): bare.
+        world.soil[i] = 0;
+        SE.fillLadder(z, world.flora[i], false, ladder, woody, cacti);
+        return ladder[0];
+    }
+    /** Put the stage's look on land tile i: zone, landscape, density, substrate, habitat. */
+    function applyStage(world, i, s, z) {
+        world.landscapeZone[i] = z;
+        const l = stageLandscape(world, i, s, z);
+        SE.SuccessionSystem.reset(world, i, l);
+        SE.SuccessionSystem.densityAt(world, i);
+        world.substrate[i] = SE.SuccessionSystem.substrateFor(world, i, z, world.moisture[i]);
+        world.biome[i] = SE.landscapeHabitat(l, z);
+    }
+    /** Snow and ice follow the height (and the latitude) inside a stage too. */
+    function frostChanged(world, i, z) {
+        const l = world.landscape[i];
+        const frozen = SE.zoneTemp(z) === 0 /* TempClass.Frozen */;
+        const snow = !frozen && (z & SE.ZONE_SNOW) !== 0;
+        return (l === SE.Landscape.Ice) !== frozen || (l === SE.Landscape.Snow) !== snow;
+    }
+    /** The plain water state SuccessionSystem gives a tile the sea has taken. */
+    function drown(world, i) {
+        SE.SuccessionSystem.reset(world, i, SE.Landscape.Rock);
+        world.landscapeNext[i] = SE.LANDSCAPE_UNSET;
+        world.substrate[i] = SE.Substrate.Rock;
+        world.soil[i] = 0;
+        world.landscapeZone[i] = SE.ZONE_NONE;
+        world.biome[i] = SE.BiomeSystem.waterHabitat(world.elevation[i], world.temperature[i]);
+    }
+    /**
+     * Raise or lower around tile (x, y) for `dt` seconds of a held brush. Cheap:
+     * only the elevation (and what the map needs to show it); nothing planet-wide.
+     */
+    function terraformDab(world, x, y, brush, dt) {
+        const e = world.elevation;
+        const r = SE.clamp(brush.radius, SE.TERRAFORM_RADIUS_MIN, SE.TERRAFORM_RADIUS_MAX);
+        const reach = Math.ceil(r);
+        const noise = ridgeField(world.seed);
+        const step = Math.max(0, dt) * TERRAFORM_RATE * brush.sign;
+        // Brush: soft falloff, ridged where it raises.
+        let n = 0;
+        dabSlot.fill(-1);
+        for (let dy = -reach; dy <= reach; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= SE.GRID_H)
+                continue;
+            for (let dx = -reach; dx <= reach; dx++) {
+                const d = Math.hypot(dx, dy);
+                if (d > r)
+                    continue;
+                const i = SE.idx(SE.wrapX(x + dx), yy);
+                const w = SE.smoothstep(1 - d / r);
+                const rough = brush.sign > 0 ? 1 - TERRAFORM_RIDGE + 2 * TERRAFORM_RIDGE * noise[i] : 1;
+                dabSlot[(dy + reach) * SPAN + dx + reach] = n;
+                dabTile[n] = i;
+                dabW[n] = w;
+                dabBefore[n] = e[i];
+                e[i] = SE.clamp(e[i] + step * w * rough, -1, 1);
+                n++;
+            }
+        }
+        // Thermal erosion inside the disc: slopes steeper than the talus slide, so
+        // a small brush builds a cone, not a one-tile spike, and a pit a bowl.
+        const k = Math.min(0.5, TERRAFORM_ERODE * Math.max(0, dt)) * 0.5;
+        if (k > 0) {
+            dabDelta.fill(0, 0, n);
+            for (let dy = -reach; dy <= reach; dy++) {
+                for (let dx = -reach; dx <= reach; dx++) {
+                    const a = dabSlot[(dy + reach) * SPAN + dx + reach];
+                    if (a < 0)
+                        continue;
+                    // Right and down neighbours: every pair once.
+                    for (let q = 0; q < 2; q++) {
+                        const bx = dx + (q === 0 ? 1 : 0) + reach;
+                        const by = dy + (q === 1 ? 1 : 0) + reach;
+                        if (bx >= SPAN || by >= SPAN)
+                            continue;
+                        const b = dabSlot[by * SPAN + bx];
+                        if (b < 0)
+                            continue;
+                        const diff = e[dabTile[a]] - e[dabTile[b]];
+                        const excess = Math.abs(diff) - TERRAFORM_TALUS;
+                        if (excess <= 0)
+                            continue;
+                        const m = Math.sign(diff) * excess * k * Math.max(dabW[a], dabW[b]);
+                        dabDelta[a] -= m;
+                        dabDelta[b] += m;
+                    }
+                }
+            }
+            // Erosion never drowns land: the coast is the brush's business.
+            for (let s = 0; s < n; s++) {
+                const t = dabTile[s];
+                const v = e[t] + dabDelta[s];
+                e[t] = e[t] >= 0 && v < 0 ? 0 : v;
+            }
+        }
+        const tiles = [];
+        let moved = 0;
+        let emerged = 0;
+        let flooded = 0;
+        let sum = 0;
+        for (let s = 0; s < n; s++) {
+            const i = dabTile[s];
+            const before = dabBefore[s];
+            const after = e[i];
+            sum += after;
+            if (after === before)
+                continue;
+            moved += Math.abs(after - before);
+            tiles.push(i);
+            world.terraformed[i] = 1;
+            world.temperature[i] += SE.altitudeCooling(before) - SE.altitudeCooling(after);
+            const stage = shownStage(world, i, after, before);
+            if (after < 0) {
+                if (before >= 0) {
+                    flooded++;
+                    drown(world, i);
+                }
+                else {
+                    world.biome[i] = SE.BiomeSystem.waterHabitat(after, world.temperature[i]);
+                }
+                continue;
+            }
+            const risen = before < 0;
+            if (risen) {
+                emerged++;
+                inheritFromNeighbours(world, i, true);
+            }
+            const z = brushedZone(world, i);
+            if (risen || stageMoved || frostChanged(world, i, z))
+                applyStage(world, i, stage, z);
+            // A natural coast the brush touches turns to sand at once, as the settle will read it.
+            else if (terraformSand(world, i))
+                world.substrate[i] = SE.Substrate.Sand;
+        }
+        if (tiles.length > 0)
+            world.terrainDirty = true;
+        return { tiles, moved, emerged, flooded, height: n > 0 ? sum / n : 0 };
+    }
+    SE.terraformDab = terraformDab;
+    /** The nearest tile within TERRAFORM_REFUGE_REACH that is water (`water`) or land, nearest ring first; -1 if none. */
+    function refuge(world, i, water) {
+        const x = i % SE.GRID_W;
+        const y = (i / SE.GRID_W) | 0;
+        let best = -1;
+        let bestD = Infinity;
+        for (let ring = 1; ring <= TERRAFORM_REFUGE_REACH && best < 0; ring++) {
+            for (let dy = -ring; dy <= ring; dy++) {
+                const yy = y + dy;
+                if (yy < 0 || yy >= SE.GRID_H)
+                    continue;
+                for (let dx = -ring; dx <= ring; dx++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring)
+                        continue;
+                    const j = SE.idx(SE.wrapX(x + dx), yy);
+                    if (world.isWater(j) !== water)
+                        continue;
+                    const d = dx * dx + dy * dy;
+                    if (d < bestD) {
+                        bestD = d;
+                        best = j;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+    /** Life on the wrong side of the water line flees to the nearest refuge; plants of the wrong realm die. */
+    function adaptLife(world, i) {
+        const water = world.isWater(i);
+        const wrongFlora = water ? world.flora[i] & ~SEA_FLORA : world.flora[i] & SEA_FLORA;
+        if (wrongFlora !== 0) {
+            world.flora[i] &= ~wrongFlora;
+            world.vegetation[i] = 0;
+        }
+        const base = i * SE.LIFE_COUNT;
+        let to = -2;
+        for (let c = 1; c < SE.LIFE_COUNT; c++) {
+            const d = world.lifeDensity[base + c];
+            if (d <= 0 || (SE.LIFE[c].realm === 'sea') === water)
+                continue;
+            if (to === -2)
+                to = refuge(world, i, !water);
+            if (to >= 0) {
+                const t = to * SE.LIFE_COUNT + c;
+                if (world.lifeDensity[t] <= 0)
+                    world.lifeStage[t] = world.lifeStage[base + c];
+                world.lifeDensity[t] = Math.min(1, world.lifeDensity[t] + d * TERRAFORM_REFUGE_KEEP);
+            }
+            world.lifeDensity[base + c] = 0;
+            world.lifeStage[base + c] = 0;
+        }
+    }
+    /** A touched land tile takes at once the snow or ice its smoothed climate gives it, or loses it. */
+    function snapLandscape(world, i) {
+        const cur = world.landscape[i];
+        const tgt = SE.SuccessionSystem.targetOf(i);
+        if (cur === tgt)
+            return;
+        if (tgt === SE.Landscape.Snow || tgt === SE.Landscape.Ice) {
+            SE.SuccessionSystem.reset(world, i, tgt);
+        }
+        else if (cur === SE.Landscape.Snow || cur === SE.Landscape.Ice) {
+            SE.SuccessionSystem.clear(world, i);
+        }
+        else {
+            return;
+        }
+        world.biome[i] = SE.landscapeHabitat(world.landscape[i], world.landscapeZone[i]);
+    }
+    const nearMark = new Uint8Array(SE.TILE_COUNT);
+    /** The tiles within `r` (square) of any of `list`, each once. */
+    function around(list, r) {
+        const out = [];
+        for (const i of list) {
+            const x = i % SE.GRID_W;
+            const y = (i / SE.GRID_W) | 0;
+            for (let yy = Math.max(0, y - r); yy <= Math.min(SE.GRID_H - 1, y + r); yy++) {
+                for (let dx = -r; dx <= r; dx++) {
+                    const j = yy * SE.GRID_W + SE.wrapX(x + dx);
+                    if (nearMark[j])
+                        continue;
+                    nearMark[j] = 1;
+                    out.push(j);
+                }
+            }
+        }
+        for (const j of out)
+            nearMark[j] = 0;
+        return out;
+    }
+    /**
+     * After a stroke, in steps the caller may run one per frame (none stalls a
+     * frame alone): life leaves the wrong side of the water line; the river
+     * network is rebuilt (planet-wide, in two halves: the flood, then the
+     * routing); the landscapes of the touched tiles and the climate
+     * neighbourhood around them (LANDSCAPE_SMOOTH_RADIUS) are refreshed
+     * locally, snow and ice snapping. Run them in order, all of them.
+     */
+    function terraformSettleSteps(world, tiles) {
+        const list = [...new Set(tiles)];
+        return [
+            () => { for (const i of list)
+                adaptLife(world, i); },
+            ...SE.RiverSystem.rebuildSteps(world),
+            () => {
+                const area = around(list, SE.LANDSCAPE_SMOOTH_RADIUS);
+                SE.SuccessionSystem.refreshTiles(world, area);
+                for (const i of area) {
+                    const e = world.elevation[i];
+                    world.biome[i] = e < 0 ? SE.BiomeSystem.waterHabitat(e, world.temperature[i])
+                        : SE.landscapeHabitat(world.landscape[i], world.landscapeZone[i]);
+                }
+                for (const i of list)
+                    if (!world.isWater(i))
+                        snapLandscape(world, i);
+            },
+        ];
+    }
+    SE.terraformSettleSteps = terraformSettleSteps;
+    /** After a stroke: all of terraformSettleSteps at once. */
+    function terraformSettle(world, tiles) {
+        for (const step of terraformSettleSteps(world, tiles))
+            step();
+    }
+    SE.terraformSettle = terraformSettle;
+    /**
+     * The height bands the brush passes through, low to high: what the cursor
+     * names, what the sound marks when a stroke crosses into the next, and what
+     * the map should make visibly different. Index = stage, `to` = upper bound
+     * of the band in elevation (sea level 0, top 1).
+     */
+    SE.TERRAFORM_STAGES = [
+        { name: 'Tiefsee', to: -0.4 },
+        { name: 'Meer', to: -0.12 },
+        { name: 'Flachwasser', to: 0 },
+        { name: 'Küste', to: 0.05 },
+        { name: 'Tiefland', to: 0.2 },
+        { name: 'Hügel', to: 0.45 },
+        { name: 'Bergland', to: 0.7 },
+        { name: 'Hochgebirge', to: SE.SUMMIT_SNOW_ELEVATION },
+        { name: 'Gipfel', to: Infinity },
+    ];
+    /** Stage index (TERRAFORM_STAGES) of an elevation. */
+    function terraformStage(elevation) {
+        let s = 0;
+        while (elevation >= SE.TERRAFORM_STAGES[s].to)
+            s++;
+        return s;
+    }
+    SE.terraformStage = terraformStage;
+    /** The optional save field `terraformed`: the brushed tiles, or undefined on a planet never brushed. */
+    function terraformedToJSON(world) {
+        const out = [];
+        for (let i = 0; i < SE.TILE_COUNT; i++)
+            if (world.terraformed[i] !== 0)
+                out.push(i);
+        return out.length > 0 ? out : undefined;
+    }
+    SE.terraformedToJSON = terraformedToJSON;
+    /** Restore the brushed tiles; a save without the field (or a damaged one) has none. */
+    function restoreTerraformed(world, raw) {
+        world.terraformed.fill(0);
+        if (!Array.isArray(raw))
+            return;
+        for (const i of raw)
+            if (Number.isInteger(i) && i >= 0 && i < SE.TILE_COUNT)
+                world.terraformed[i] = 1;
+    }
+    SE.restoreTerraformed = restoreTerraformed;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — pixel sprites
@@ -29617,8 +30319,23 @@ var SE;
         const n = landOctave(x, y, SE.GRID_W, 64, 977) * 0.6 + landOctave(x, y, SE.GRID_W, 128, 978) * 0.4;
         return temp + (n - 0.5) * 2 * ICE_WOBBLE < ICE_TEMP;
     }
-    /** Highlands a little lighter, lowlands a little darker, in steps per unit of elevation. */
-    const ALTITUDE_GAIN = 0.5;
+    /**
+     * Highlands lighter, lowlands darker, in steps per unit of elevation around
+     * ALTITUDE_MID, limited to [ALTITUDE_LOW, ALTITUDE_HIGH] steps: a brushed
+     * plateau reads higher than the plain it rose from, also inside one landscape.
+     */
+    const ALTITUDE_GAIN = 2.5;
+    const ALTITUDE_MID = 0.2;
+    const ALTITUDE_LOW = -0.5;
+    const ALTITUDE_HIGH = 0.6;
+    /**
+     * Ridges and knolls lighter, hollows darker: steps per unit of curvature
+     * (elevation above the mean of the four neighbours) beyond a dead zone.
+     * Measured on land: the middle half lies within ±0.013, the outer tenth beyond ±0.04–0.06.
+     */
+    const CURVE_GAIN = 8;
+    const CURVE_DEAD = 0.015;
+    const CURVE_LIMIT = 0.75;
     /** Macro variation: value-noise lattice cells around the planet (8 tiles each). */
     const MACRO_CELLS = 32;
     /** |noise| where a patch starts to shift, and the band over which it reaches one step. */
@@ -29732,8 +30449,41 @@ var SE;
             this.rank = new Uint8Array(SE.TILE_COUNT);
             this.low = new Uint8Array(SE.TILE_COUNT);
             this.wide = new Uint8Array(SE.TILE_COUNT);
+            this.ridgesAt = -Infinity;
         }
         refresh(world) {
+            this.read(world, 0, 0, SE.GRID_W, SE.GRID_H, true);
+            this.edges(0, 0, SE.GRID_W, SE.GRID_H);
+            this.volcanoes(world);
+            this.paths.build(world);
+            this.ridges.build(world, this.volcano);
+            this.sign(0, 0, SE.GRID_W, SE.GRID_H);
+        }
+        /**
+         * Re-read only tiles [x0, x1) × [y0, y1) (x may run past the wrap) after
+         * their elevation changed, as a terraforming brush does every frame: a
+         * full refresh costs 10–20 ms. Rivers and the savanna's reach keep their
+         * last state; mountain ridges and cones are rebuilt, they follow the height.
+         * True when the ridges were rebuilt this time.
+         */
+        refreshBox(world, x0, y0, x1, y1) {
+            const ya = Math.max(0, y0 - 1);
+            const yb = Math.min(SE.GRID_H, y1 + 1);
+            this.read(world, x0 - 1, ya, x1 + 1, yb, false);
+            this.edges(x0 - 3, Math.max(0, ya - 2), x1 + 3, Math.min(SE.GRID_H, yb + 2));
+            // The ranges are found planet-wide (1–11 ms): at most ten times a second.
+            const now = performance.now();
+            const ridges = now - this.ridgesAt > 100;
+            if (ridges) {
+                this.ridgesAt = now;
+                this.volcanoes(world);
+                this.ridges.build(world, this.volcano);
+            }
+            // Ridge lines and cones can move a little past the box.
+            this.sign(x0 - 8, Math.max(0, y0 - 8), x1 + 8, Math.min(SE.GRID_H, y1 + 8));
+            return ridges;
+        }
+        read(world, x0, y0, x1, y1, all) {
             const T = SE.LandTables.shared();
             const { elevation: e, biome, landscape, landscapeDensity, substrate, flora, floraTop, vegetation, riverLevel, tech } = world;
             const algae = SE.floraBit(SE.Flora.FreshwaterAlgae);
@@ -29744,116 +30494,119 @@ var SE;
             const cacti = SE.cactiArrived(world);
             const trees = SE.savannaTreesArrived(world);
             const palms = SE.palmsArrived(world);
-            if (trees)
+            if (trees && all)
                 this.reach.update(world);
-            for (let i = 0; i < SE.TILE_COUNT; i++) {
-                const h = e[i];
-                let key = 0;
-                let scene = SE.LAND_SCENE_NONE;
-                let density = 0;
-                let groups = 0;
-                let cactus = 0;
-                let tree = 0;
-                let palm = 0;
-                let shade = 0;
-                let rugged = 0;
-                let river = 0;
-                if (h < 0) {
-                    if (packIce(world.temperature[i], i))
-                        key = T.seaIceKey;
-                    else if (biome[i] === SE.Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
-                        scene = SE.LAND_SCENE_SEA;
-                        groups = kelp;
-                        density = vegetation[i] < 0.3 ? 0 : vegetation[i] < 0.6 ? 1 : 2;
+            for (let y = y0; y < y1; y++)
+                for (let x = x0; x < x1; x++) {
+                    const i = y * SE.GRID_W + SE.wrapX(x);
+                    const h = e[i];
+                    let key = 0;
+                    let scene = SE.LAND_SCENE_NONE;
+                    let density = 0;
+                    let groups = 0;
+                    let cactus = 0;
+                    let tree = 0;
+                    let palm = 0;
+                    let shade = 0;
+                    let rugged = 0;
+                    let river = 0;
+                    if (h < 0) {
+                        if (packIce(world.temperature[i], i))
+                            key = T.seaIceKey;
+                        else if (biome[i] === SE.Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
+                            scene = SE.LAND_SCENE_SEA;
+                            groups = kelp;
+                            density = vegetation[i] < 0.3 ? 0 : vegetation[i] < 0.6 ? 1 : 2;
+                        }
+                        this.depth[i] = seaDepth(h);
                     }
-                    this.depth[i] = seaDepth(h);
-                }
-                else {
-                    const ls = landscape[i];
-                    density = Math.min(landscapeDensity[i], T.steps[ls * 4 + substrate[i]] - 1);
-                    key = T.groundKey(ls, substrate[i], density);
-                    // New land of a hotspot or an island arc is fresh basalt until it
-                    // weathers; bare rock in the subnival belt is scree (docs/hoehe-spec.md §3.6).
-                    if (ls === SE.Landscape.Rock) {
-                        const kind = world.upliftKind[i];
-                        if ((kind === 4 /* UpliftKind.Hotspot */ || kind === 3 /* UpliftKind.IslandArc */) && world.soil[i] < FRESH_ROCK_SOIL) {
-                            key = T.materialKey('basalt') || key;
+                    else {
+                        const ls = landscape[i];
+                        density = Math.min(landscapeDensity[i], T.steps[ls * 4 + substrate[i]] - 1);
+                        key = T.groundKey(ls, substrate[i], density);
+                        // New land of a hotspot or an island arc is fresh basalt until it
+                        // weathers; bare rock in the subnival belt is scree (docs/hoehe-spec.md §3.6).
+                        if (ls === SE.Landscape.Rock) {
+                            const kind = world.upliftKind[i];
+                            if ((kind === 4 /* UpliftKind.Hotspot */ || kind === 3 /* UpliftKind.IslandArc */) && world.soil[i] < FRESH_ROCK_SOIL) {
+                                key = T.materialKey('basalt') || key;
+                            }
+                            else if (world.landscapeZone[i] !== SE.ZONE_NONE && (world.landscapeZone[i] & SE.ZONE_ROCKBELT) !== 0) {
+                                key = T.materialKey('scree') || key;
+                            }
                         }
-                        else if (world.landscapeZone[i] !== SE.ZONE_NONE && (world.landscapeZone[i] & SE.ZONE_ROCKBELT) !== 0) {
-                            key = T.materialKey('scree') || key;
+                        const beach = SE.isBeach(world, i);
+                        if (beach)
+                            key = T.materialKey('beach') || key;
+                        this.depth[i] = SE.LAND_SHALLOW;
+                        shade = this.relief(e, i) + MACRO[i];
+                        rugged = Math.round(SE.clamp((h - CRAG_START) / MOUNTAIN_SPAN, 0, 1) * CRAG_STEPS * 4) / 4;
+                        if (riverLevel[i] > 0)
+                            river = 1;
+                        if (river === 0 && tech[i] === SE.Tech.None) {
+                            scene = ls;
+                            groups = flora[i] & T.showable[ls] & shown;
+                            // On desert ground the flowering plants show only as cacti, on some tiles, once cacti exist.
+                            if (SE.isCactusLandscape(ls) && (flora[i] & flowering) !== 0) {
+                                groups &= ~flowering;
+                                if (cacti && landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 820) < SE.CACTUS_SHARE)
+                                    cactus = 1;
+                            }
+                            if (trees && ls === SE.Landscape.Savanna && (flora[i] & flowering) !== 0 &&
+                                landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 830) < SE.savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i]))
+                                tree = 1;
+                            // A beach is bare sand: no jungle giants, only its palms.
+                            if (beach) {
+                                scene = SE.LAND_SCENE_NONE;
+                                palm = SE.beachPalms(world, i, palms);
+                            }
                         }
-                    }
-                    const beach = SE.isBeach(world, i);
-                    if (beach)
-                        key = T.materialKey('beach') || key;
-                    this.depth[i] = SE.LAND_SHALLOW;
-                    shade = this.relief(e, i) + MACRO[i];
-                    rugged = Math.round(SE.clamp((h - CRAG_START) / MOUNTAIN_SPAN, 0, 1) * CRAG_STEPS * 4) / 4;
-                    if (riverLevel[i] > 0)
-                        river = 1;
-                    if (river === 0 && tech[i] === SE.Tech.None) {
-                        scene = ls;
-                        groups = flora[i] & T.showable[ls] & shown;
-                        // On desert ground the flowering plants show only as cacti, on some tiles, once cacti exist.
-                        if (SE.isCactusLandscape(ls) && (flora[i] & flowering) !== 0) {
-                            groups &= ~flowering;
-                            if (cacti && landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 820) < SE.CACTUS_SHARE)
-                                cactus = 1;
-                        }
-                        if (trees && ls === SE.Landscape.Savanna && (flora[i] & flowering) !== 0 &&
-                            landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 830) < SE.savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i]))
-                            tree = 1;
-                        // A beach is bare sand: no jungle giants, only its palms.
-                        if (beach) {
+                        // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
+                        const scar = scars[i];
+                        // A vent is a cone (volcanoes()): nothing grows on it.
+                        if (scar === SE.ScarKind.Vent)
                             scene = SE.LAND_SCENE_NONE;
-                            palm = SE.beachPalms(world, i, palms);
+                        if (scar !== SE.ScarKind.None && SE.scarShowsGround(world, i)) {
+                            // Fresh ground carries none of the landscape's old objects; the
+                            // effect layer draws the scar's own (fxscars.ts).
+                            scene = SE.LAND_SCENE_NONE;
+                            const g = SE.scarGround(scar, T);
+                            if (g) {
+                                key = g.key;
+                                shade += g.shade;
+                            }
                         }
                     }
-                    // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
-                    const scar = scars[i];
-                    // A vent is a cone (volcanoes()): nothing grows on it.
-                    if (scar === SE.ScarKind.Vent)
-                        scene = SE.LAND_SCENE_NONE;
-                    if (scar !== SE.ScarKind.None && SE.scarShowsGround(world, i)) {
-                        // Fresh ground carries none of the landscape's old objects; the
-                        // effect layer draws the scar's own (fxscars.ts).
-                        scene = SE.LAND_SCENE_NONE;
-                        const g = SE.scarGround(scar, T);
-                        if (g) {
-                            key = g.key;
-                            shade += g.shade;
-                        }
-                    }
+                    if (key !== 0 && h < 0)
+                        shade = MACRO[i];
+                    this.key[i] = key;
+                    this.rank[i] = key === 0 ? 0 : SE.landKeyRank(key);
+                    this.shade[i] = Math.round(SE.clamp(shade, -SE.LAND_SHIFT_MAX + 1, SE.LAND_SHIFT_MAX - 1) * QUANT) / QUANT;
+                    this.rugged[i] = rugged;
+                    this.river[i] = river;
+                    this.algae[i] = h >= 0 && (flora[i] & algae) !== 0 ? 1 : 0;
+                    this.scene[i] = scene;
+                    this.density[i] = density;
+                    this.groups[i] = groups;
+                    this.top[i] = floraTop[i];
+                    this.cactus[i] = scene === SE.LAND_SCENE_NONE ? 0 : cactus;
+                    this.savannaTree[i] = scene === SE.LAND_SCENE_NONE ? 0 : tree;
+                    this.palm[i] = scars[i] === SE.ScarKind.None ? palm : 0;
                 }
-                if (key !== 0 && h < 0)
-                    shade = MACRO[i];
-                this.key[i] = key;
-                this.rank[i] = key === 0 ? 0 : SE.landKeyRank(key);
-                this.shade[i] = Math.round(SE.clamp(shade, -SE.LAND_SHIFT_MAX + 1, SE.LAND_SHIFT_MAX - 1) * QUANT) / QUANT;
-                this.rugged[i] = rugged;
-                this.river[i] = river;
-                this.algae[i] = h >= 0 && (flora[i] & algae) !== 0 ? 1 : 0;
-                this.scene[i] = scene;
-                this.density[i] = density;
-                this.groups[i] = groups;
-                this.top[i] = floraTop[i];
-                this.cactus[i] = scene === SE.LAND_SCENE_NONE ? 0 : cactus;
-                this.savannaTree[i] = scene === SE.LAND_SCENE_NONE ? 0 : tree;
-                this.palm[i] = scars[i] === SE.ScarKind.None ? palm : 0;
-            }
-            this.edges();
-            this.volcanoes(world);
-            this.paths.build(world);
-            this.ridges.build(world, this.volcano);
+        }
+        /** The per-tile signatures over [x0, x1) × [y0, y1). */
+        sign(x0, y0, x1, y1) {
             const lines = this.paths.sig;
             const ridges = this.ridges.sig;
-            for (let i = 0; i < SE.TILE_COUNT; i++) {
-                let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
-                s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22) ^ (this.palm[i] << 23), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
-                s ^= Math.imul((this.depth[i] * QUANT) ^ (((this.shade[i] + SE.LAND_SHIFT_MAX) * QUANT) << 8), 0xc2b2ae3d);
-                s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
-                this.sig[i] = (s ^ (s >>> 15)) >>> 0;
-            }
+            for (let y = y0; y < y1; y++)
+                for (let x = x0; x < x1; x++) {
+                    const i = y * SE.GRID_W + SE.wrapX(x);
+                    let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
+                    s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22) ^ (this.palm[i] << 23), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
+                    s ^= Math.imul((this.depth[i] * QUANT) ^ (((this.shade[i] + SE.LAND_SHIFT_MAX) * QUANT) << 8), 0xc2b2ae3d);
+                    s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
+                    this.sig[i] = (s ^ (s >>> 15)) >>> 0;
+                }
         }
         /**
          * Hillshade in ramp steps: light from the upper left, so a slope that
@@ -29862,13 +30615,19 @@ var SE;
         relief(e, i) {
             const x = i % SE.GRID_W;
             const y = (i / SE.GRID_W) | 0;
-            const slope = Math.max(0, e[SE.idx(SE.wrapX(x + 1), y)]) - Math.max(0, e[SE.idx(SE.wrapX(x - 1), y)]) +
-                Math.max(0, e[SE.idx(x, SE.clampY(y + 1))]) - Math.max(0, e[SE.idx(x, SE.clampY(y - 1))]);
+            const r = Math.max(0, e[SE.idx(SE.wrapX(x + 1), y)]);
+            const l = Math.max(0, e[SE.idx(SE.wrapX(x - 1), y)]);
+            const d = Math.max(0, e[SE.idx(x, SE.clampY(y + 1))]);
+            const u = Math.max(0, e[SE.idx(x, SE.clampY(y - 1))]);
+            const slope = r - l + d - u;
             const m = mountainness(e[i]);
             const raw = slope * RELIEF_GAIN * (1 + m);
             const s = Math.sign(raw) * Math.max(0, Math.abs(raw) - RELIEF_DEAD * (1 - m));
             const limit = RELIEF_LIMIT + m;
-            return SE.clamp(s + (e[i] - 0.3) * ALTITUDE_GAIN, -limit, limit);
+            const curve = e[i] - (r + l + d + u) / 4;
+            const c = SE.clamp(Math.sign(curve) * Math.max(0, Math.abs(curve) - CURVE_DEAD) * CURVE_GAIN, -CURVE_LIMIT, CURVE_LIMIT);
+            const altitude = SE.clamp((e[i] - ALTITUDE_MID) * ALTITUDE_GAIN, ALTITUDE_LOW, ALTITUDE_HIGH);
+            return SE.clamp(s + c + altitude, -limit, limit);
         }
         /**
          * Cones: every vent and active volcano on land, and on volcanic belts
@@ -29916,25 +30675,35 @@ var SE;
                     v[i] = scar[i] === SE.ScarKind.Basalt ? 2 : 1;
             }
         }
-        /** Chebyshev distance (0, 1, 2+) to a tile of lower material rank — water counts as rank 0. */
-        edges() {
+        /**
+         * Chebyshev distance (0, 1, 2+) to a tile of lower material rank — water
+         * counts as rank 0 — over [x0, x1) × [y0, y1), whose rank changed at least
+         * two tiles inside the edge.
+         */
+        edges(x0, y0, x1, y1) {
             const { rank, low, edge } = this;
-            const min3 = (src, dst) => {
-                for (let y = 0; y < SE.GRID_H; y++) {
+            const min3 = (src, dst, ya0, ya1, xa0, xa1) => {
+                for (let y = Math.max(0, ya0); y < Math.min(SE.GRID_H, ya1); y++) {
                     const ya = SE.clampY(y - 1) * SE.GRID_W;
                     const yb = y * SE.GRID_W;
                     const yc = SE.clampY(y + 1) * SE.GRID_W;
-                    for (let x = 0; x < SE.GRID_W; x++) {
+                    for (let u = xa0; u < xa1; u++) {
+                        const x = SE.wrapX(u);
                         const xa = SE.wrapX(x - 1);
                         const xc = SE.wrapX(x + 1);
                         dst[yb + x] = Math.min(src[ya + xa], src[ya + x], src[ya + xc], src[yb + xa], src[yb + x], src[yb + xc], src[yc + xa], src[yc + x], src[yc + xc]);
                     }
                 }
             };
-            min3(rank, low);
-            min3(low, this.wide);
-            for (let i = 0; i < SE.TILE_COUNT; i++)
-                edge[i] = low[i] < rank[i] ? 0 : this.wide[i] < rank[i] ? 1 : 2;
+            // The full map needs no margin; a box reads `low` one tile around its `wide`.
+            const m = x1 - x0 >= SE.GRID_W ? 0 : 1;
+            min3(rank, low, y0 - m, y1 + m, x0 - m, x1 + m);
+            min3(low, this.wide, y0, y1, x0, x1);
+            for (let y = y0; y < y1; y++)
+                for (let x = x0; x < x1; x++) {
+                    const i = y * SE.GRID_W + SE.wrapX(x);
+                    edge[i] = low[i] < rank[i] ? 0 : this.wide[i] < rank[i] ? 1 : 2;
+                }
         }
         /** Signature of everything that reaches into tiles [tx0, tx0 + tw) × [ty0, ty0 + th). */
         signature(tx0, ty0, tw, th, salt) {
@@ -30131,15 +30900,18 @@ var SE;
         const water = art.manifest.objects[id].kind === 'water';
         return { sprite, fx, fy, water, seq: (y * SE.GRID_W + xw) * 16 + slot };
     }
+    /** Objects take this share of their tile's ground shading (TerrainField.shade), rounded to whole steps. */
+    const OBJECT_RELIEF = 0.6;
     /**
      * Draw placements into an index buffer of width `w` whose pixel (0, 0) is
      * world pixel (ox, oy): first each shadow on bare ground (never on water,
      * never twice), then the sprite. With `rise`, objects stand on the lifted
      * ground and every pixel whose screen shows nearer ground stays hidden.
      * `lifts`, when given, is the lift under each foot (the caller has dropped
-     * the plants above their line); else it is read from `rise`.
+     * the plants above their line); else it is read from `rise`. `shade`, the
+     * field's ground shading, tones each object like its tile's ground.
      */
-    function drawLandObjects(list, art, px, water, occupied, w, h, ox, oy, rise = null, lifts = null) {
+    function drawLandObjects(list, art, px, water, occupied, w, h, ox, oy, rise = null, lifts = null, shade = null) {
         const shadow = art.shift[SE.LAND_SHIFT_MAX + SHADOW_SHIFT];
         const top = rise ? rise.top : null;
         const bottom = rise ? rise.bottom : null;
@@ -30183,6 +30955,13 @@ var SE;
                     occupied[k] = 2;
                 }
             }
+            // The relief of the tile it stands on, in whole steps: hills read through a forest too.
+            let tone = null;
+            if (shade) {
+                const s = Math.round(shade[SE.clampY(Math.floor(p.fy / 16)) * SE.GRID_W + SE.wrapX(Math.floor(p.fx / 16))] * OBJECT_RELIEF);
+                if (s !== 0)
+                    tone = art.shift[SE.LAND_SHIFT_MAX + SE.clamp(s, -SE.LAND_SHIFT_MAX, SE.LAND_SHIFT_MAX)];
+            }
             const left = fx - t.ax;
             const up = fy - t.ay;
             const ux = look.x;
@@ -30203,7 +30982,7 @@ var SE;
                 const base = up * w + left;
                 for (let n = 0; n < uv.length; n++) {
                     const k = base + uy[n] * w + ux[n];
-                    px[k] = uv[n];
+                    px[k] = tone ? tone[uv[n]] : uv[n];
                     occupied[k] = 1;
                 }
                 continue;
@@ -30219,7 +30998,7 @@ var SE;
                 // Nearer ground shows here (riseDepth, inlined: this runs for every sprite pixel).
                 if (depth && y >= top[x] && y <= bottom[x] && depth[k] > ground + DEPTH_SLACK)
                     continue;
-                px[k] = uv[n];
+                px[k] = tone ? tone[uv[n]] : uv[n];
                 occupied[k] = 1;
             }
         }
@@ -30853,6 +31632,9 @@ var SE;
             }
             const keys = this.turfKeys;
             const turf = (flora & TURF_FLORA) !== 0 ? keys[level >= 3 ? 1 : 0] : level >= 1 ? keys[2] : 0;
+            // Summit snow on a brushed peak (SUMMIT_SNOW_ELEVATION) covers the whole crest.
+            if (world.terraformed[t] !== 0 && z !== SE.ZONE_NONE && (z & SE.ZONE_SNOW) !== 0 && world.elevation[t] >= SE.SUMMIT_SNOW_ELEVATION)
+                return { tree: 0, rock: 0, snow: 0, upper: turf };
             return { tree: above(SE.TREELINE_TEMP), rock: above(SE.ROCKBELT_TEMP), snow: above(snowLine), upper: turf };
         }
         push(ax, ay, bx, by, ha, hb, b, foot = 0, crater = 0, rockKey = 0) {
@@ -32727,7 +33509,7 @@ var SE;
                 placed[n++] = p;
             }
             placed.length = n;
-            SE.drawLandObjects(this.placements, this.art, b.px, b.water, this.occupied, b.w, b.h, ox, oy, rise, lifts);
+            SE.drawLandObjects(this.placements, this.art, b.px, b.water, this.occupied, b.w, b.h, ox, oy, rise, lifts, f.shade);
             this.motion = seaColor ? SE.NO_LAND_MOTION : SE.collectLandMotion(b, this.art, this.shores, f.paths.sig, PAD, tx0, ty0, tw, th);
             this.emit(out, margin, tw, th, tx0, ty0, seaColor);
         }
@@ -32979,6 +33761,113 @@ var SE;
     SE.LandComposer = LandComposer;
 })(SE || (SE = {}));
 /* =============================================================================
+ * SimEarth 2.0 — dissolving a brushed chunk into its new picture
+ * -----------------------------------------------------------------------------
+ * While the terraforming brush runs, a chunk is recomposed every frame and a
+ * tile that turns from sea to land, or from one landscape to the next, would
+ * flip in one frame. Instead the chunk keeps the picture it shows and each
+ * art pixel that differs takes the new colour at its own moment within
+ * LAND_FADE_MS, in ordered-dither order (Bayer 4×4 in world pixels): a
+ * pixel-art dissolve with palette colours only, never a blend. A pixel that
+ * changes again before its moment keeps that moment, so nothing lags more
+ * than one fade behind the brush.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** How long a changed pixel may wait, ms. */
+    SE.LAND_FADE_MS = 220;
+    class LandFade {
+        /** `current`: the chunk's canvas as it is, `side` × `side`; `origin`: world art pixel of its corner (x, y). */
+        constructor(current, side, ox, oy) {
+            this.side = side;
+            this.ox = ox;
+            this.oy = oy;
+            /** No pixel differs any more. */
+            this.settled = true;
+            /** Bounding box of the pixels that still differ, [x0, x1) × [y0, y1) in canvas pixels. */
+            this.x0 = 0;
+            this.y0 = 0;
+            this.x1 = 0;
+            this.y1 = 0;
+            this.image = current;
+            this.shown = new Uint32Array(current.data.buffer);
+            this.target = this.shown.slice();
+            this.due = new Float32Array(this.shown.length);
+        }
+        /** A new composition of the chunk: its changed pixels start (or keep) their way over. */
+        retarget(next, now) {
+            const { shown, target, due, side } = this;
+            let x0 = side, y0 = side, x1 = 0, y1 = 0;
+            for (let y = 0, p = 0; y < side; y++) {
+                const bay = ((this.oy + y) & 3) * 4;
+                for (let x = 0; x < side; x++, p++) {
+                    const v = next[p];
+                    if (v === target[p])
+                        continue;
+                    if (shown[p] === target[p])
+                        due[p] = now + SE.LAND_FADE_MS * SE.BAYER4[bay + ((this.ox + x) & 3)];
+                    target[p] = v;
+                    if (x < x0)
+                        x0 = x;
+                    if (x >= x1)
+                        x1 = x + 1;
+                    if (y < y0)
+                        y0 = y;
+                    y1 = y + 1;
+                }
+            }
+            if (x1 === 0)
+                return;
+            if (this.settled) {
+                this.x0 = x0;
+                this.y0 = y0;
+                this.x1 = x1;
+                this.y1 = y1;
+            }
+            else {
+                this.x0 = Math.min(this.x0, x0);
+                this.y0 = Math.min(this.y0, y0);
+                this.x1 = Math.max(this.x1, x1);
+                this.y1 = Math.max(this.y1, y1);
+            }
+            this.settled = false;
+        }
+        /** Take every pixel whose moment has come; true when the picture changed. */
+        step(now) {
+            if (this.settled)
+                return false;
+            const { shown, target, due, side } = this;
+            let changed = false;
+            let x0 = side, y0 = side, x1 = 0, y1 = 0;
+            for (let y = this.y0; y < this.y1; y++) {
+                for (let x = this.x0, p = y * side + x; x < this.x1; x++, p++) {
+                    if (shown[p] === target[p])
+                        continue;
+                    if (due[p] <= now) {
+                        shown[p] = target[p];
+                        changed = true;
+                        continue;
+                    }
+                    if (x < x0)
+                        x0 = x;
+                    if (x >= x1)
+                        x1 = x + 1;
+                    if (y < y0)
+                        y0 = y;
+                    y1 = y + 1;
+                }
+            }
+            this.x0 = x0;
+            this.y0 = y0;
+            this.x1 = x1;
+            this.y1 = y1;
+            this.settled = x1 === 0;
+            return changed;
+        }
+    }
+    SE.LandFade = LandFade;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — the pixel terrain on screen
  * -----------------------------------------------------------------------------
  * Chunks of 16 × 16 tiles are composed at 1× (landcompose.ts) and cached as
@@ -33009,6 +33898,10 @@ var SE;
      * frames, so a first zoom-out (90+ chunks) never freezes the game.
      */
     const COMPOSE_BUDGET_MS = 60;
+    /** A chunk recomposed this long after a brush last changed tiles near it dissolves into its new picture (landfade.ts). */
+    const FADE_WINDOW_MS = 1500;
+    /** Tiles around the brushed box whose pictures a brush changes: ridge lines and cones (refreshBox) plus SIGNATURE_REACH. */
+    const FADE_REACH = 11;
     class PixelTerrain {
         constructor() {
             this.art = null;
@@ -33029,6 +33922,11 @@ var SE;
             this.pending = false;
             this.deadline = Infinity;
             this.flat = null;
+            /** Tiles the brush changed lately (x may run past the wrap), and when it last did. */
+            this.brushBox = null;
+            this.brushAt = -Infinity;
+            /** Chunk number → chunk, while it dissolves. */
+            this.fading = new Map();
         }
         static shared() {
             return PixelTerrain.instance ?? (PixelTerrain.instance = new PixelTerrain());
@@ -33065,7 +33963,7 @@ var SE;
         }
         /** Read the world into the field when it changed; `oceans` false draws water as flat elevation colours. */
         refresh(world, oceans) {
-            const key = `${world.seed}|${world.ticks}|${world.revision}|${+oceans}`;
+            const key = PixelTerrain.keyOf(world, oceans);
             if (key === this.fieldKey && world === this.fieldWorld)
                 return;
             this.fieldKey = key;
@@ -33089,6 +33987,40 @@ var SE;
                 this.seaColor = sea;
             }
         }
+        /** The field describes `world` as it is now: drawing will not re-read it. */
+        current(world, oceans) {
+            return world === this.fieldWorld && PixelTerrain.keyOf(world, oceans) === this.fieldKey;
+        }
+        static keyOf(world, oceans) {
+            return `${world.seed}|${world.ticks}|${world.revision}|${+oceans}`;
+        }
+        /**
+         * A brush changed the height of tiles [x0, x1] × [y0, y1]: re-read only
+         * those (TerrainField.refreshBox) and count the field as current, so
+         * ticks during the stroke don't force full re-reads; the edit's
+         * refreshDerived at the stroke's end brings in everything else. True
+         * when that took long (a full read, or the ridges rebuilt).
+         */
+        refreshBox(world, oceans, x0, y0, x1, y1) {
+            if (world !== this.fieldWorld || !oceans) {
+                this.fieldKey = '';
+                this.refresh(world, oceans);
+                return true;
+            }
+            const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
+            const now = performance.now();
+            const b = this.brushBox;
+            if (b && now - this.brushAt < FADE_WINDOW_MS) {
+                const s = Math.round((b[0] - x0) / SE.GRID_W) * SE.GRID_W;
+                this.brushBox = [Math.min(b[0], x0 + s), Math.min(b[1], y0), Math.max(b[2], x1 + s), Math.max(b[3], y1)];
+            }
+            else {
+                this.brushBox = [x0, y0, x1, y1];
+            }
+            this.brushAt = now;
+            this.fieldKey = PixelTerrain.keyOf(world, oceans);
+            return slow;
+        }
         /** Read the world into the field if it describes another planet (the map keeps it current). */
         ensure(world) {
             if (this.fieldWorld !== world || !this.fieldKey.startsWith(`${world.seed}|`))
@@ -33109,7 +34041,7 @@ var SE;
                 const ctx = canvas.getContext('2d');
                 if (!ctx)
                     return null;
-                c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: SE.NO_LAND_MOTION };
+                c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: SE.NO_LAND_MOTION, fade: null };
                 this.chunks.set(n, c);
             }
             const sig = this.field.signature(cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, this.seaColor ? 1 : 0);
@@ -33120,13 +34052,84 @@ var SE;
                 }
                 if (!this.image)
                     this.image = c.ctx.createImageData(side, side);
-                composer.compose(this.field, cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, MARGIN, new Uint32Array(this.image.data.buffer), this.seaColor);
-                c.ctx.putImageData(this.image, 0, 0);
+                const words = new Uint32Array(this.image.data.buffer);
+                composer.compose(this.field, cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, MARGIN, words, this.seaColor);
+                const now = performance.now();
+                if (c.sig !== -1 && this.brushNear(cx, cy, now)) {
+                    c.fade ?? (c.fade = new SE.LandFade(c.ctx.getImageData(0, 0, side, side), side, cx * SE.LAND_CHUNK * 16 - MARGIN, cy * SE.LAND_CHUNK * 16 - MARGIN));
+                    c.fade.retarget(words, now);
+                    c.fade.step(now);
+                    c.ctx.putImageData(c.fade.image, 0, 0);
+                    if (!c.fade.settled)
+                        this.fading.set(n, c);
+                }
+                else {
+                    c.fade = null;
+                    this.fading.delete(n);
+                    c.ctx.putImageData(this.image, 0, 0);
+                }
                 c.motion = composer.motion;
                 c.sig = sig;
                 this.composed++;
             }
+            else if (c.fade) {
+                const now = performance.now();
+                if (c.fade.step(now)) {
+                    c.ctx.putImageData(c.fade.image, 0, 0);
+                    c.smallSig = -1;
+                }
+                if (c.fade.settled) {
+                    this.fading.delete(n);
+                    if (now - this.brushAt > FADE_WINDOW_MS)
+                        c.fade = null;
+                }
+            }
             return c;
+        }
+        /** Chunk (cx, cy) lies near tiles a brush changed within FADE_WINDOW_MS. */
+        brushNear(cx, cy, now) {
+            const b = this.brushBox;
+            if (!b || now - this.brushAt > FADE_WINDOW_MS)
+                return false;
+            const y0 = cy * SE.LAND_CHUNK;
+            if (y0 > b[3] + FADE_REACH || y0 + SE.LAND_CHUNK <= b[1] - FADE_REACH)
+                return false;
+            for (let s = -SE.GRID_W; s <= SE.GRID_W; s += SE.GRID_W) {
+                const x0 = cx * SE.LAND_CHUNK + s;
+                if (x0 <= b[2] + FADE_REACH && x0 + SE.LAND_CHUNK > b[0] - FADE_REACH)
+                    return true;
+            }
+            return false;
+        }
+        /**
+         * Tiles still dissolving into their new picture, x0, y0, x1, y1 (x may run
+         * past the wrap), or null: the map redraws them every frame until done.
+         */
+        fadeBox() {
+            let box = null;
+            for (const [n, c] of this.fading) {
+                const f = c.fade;
+                if (!f || f.settled) {
+                    this.fading.delete(n);
+                    continue;
+                }
+                const cx = (n % CHUNKS_X) * SE.LAND_CHUNK;
+                const cy = Math.floor(n / CHUNKS_X) * SE.LAND_CHUNK;
+                const tile = (p) => Math.floor((p - MARGIN) / 16);
+                let x0 = cx + tile(f.x0);
+                let x1 = cx + tile(f.x1 - 1);
+                const y0 = Math.max(0, cy + tile(f.y0));
+                const y1 = Math.min(SE.GRID_H - 1, cy + tile(f.y1 - 1));
+                if (!box) {
+                    box = [x0, y0, x1, y1];
+                    continue;
+                }
+                const s = Math.round((box[0] - x0) / SE.GRID_W) * SE.GRID_W;
+                x0 += s;
+                x1 += s;
+                box = [Math.min(box[0], x0), Math.min(box[1], y0), Math.max(box[2], x1), Math.max(box[3], y1)];
+            }
+            return box;
         }
         /** Surf and river water of chunk (cx, cy) as it is drawn now; null before it was composed. */
         motion(cx, cy) {
@@ -37228,7 +38231,7 @@ var SE;
             const f = land.field;
             SE.placeLandObjects(f, landArt, tx0 - 1, ty0 - 1, tx0 + SE.LAND_CHUNK, ty0 + SE.LAND_CHUNK, this.placements);
             const list = this.placements.filter((p) => !p.water && !f.paths.near(p.fx + 0.5, p.fy + 0.5, SE.RIVER_CLEARANCE));
-            SE.drawLandObjects(list, landArt, objects, this.water, this.occupied, SIDE, SIDE, tx0 * 16 - 8, ty0 * 16 - 8);
+            SE.drawLandObjects(list, landArt, objects, this.water, this.occupied, SIDE, SIDE, tx0 * 16 - 8, ty0 * 16 - 8, null, null, f.shade);
             for (let b = 0; b < px.length; b++)
                 if (layer[b] !== 0 && objects[b] !== 0)
                     px[b] = landArt.rgba[objects[b]];
@@ -39117,7 +40120,7 @@ var SE;
             let canvas = null;
             if (list.length > 0 && row < SE.GRID_H) {
                 const px = new Uint8Array(w * h);
-                SE.drawLandObjects(list, landArt, px, new Uint8Array(w * h), new Uint8Array(w * h), w, h, left, bottom - h);
+                SE.drawLandObjects(list, landArt, px, new Uint8Array(w * h), new Uint8Array(w * h), w, h, left, bottom - h, null, null, f.shade);
                 if (px.some((v) => v !== 0)) {
                     canvas = document.createElement('canvas');
                     canvas.width = w;
@@ -39518,6 +40521,12 @@ var SE;
     const RELIEF_MIN = 0.02;
     /** How long the zoom must rest before the map is redrawn at the new size. */
     const ZOOM_SETTLE_MS = 140;
+    /**
+     * Brushed tiles are recomposed at most this often (about every second
+     * frame at 60 Hz): composing their chunks is most of a stroke frame, and
+     * the dissolve (landfade.ts) hides the lower rate.
+     */
+    const TILE_REDRAW_MS = 45;
     /** Extra light per unit of elevation, so highlands read paler than lowland. */
     const ALTITUDE_LIGHT = 0.1;
     /** Peak-to-peak strength of the per-tile grain. */
@@ -39704,6 +40713,14 @@ var SE;
             this.brushRadius = 0;
             /** Outline colour of the brush preview. */
             this.brushColor = 'rgba(255,255,255,0.9)';
+            /** Drawn instead of the tool cursor, last, with identity transform (device pixels). */
+            this.decor = null;
+            /** Tiles to redraw on the next frame without a full redraw: x0, y0, x1, y1 (x may run past the wrap). */
+            this.dirtyTiles = null;
+            /** A brush stroke runs: the world's progress waits with its full redraws (30–100 ms) until it ends. */
+            this.holdWorld = false;
+            /** When brushed tiles were last recomposed. */
+            this.tilesAt = -Infinity;
             this.tiles = new SE.TileCache();
             this.regions = new SE.BiomeRegions();
             this.ambient = new SE.AmbientLayer();
@@ -39758,6 +40775,17 @@ var SE;
         /** Force a full redraw on the next frame (after a tool changed the world). */
         markDirty() {
             this.dirty = true;
+        }
+        /** Read the world into the terrain field and regions now, so the next full redraw has less to do. */
+        warm(world) {
+            if (this.pixelTerrain)
+                this.land.refresh(world, this.layers.oceans);
+            this.regions.refresh(world);
+        }
+        /** Redraw only tiles [x0, x1] × [y0, y1] on the next frame (a brush changing the ground live). */
+        markDirtyTiles(x0, y0, x1, y1) {
+            const d = this.dirtyTiles;
+            this.dirtyTiles = d ? [Math.min(d[0], x0), Math.min(d[1], y0), Math.max(d[2], x1), Math.max(d[3], y1)] : [x0, y0, x1, y1];
         }
         /** The pixel terrain draws the ground; with the Biomes layer off the map shows flat colours as before. */
         get pixelTerrain() {
@@ -39816,6 +40844,20 @@ var SE;
             this.scrollY = wy - py / next;
             this.clampScroll();
         }
+        /**
+         * Set the zoom around the viewport's centre, fractions allowed: frames
+         * stretch the last full picture as during a wheel zoom, so a glide called
+         * every frame stays smooth; the real redraw follows once it rests.
+         */
+        glideZoom(px) {
+            const cx = this.scrollX + this.cols / 2;
+            const cy = this.scrollY + this.rows / 2;
+            this.tilePx = px;
+            this.zoomedAt = performance.now();
+            this.scrollX = cx - this.cols / 2;
+            this.scrollY = cy - this.rows / 2;
+            this.clampScroll();
+        }
         /** Rings spreading from a tile for a few seconds, to show where something happened. */
         ping(x, y, color) {
             this.ambient.ping(x, y, color, performance.now());
@@ -39868,10 +40910,14 @@ var SE;
                 // A full redraw on a huge screen can take tens of milliseconds; the
                 // slower it is, the less often the world's progress triggers one.
                 const interval = Math.max(250, this.drawCost * 8);
-                const worldMoved = world.ticks !== this.baseTick && now - this.baseTime > interval;
+                const worldMoved = !this.holdWorld && world.ticks !== this.baseTick && now - this.baseTime > interval;
                 const scrolled = this.scrollX !== this.baseScrollX || this.scrollY !== this.baseScrollY;
                 if (this.dirty || key !== this.baseKey || worldMoved || (scrolled && !this.shiftBase(world, dpr))) {
                     const t0 = performance.now();
+                    const box = this.dirtyTiles;
+                    if (box && this.pixelTerrain)
+                        this.land.refreshBox(world, this.layers.oceans, box[0], Math.max(0, box[1]), box[2], Math.min(SE.GRID_H - 1, box[3]));
+                    this.dirtyTiles = null;
                     this.drawBase(world, dpr);
                     this.drawCost = performance.now() - t0;
                     this.baseKey = key;
@@ -39881,6 +40927,19 @@ var SE;
                     this.baseScrollY = this.scrollY;
                     this.baseTilePx = this.tilePx;
                     this.dirty = false;
+                }
+                else {
+                    // Brushed ground dissolving into its new picture (landfade.ts) is redrawn every frame until done.
+                    // Not when the world changed meanwhile (a settle): drawing would re-read the whole field; its full redraw follows.
+                    const fade = this.pixelTerrain && this.land.current(world, this.layers.oceans) ? this.land.fadeBox() : null;
+                    // Brushed tiles are re-read and recomposed (most of a stroke frame) at most every
+                    // TILE_REDRAW_MS; the dissolve keeps moving on the frames between.
+                    const changed = now - this.tilesAt >= TILE_REDRAW_MS ? this.dirtyTiles : null;
+                    // A slow field read leaves the drawing (composing chunks, as slow) to the next frame.
+                    if ((changed || fade) && this.redrawTiles(world, dpr, changed, fade) && changed) {
+                        this.dirtyTiles = null;
+                        this.tilesAt = now;
+                    }
                 }
                 // The terrain or the cities ran out of time for composing: finish next frame.
                 if ((this.pixelTerrain && this.land.pending) || this.cities.pending)
@@ -39932,7 +40991,49 @@ var SE;
                 fx.drawTop(ctx, cam);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             }
-            this.drawCursor(ctx, this.tilePx);
+            if (this.decor) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.decor(ctx, cam, now);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            else {
+                this.drawCursor(ctx, this.tilePx);
+            }
+        }
+        /**
+         * Redraw a box of changed tiles into the base picture, with the margin a
+         * tile's picture reads its neighbours from, together with the box `more`
+         * of tiles to draw again without re-reading them.
+         */
+        redrawTiles(world, dpr, changed, more = null) {
+            const pad = 4; // SIGNATURE_REACH (landfield.ts) + 1
+            if (changed && this.pixelTerrain && this.land.refreshBox(world, this.layers.oceans, changed[0], Math.max(0, changed[1]), changed[2], Math.min(SE.GRID_H - 1, changed[3])))
+                return false;
+            let box = changed ?? more;
+            if (!box)
+                return true;
+            if (changed && more) {
+                const s = Math.round((changed[0] - more[0]) / SE.GRID_W) * SE.GRID_W;
+                box = [Math.min(changed[0], more[0] + s), Math.min(changed[1], more[1]), Math.max(changed[2], more[2] + s), Math.max(changed[3], more[3])];
+            }
+            const span = box[2] - box[0] + 1 + 2 * pad;
+            if (span > SE.GRID_W / 2) {
+                this.drawBase(world, dpr);
+                return true;
+            }
+            const size = this.tilePx;
+            // The copy of the box on the wrapping map that meets the view.
+            let rx = (((box[0] - pad - this.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
+            if (rx > this.cols)
+                rx -= SE.GRID_W;
+            if (!this.pixelTerrain) {
+                this.tiles.setDeviceTile(size * dpr);
+                this.regions.refresh(world);
+            }
+            this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            this.baseCtx.imageSmoothingEnabled = false;
+            this.drawRegion(world, rx * size, (box[1] - pad - this.scrollY) * size, (rx + span) * size, (box[3] + 1 + pad - this.scrollY) * size);
+            return true;
         }
         /**
          * How much surf the view shows, 0..1: the share of visible tiles that are
@@ -50613,31 +51714,11 @@ var SE;
 /* =============================================================================
  * SimEarth 2.0 — settings
  * -----------------------------------------------------------------------------
- * The player's lasting preferences, defined once and shown twice: as check
- * items in the "Optionen" menu, and as the "Einstellungen" dialog on the title
- * screen, where the menu bar is out of reach.
+ * The player's lasting preferences, defined once and shown as the
+ * "Einstellungen" dialog, opened from the menu "Spiel" and the title screen.
  * ========================================================================== */
 var SE;
 (function (SE) {
-    /** The settings as check items of a menu, with separators between blocks. */
-    function settingMenuItems(defs) {
-        const items = [];
-        for (const d of defs) {
-            if (d.group && items.length > 0)
-                items.push({ separator: true, label: '' });
-            if (d.kind === 'toggle') {
-                items.push({ label: d.label, icon: d.icon, iconOff: d.iconOff, action: d.toggle, checked: d.on });
-                const on = d.on;
-                if (d.volume)
-                    items.push({ label: `${d.label}: Lautstärke`, slider: d.volume, disabled: () => !on() });
-            }
-            else
-                for (const o of d.options)
-                    items.push({ label: o.label, icon: o.icon, action: o.choose, checked: o.on });
-        }
-        return items;
-    }
-    SE.settingMenuItems = settingMenuItems;
     let settingSeq = 0;
     /** The "Einstellungen" dialog: every change applies at once, "Fertig" only closes it. */
     async function openSettings(defs) {
@@ -50711,7 +51792,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.8.4';
+    SE.APP_VERSION = '0.9.0';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -50980,6 +52061,19 @@ var SE;
                 dst[q + 3] = 255;
             }
             this.ctx.putImageData(img, 0, 0);
+        }
+        /** Paint the last render onto another canvas: the disc centred on (cx, cy) with radius r, pixels kept sharp. */
+        drawTo(ctx, cx, cy, r) {
+            if (!this.side)
+                return;
+            const size = (2 * r) / (2 * DISC);
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(this.canvas, cx - size / 2, cy - size / 2, size, size);
+        }
+        /** The tile under the middle of the disc at the current spin: on the equator. */
+        centerTile() {
+            const turn = (this.spin / (Math.PI * 2) + 0.5) * SE.GRID_W;
+            return [((Math.round(turn) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W, SE.GRID_H >> 1];
         }
         /** Terrain colours; rivers mixed into the land beside them, which at this size reads better than bright lines. */
         paintTexture(world) {
@@ -51346,7 +52440,7 @@ var SE;
         }
         begin() {
             this.flushReshape();
-            this.close();
+            this.close(true);
         }
         reroll() {
             this.flushReshape();
@@ -51373,7 +52467,7 @@ var SE;
         setBackgroundInert(on) {
             document.querySelectorAll('#topbar, #desktop').forEach((el) => { el.inert = on; });
         }
-        close() {
+        close(fresh = false) {
             if (this.closed)
                 return;
             this.closed = true;
@@ -51382,7 +52476,7 @@ var SE;
             this.setBackgroundInert(false);
             this.root.classList.add('leaving');
             window.setTimeout(() => this.root.remove(), 480);
-            this.hooks.start();
+            this.hooks.start(fresh);
         }
     }
     SE.TitleScreen = TitleScreen;
@@ -51399,6 +52493,8 @@ var SE;
     /** Track per scene: a file name in assets/audio/music/ without ".mp3". */
     SE.MUSIC_TRACKS = {
         title: 'lumiere-du-matin',
+        // INTRO_CUES are measured against this track.
+        intro: 'IntroMusic',
         game: 'lumiere-du-matin',
     };
     /** Below the chime and effects, so the music stays in the background. */
@@ -51408,6 +52504,8 @@ var SE;
         constructor(enabled, level) {
             this.audio = new Audio();
             this.track = '';
+            /** The timer that cuts to the track playThen loaded ahead. */
+            this.queueTimer = 0;
             this.fadeTimer = 0;
             this.enabled = enabled;
             this.level = level;
@@ -51429,16 +52527,55 @@ var SE;
                     this.resume();
             });
         }
-        /** Switch to a scene's track; the same track simply keeps playing. */
-        play(scene) {
+        /** Switch to a scene's track; the same track simply keeps playing, unless `at` (seconds into it) is given. */
+        play(scene, at) {
+            this.cancelQueued();
             const track = SE.MUSIC_TRACKS[scene];
             if (track !== this.track) {
                 this.track = track;
                 this.audio.src = `assets/audio/music/${track}.mp3`;
                 this.audio.volume = 0;
             }
+            // Before the new file's metadata is in, this sets where playback will start.
+            if (at !== undefined)
+                this.audio.currentTime = at;
             if (this.enabled)
                 this.resume();
+        }
+        /**
+         * Let the current track play to `at` seconds, where it has died away, then
+         * cut straight to `scene`'s track at full level: loaded ahead, so it starts
+         * on the dot.
+         */
+        playThen(scene, at) {
+            this.cancelQueued();
+            const track = SE.MUSIC_TRACKS[scene];
+            const next = new Audio(`assets/audio/music/${track}.mp3`);
+            next.loop = true;
+            next.preload = 'auto';
+            const cut = () => {
+                const left = at - this.audio.currentTime;
+                // Paused (tab hidden, autoplay blocked) the track stands still: keep waiting.
+                if (this.enabled && (this.audio.paused || left > 0.015)) {
+                    this.queueTimer = window.setTimeout(cut, this.audio.paused ? 250 : left * 1000);
+                    return;
+                }
+                window.clearInterval(this.fadeTimer);
+                this.audio.pause();
+                this.audio = next;
+                this.track = track;
+                next.volume = MUSIC_VOLUME * this.level;
+                if (this.wantsSound())
+                    next.play().catch(() => undefined);
+            };
+            this.queueTimer = window.setTimeout(cut, Math.max(0, (at - this.audio.currentTime) * 1000));
+        }
+        cancelQueued() {
+            window.clearTimeout(this.queueTimer);
+        }
+        /** Seconds into the playing track, or null while it is silent (off, blocked, paused). */
+        time() {
+            return this.enabled && !this.audio.paused ? this.audio.currentTime : null;
         }
         setEnabled(on) {
             this.enabled = on;
@@ -51540,6 +52677,2574 @@ var SE;
         return true;
     }
     SE.playSfx = playSfx;
+    /** The click files are normalized to a 0.7 peak; this trims them against the music. */
+    const CLICK_LEVEL = 0.9;
+    const CLICK_COUNT = 8;
+    /** One of the eight interface clicks, picked at random. */
+    function playClick() {
+        const volume = CLICK_LEVEL * SE.SFX.volume();
+        if (volume <= 0 || document.hidden)
+            return;
+        const n = String(1 + Math.floor(Math.random() * CLICK_COUNT)).padStart(2, '0');
+        const audio = new Audio(`assets/audio/sfx/SimEarth2_Interface_Click_${n}.wav`);
+        audio.volume = Math.min(1, volume);
+        audio.play().catch(() => undefined);
+    }
+    SE.playClick = playClick;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — terraforming brush (sound): "Sanfter Sand und Stein"
+ * -----------------------------------------------------------------------------
+ * The most discreet brush: almost no pitch at all. While the brush works, a
+ * soft hiss of trickling sand and soil and a low, dark murmur of stone, both
+ * shaped every dab by how hard the brush works and the height under it (sand
+ * at the coast, soil in the lowlands, stone in the mountains, muffled and
+ * gently swelling under water). Stage changes are marked by one very soft,
+ * low wooden tick tuned to the E-flat major pentatonic of the in-game music
+ * (deep sea G2 … coast Eb3 … summit Eb4); going down, a short filtered breath
+ * on the same note. Land breaking the surface and water flooding in are soft
+ * unpitched puffs. Follows the effects volume (SFX.volume()).
+ *
+ * One voice per stroke (9 nodes): two looped noise buffers (sand grains,
+ * brown noise) through gentle filters. Levels measured offline: the bed sits
+ * ~10 dB under the music, the ticks peak around -26 dBFS.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Overall level (times SFX.volume()). */
+    const TF_LEVEL = 0.1;
+    /** Time constant of every parameter glide, s. */
+    const TF_GLIDE = 0.07;
+    const TF_ATTACK = 0.05;
+    const TF_RELEASE = 0.09;
+    /** Long strokes settle this much quieter (over TF_FATIGUE_S after the first 1.5 s). */
+    const TF_FATIGUE = 0.4;
+    const TF_FATIGUE_S = 8;
+    /** Minimum gaps between one-shots, s; tiles in between are pooled. */
+    const TF_EMERGE_GAP = 0.3;
+    const TF_FLOOD_GAP = 0.4;
+    /** Stage cues: no two closer than this, s; a step back the other way waits until the brush has stayed TF_STAGE_SETTLE in the band. */
+    const TF_STAGE_GAP = 0.2;
+    const TF_STAGE_SETTLE = 0.5;
+    /**
+     * One note per TERRAFORM_STAGES band, MIDI, E-flat major pentatonic (A = 440):
+     * Tiefsee G2, Meer Bb2, Flachwasser C3, Küste Eb3, Tiefland F3, Hügel G3,
+     * Bergland Bb3, Hochgebirge C4, Gipfel Eb4 — the coast and the summit on the tonic.
+     */
+    const TF_STAGE_MIDI = [43, 46, 48, 51, 53, 55, 58, 60, 63];
+    const tfHz = (midi) => 440 * Math.pow(2, (midi - 69) / 12);
+    const tfStageHz = (s) => tfHz(TF_STAGE_MIDI[Math.max(0, Math.min(TF_STAGE_MIDI.length - 1, s))]);
+    const tfBuffers = new WeakMap();
+    /** Noise loops, rendered once per context; the seams join without a step. */
+    function tfBuffersFor(ac) {
+        let b = tfBuffers.get(ac);
+        if (b)
+            return b;
+        const sr = ac.sampleRate;
+        const normalize = (d) => {
+            let peak = 1e-9;
+            for (let i = 0; i < d.length; i++)
+                peak = Math.max(peak, Math.abs(d[i]));
+            for (let i = 0; i < d.length; i++)
+                d[i] /= peak;
+        };
+        const brown = ac.createBuffer(1, sr * 5, sr);
+        const bd = brown.getChannelData(0);
+        let v = 0;
+        for (let i = 0; i < bd.length; i++) {
+            v = v * 0.985 + (Math.random() * 2 - 1) * 0.1;
+            bd[i] = v;
+        }
+        const drift = bd[bd.length - 1] - bd[0];
+        for (let i = 0; i < bd.length; i++)
+            bd[i] -= drift * i / bd.length;
+        normalize(bd);
+        // Sand: a dense rain of tiny soft grains (Hann-windowed noise, 2–10 ms),
+        // even in size, so the hiss is smooth rather than crackly; never crossing the loop seam.
+        const sand = ac.createBuffer(1, sr * 6, sr);
+        const sd = sand.getChannelData(0);
+        for (let t = 0.002; t < 5.98; t += -Math.log(1 - Math.random()) / 1100) {
+            const at = Math.floor(t * sr);
+            const len = Math.floor(sr * (0.002 + 0.008 * Math.random()));
+            if (at + len >= sd.length)
+                break;
+            const amp = 0.5 + 0.5 * Math.random();
+            for (let k = 0; k < len; k++)
+                sd[at + k] += amp * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / len)) * (Math.random() * 2 - 1);
+        }
+        normalize(sd);
+        const white = ac.createBuffer(1, sr * 2, sr);
+        const wd = white.getChannelData(0);
+        for (let i = 0; i < wd.length; i++)
+            wd[i] = Math.random() * 2 - 1;
+        b = { brown, sand, white };
+        tfBuffers.set(ac, b);
+        return b;
+    }
+    const tfClamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
+    const tfHidden = () => typeof document !== 'undefined' && document.hidden;
+    let tfRealtime = null;
+    class TerraformSound {
+        /**
+         * Without arguments the sound makes its own AudioContext on the first
+         * stroke with sound on. A given context (an OfflineAudioContext for
+         * tests and recordings) is used as is, playing into `dest` or its destination.
+         */
+        constructor(ac, dest) {
+            this.dest = dest;
+            this.bus = null;
+            this.voice = null;
+            /** Random walk -1..1, nudging filters so a long stroke never loops audibly. */
+            this.wander = 0;
+            this.emergePending = 0;
+            this.nextEmerge = 0;
+            this.floodPending = 0;
+            this.nextFlood = 0;
+            this.idleTimer = 0;
+            this.heardStage = -1;
+            this.wantStage = -1;
+            this.wantSince = 0;
+            this.heardDir = 0;
+            this.nextStage = 0;
+            this.ac = ac ?? null;
+        }
+        /** Pointer down with the brush. */
+        start(sign) {
+            if (this.voice)
+                this.release();
+            if (SE.SFX.volume() <= 0 || tfHidden())
+                return;
+            const ac = this.context();
+            if (!ac)
+                return;
+            try {
+                this.voice = this.build(ac, sign);
+                this.heardStage = -1;
+                this.wantStage = -1;
+                this.heardDir = 0;
+                this.emergePending = 0;
+                this.floodPending = 0;
+            }
+            catch {
+                // No audio device or a blocked context: the brush works silently.
+                this.voice = null;
+            }
+        }
+        /** Every dab: `dab` as terraformDab returned it, `work` 0..1 how hard the brush pushes this frame. */
+        update(dab, work) {
+            const v = this.voice;
+            const ac = this.ac;
+            if (!v || !ac)
+                return;
+            const t = ac.currentTime;
+            const dt = Math.min(0.1, Math.max(0, t - v.last));
+            v.last = t;
+            this.setBus(t);
+            const w = Math.pow(tfClamp01(work), 0.8);
+            const h = Math.max(-1, Math.min(1, dab.height));
+            const wet = tfClamp01(-h * 5);
+            const rock = tfClamp01((h - 0.25) / 0.45);
+            const sandy = tfClamp01(1 - Math.abs(h - 0.03) / 0.15);
+            const raise = v.sign > 0;
+            this.wander = Math.max(-1, Math.min(1, this.wander * (1 - dt * 0.4) + (Math.random() - 0.5) * dt * 5));
+            const wob = 1 + this.wander * 0.1;
+            const set = (p, value, glide = TF_GLIDE) => { p.setTargetAtTime(value, t, glide); };
+            const held = t - v.born;
+            set(v.out.gain, 1 - TF_FATIGUE * tfClamp01((held - 1.5) / TF_FATIGUE_S), held < 0.4 ? TF_ATTACK : 0.5);
+            // Sand / soil hiss: brightest on the beach, duller soil inland, darker
+            // while digging, muffled under water where it swells like a slow wave.
+            const sandHz = (raise ? 1500 : 1000) * (1 + 0.5 * sandy - 0.3 * rock) * (1 - 0.65 * wet) * wob;
+            set(v.sandLow.frequency, sandHz);
+            const sandLevel = 2.2 * w * (raise ? 1 : 0.8) * (0.7 + 0.3 * sandy - 0.35 * rock) * (1 - 0.35 * wet);
+            set(v.sandGain.gain, sandLevel);
+            set(v.swellDepth.gain, sandLevel * 0.45 * wet, 0.2);
+            set(v.sand.playbackRate, (0.85 + 0.25 * w) * (1 + this.wander * 0.05), 0.2);
+            // Stone murmur: low and dark, grows with the mountains and when digging.
+            set(v.stoneLow.frequency, (raise ? 150 + 110 * rock : 120 + 60 * rock) * (1 - 0.2 * wet) * (1 + this.wander * 0.06));
+            set(v.stoneGain.gain, w * (raise ? 0.4 + 0.35 * rock : 0.6 + 0.25 * rock) * (1 - 0.3 * wet));
+            this.flushStage(t);
+            this.emergePending += dab.emerged;
+            if (this.emergePending > 0 && t >= this.nextEmerge) {
+                this.emerge(t, this.emergePending);
+                this.emergePending = 0;
+                this.nextEmerge = t + TF_EMERGE_GAP * (0.85 + Math.random() * 0.3);
+            }
+            this.floodPending += dab.flooded;
+            if (this.floodPending > 0 && t >= this.nextFlood) {
+                this.flood(t, this.floodPending);
+                this.floodPending = 0;
+                this.nextFlood = t + TF_FLOOD_GAP * (0.85 + Math.random() * 0.3);
+            }
+        }
+        /** Pointer up, or the tool changed. */
+        stop() {
+            this.release();
+        }
+        /**
+         * The brush centre crossed from one TERRAFORM_STAGES band into another.
+         * Rate-limited: hovering on a band edge announces the new band once; a
+         * fast sweep over several bands steps straight to the last.
+         */
+        stage(from, to) {
+            if (!this.voice || !this.ac || from === to)
+                return;
+            if (this.heardStage < 0)
+                this.heardStage = from;
+            if (to !== this.wantStage)
+                this.wantSince = this.ac.currentTime;
+            this.wantStage = to;
+            this.flushStage(this.ac.currentTime);
+        }
+        flushStage(t) {
+            const want = this.wantStage;
+            const heard = this.heardStage;
+            if (want < 0 || heard < 0)
+                return;
+            if (want === heard) {
+                this.wantStage = -1;
+                return;
+            }
+            if (t < this.nextStage)
+                return;
+            const dir = Math.sign(want - heard);
+            if (this.heardDir !== 0 && dir !== this.heardDir && t < this.wantSince + TF_STAGE_SETTLE)
+                return;
+            this.stageCue(t, heard, want);
+            this.heardStage = want;
+            this.wantStage = -1;
+            this.heardDir = dir;
+            this.nextStage = t + TF_STAGE_GAP;
+        }
+        /** Going up: a soft low wooden tick on the new band's note. Going down: a short breath on it, with a fainter tick. */
+        stageCue(t, from, to) {
+            const f = tfStageHz(to);
+            if (to > from) {
+                this.tick(t, f, 1);
+            }
+            else {
+                this.breath(t, f * 2, 0.5);
+                this.tick(t + 0.02, f, 0.45);
+            }
+        }
+        /** A muted wooden knock: the note with a soft octave, a fast decay and a whisper of wood. */
+        tick(t, f, level) {
+            const ac = this.ac;
+            if (!ac || !this.bus)
+                return;
+            for (const [mul, amp, len] of [[1, 1, 0.22], [2, 0.35, 0.09]]) {
+                const osc = ac.createOscillator();
+                const g = ac.createGain();
+                osc.frequency.value = f * mul;
+                g.gain.setValueAtTime(0, t);
+                g.gain.linearRampToValueAtTime(0.65 * level * amp, t + 0.006);
+                g.gain.setTargetAtTime(0, t + 0.006, len / 5);
+                osc.connect(g).connect(this.bus);
+                osc.start(t);
+                osc.stop(t + len + 0.05);
+            }
+            this.noiseBurst(t, 'bandpass', 900, 700, 2, 0.1 * level, 0.003, 0.04);
+        }
+        /** Filtered breath on a note: noise through a narrow band, swelling in and out. */
+        breath(t, f, level) {
+            this.noiseBurst(t, 'bandpass', f * 1.03, f, 7, level, 0.05, 0.3);
+        }
+        release() {
+            const v = this.voice;
+            const ac = this.ac;
+            this.voice = null;
+            if (!v || !ac)
+                return;
+            const t = ac.currentTime;
+            v.out.gain.setTargetAtTime(0, t, TF_RELEASE);
+            for (const s of v.sources)
+                s.stop(t + TF_RELEASE * 10);
+            v.sources[0].onended = () => v.out.disconnect();
+            // An idle realtime context still runs its audio thread: let it sleep.
+            if (ac === tfRealtime) {
+                window.clearTimeout(this.idleTimer);
+                this.idleTimer = window.setTimeout(() => { if (!this.voice)
+                    void tfRealtime?.suspend(); }, 2000);
+            }
+        }
+        context() {
+            if (this.ac) {
+                if (this.ac === tfRealtime && tfRealtime.state === 'suspended')
+                    void tfRealtime.resume();
+                return this.ac;
+            }
+            const Ctor = window.AudioContext ?? window.webkitAudioContext;
+            if (!Ctor)
+                return null;
+            try {
+                tfRealtime ?? (tfRealtime = new Ctor());
+                const rt = tfRealtime;
+                if (rt.state === 'suspended')
+                    void rt.resume();
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden)
+                        void rt.suspend();
+                    else if (this.voice)
+                        void rt.resume();
+                });
+                this.ac = rt;
+                return rt;
+            }
+            catch {
+                return null;
+            }
+        }
+        setBus(t) {
+            const ac = this.ac;
+            if (!ac)
+                return;
+            const level = tfHidden() ? 0 : SE.SFX.volume() * TF_LEVEL;
+            if (!this.bus) {
+                this.bus = ac.createGain();
+                this.bus.gain.value = level;
+                this.bus.connect(this.dest ?? ac.destination);
+            }
+            this.bus.gain.setTargetAtTime(level, t, 0.05);
+        }
+        build(ac, sign) {
+            const bufs = tfBuffersFor(ac);
+            const t = ac.currentTime;
+            this.setBus(t);
+            const out = ac.createGain();
+            out.gain.value = 0;
+            out.gain.setTargetAtTime(1, t, TF_ATTACK);
+            out.connect(this.bus);
+            const filter = (type, f, q, to) => {
+                const n = ac.createBiquadFilter();
+                n.type = type;
+                n.frequency.value = f;
+                n.Q.value = q;
+                n.connect(to);
+                return n;
+            };
+            const gain = () => { const g = ac.createGain(); g.gain.value = 0; g.connect(out); return g; };
+            const loop = (buffer) => {
+                const s = ac.createBufferSource();
+                s.buffer = buffer;
+                s.loop = true;
+                return s;
+            };
+            // Sand: grains → high-pass 350 Hz (no boom) → gentle low-pass (no bite).
+            const sandGain = gain();
+            const sandLow = filter('lowpass', 1200, 0.5, sandGain);
+            const sand = loop(bufs.sand);
+            sand.connect(filter('highpass', 350, 0.5, sandLow));
+            // Under water the sand swells slowly, like a wave over it.
+            const swellDepth = ac.createGain();
+            swellDepth.gain.value = 0;
+            swellDepth.connect(sandGain.gain);
+            const swell = ac.createOscillator();
+            swell.frequency.value = 0.35 + Math.random() * 0.2;
+            swell.connect(swellDepth);
+            // Stone: brown noise, dark low-pass, high-pass at 50 Hz (no rumble).
+            const stoneGain = gain();
+            const stoneLow = filter('lowpass', 160, 0.6, filter('highpass', 60, 0.6, stoneGain));
+            const brown = loop(bufs.brown);
+            brown.connect(stoneLow);
+            const sources = [sand, brown, swell];
+            sand.start(t, Math.random() * 6);
+            brown.start(t, Math.random() * 5);
+            swell.start(t);
+            return { sign, out, sand, sandLow, sandGain, swellDepth, stoneLow, stoneGain, sources, born: t, last: t };
+        }
+        /** Land breaks the surface: a soft puff of settling sand. */
+        emerge(t, count) {
+            const size = Math.min(1, 0.5 + 0.2 * Math.log2(1 + count));
+            this.noiseBurst(t, 'lowpass', 1600, 500, 0.6, 0.8 * size, 0.025, 0.25);
+        }
+        /** Water floods in: a low, soft wash sinking away. */
+        flood(t, count) {
+            const size = Math.min(1, 0.5 + 0.2 * Math.log2(1 + count));
+            this.noiseBurst(t, 'lowpass', 1000, 220, 0.6, 1.1 * size, 0.06, 0.5);
+        }
+        /** White noise through a filter gliding from f0 to f1, with a soft attack and a smooth decay. */
+        noiseBurst(t, type, f0, f1, q, peak, attack, len) {
+            const ac = this.ac;
+            if (!ac || !this.bus)
+                return;
+            const src = ac.createBufferSource();
+            src.buffer = tfBuffersFor(ac).white;
+            const flt = ac.createBiquadFilter();
+            flt.type = type;
+            flt.Q.value = q;
+            flt.frequency.setValueAtTime(f0, t);
+            flt.frequency.exponentialRampToValueAtTime(f1, t + len);
+            const g = ac.createGain();
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(peak, t + attack);
+            g.gain.setTargetAtTime(0, t + attack, (len - attack) / 4);
+            src.connect(flt).connect(g).connect(this.bus);
+            src.start(t, Math.random() * 1.2);
+            src.stop(t + len + 0.1);
+        }
+    }
+    SE.TerraformSound = TerraformSound;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — terraforming brush (the tool in the player's hand)
+ * -----------------------------------------------------------------------------
+ * The stroke of the "Höhe ändern" tool: while the pointer is held, every frame
+ * dabs the ground (terraform.ts) along the way the pointer went since the last
+ * frame, so fast lines stay continuous and holding still keeps working. The
+ * push starts soft and builds up, so a tap is a small step and holding piles
+ * on. It also draws the brush cursor with the height stage under it, a glint
+ * on every tile that just moved, the dust and bubbles the brush throws up, and
+ * drives its sound (terraformsound.ts). Energy, settling and the map redraw
+ * stay with the app.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const DUST = [SE.fxColor('sand', 3), SE.fxColor('soil', 3), SE.fxColor('soil', 2), SE.fxColor('soil', 1)];
+    const GRIT = [SE.fxColor('rock', 3), SE.fxColor('rock', 2), SE.fxColor('rock', 1)];
+    const SNOW = [SE.fxColor('white', 0), SE.fxColor('ice', 4), SE.fxColor('ice', 3)];
+    const BUBBLE = [SE.fxColor('white', 0), SE.fxColor('water', 7), SE.fxColor('water', 6), SE.fxColor('water', 5)];
+    const RAISE_INK = '#ffe9a6';
+    const LOWER_INK = SE.fxColor('water', 7);
+    const SHADOW_INK = 'rgba(6,14,12,0.6)';
+    /** Ring colour per TERRAFORM_STAGES entry, deep sea to summit. */
+    const STAGE_INK = [
+        SE.fxColor('water', 3), SE.fxColor('water', 5), SE.fxColor('water', 7), SE.fxColor('sand', 4), SE.fxColor('meadow', 3),
+        SE.fxColor('straw', 3), SE.fxColor('soil', 3), SE.fxColor('rock', 4), SE.fxColor('white', 0),
+    ];
+    /**
+     * Elevation moved per second and tile of brush area when the brush pushes
+     * freely: TERRAFORM_RATE 0.6 times the mean smoothstep falloff over a disc
+     * (≈ 0.3). Sets `work` to about 1 for a free brush at full strength.
+     */
+    const FULL_PUSH = 0.18;
+    /** Brush strengths: the share of terraform.ts's full rate. */
+    const STRENGTHS = [
+        { name: 'Sanft', k: 0.3 }, { name: 'Normal', k: 0.6 }, { name: 'Stark', k: 1.2 },
+    ];
+    /** Seconds a held brush takes to reach its strength, and the share it starts with. */
+    const RAMP_S = 0.3;
+    const RAMP_FLOOR = 0.15;
+    /** Particles per unit of elevation a tile moved. */
+    const PARTICLES_PER_UNIT = 50;
+    /** A moved tile glints this long, at most this bright; full brightness at this much change in a frame. */
+    const GLINT_MS = 200;
+    const GLINT_ALPHA = 0.3;
+    const GLINT_FULL = 0.012;
+    /** The stage label pops this long when the brush centre crosses into the next stage. */
+    const POP_MS = 320;
+    /** How the brush is used, under its options. */
+    SE.TERRAFORM_NOTE = 'Gedrückt halten: tippen für kleine Schritte, halten baut auf. Umschalt kehrt die Richtung um, [ und ] oder Alt + Mausrad ändern die Größe. Kostet Energie, je mehr Erde sich bewegt.';
+    class TerraformTool {
+        constructor() {
+            /** Brush radius in tiles. */
+            this.radius = 3;
+            /** Index into STRENGTHS. */
+            this.strength = 1;
+            /** Shift held: the brush works the other way round. */
+            this.invert = false;
+            /** The pointer over the map, CSS pixels from the canvas corner; null when it is off the map. */
+            this.pointer = null;
+            /** Elevation moved in the current stroke. */
+            this.moved = 0;
+            /** Elevation moved per second in the last frame, for pacing the energy. */
+            this.perSecond = 0;
+            /** Which way the running (or last) stroke works. */
+            this.sign = 1;
+            this.last = null;
+            this.held = 0;
+            this.touched = new Set();
+            this.particles = new SE.FxParticles();
+            this.sound = new SE.TerraformSound();
+            /** Elevation as the glints last saw it, so each dab knows how far every tile moved. */
+            this.seen = new Float32Array(SE.TILE_COUNT);
+            this.glints = new Map();
+            this.cursor = { x: 0, y: 0, shown: false };
+            this.stage = -1;
+            this.popAt = -Infinity;
+            this.lastDraw = 0;
+        }
+        /** The brush size slider for the tool options. */
+        sizeControl() {
+            const row = SE.make('label', 'brush-size');
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.min = String(SE.TERRAFORM_RADIUS_MIN);
+            input.max = String(SE.TERRAFORM_RADIUS_MAX);
+            input.step = '0.25';
+            input.value = String(this.radius);
+            const value = SE.make('span', 'brush-size-value');
+            const show = () => { value.textContent = `Ø ${(this.radius * 2).toLocaleString('de-DE')} Felder`; };
+            input.addEventListener('input', () => {
+                this.radius = Number(input.value);
+                show();
+            });
+            show();
+            row.append(SE.make('span', 'brush-size-label', 'Pinselgröße'), input, value);
+            return row;
+        }
+        /** Sanft / Normal / Stark. */
+        strengthControl() {
+            const row = SE.make('div', 'brush-size');
+            const seg = SE.make('div', 'seg brush-strength');
+            seg.setAttribute('role', 'radiogroup');
+            seg.setAttribute('aria-label', 'Stärke');
+            const buttons = STRENGTHS.map((s, k) => {
+                const b = SE.button({ label: s.name, cls: 'seg-btn', onClick: () => { this.strength = k; buttons.forEach((o, j) => SE.setPressed(o, j === k)); } });
+                SE.setPressed(b, k === this.strength);
+                return b;
+            });
+            seg.append(...buttons);
+            row.append(SE.make('span', 'brush-size-label', 'Stärke'), seg);
+            return row;
+        }
+        /** Grow (1) or shrink (-1) the brush by one step, finer when it is small. */
+        resize(dir) {
+            const next = Math.round(this.radius * (dir > 0 ? 1.15 : 1 / 1.15) * 4) / 4;
+            this.radius = SE.clamp(next === this.radius ? this.radius + dir * 0.25 : next, SE.TERRAFORM_RADIUS_MIN, SE.TERRAFORM_RADIUS_MAX);
+        }
+        get active() {
+            return this.last !== null;
+        }
+        begin(world, sign, x, y) {
+            this.sign = sign;
+            this.last = { x, y };
+            this.held = 0;
+            this.touched.clear();
+            this.moved = 0;
+            this.perSecond = 0;
+            this.seen.set(world.elevation);
+            this.stage = SE.terraformStage(world.elevation[SE.idx(x, y)]);
+            this.sound.start(sign);
+        }
+        /** Dab from where the last frame left off to tile (x, y), sharing `dt` seconds (real time) among the dabs. */
+        step(world, x, y, dt) {
+            const from = this.last ?? { x, y };
+            let dx = x - from.x;
+            if (dx > SE.GRID_W / 2)
+                dx -= SE.GRID_W;
+            if (dx < -SE.GRID_W / 2)
+                dx += SE.GRID_W;
+            const dy = y - from.y;
+            const r = this.radius;
+            const brush = { radius: r, sign: this.sign };
+            // Soft start: a tap moves a little, holding builds up to the strength.
+            this.held += dt;
+            const ramp = RAMP_FLOOR + (1 - RAMP_FLOOR) * SE.smoothstep(Math.min(1, this.held / RAMP_S));
+            const push = dt * STRENGTHS[this.strength].k * ramp;
+            const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / Math.max(1, r * 0.5)));
+            const tiles = [];
+            let moved = 0;
+            let emerged = 0;
+            let flooded = 0;
+            let height = 0;
+            for (let k = 1; k <= n; k++) {
+                const d = SE.terraformDab(world, SE.wrapX(Math.round(from.x + (dx * k) / n)), Math.round(from.y + (dy * k) / n), brush, push / n);
+                for (const t of d.tiles) {
+                    tiles.push(t);
+                    this.touched.add(t);
+                }
+                moved += d.moved;
+                emerged += d.emerged;
+                flooded += d.flooded;
+                height += d.height;
+            }
+            this.last = { x, y };
+            this.moved += moved;
+            this.perSecond = dt > 0 ? moved / dt : 0;
+            const work = dt > 0 ? SE.clamp(moved / dt / (FULL_PUSH * Math.PI * r * r), 0, 1) : 0;
+            const reach = Math.ceil(r) + 1;
+            const s = {
+                tiles, moved, emerged, flooded, height: height / n, work,
+                x0: Math.min(from.x, from.x + dx) - reach, x1: Math.max(from.x, from.x + dx) + reach,
+                y0: Math.min(from.y, y) - reach, y1: Math.max(from.y, y) + reach,
+            };
+            this.sound.update(s, work);
+            this.react(world, s);
+            // The stage under the brush centre: the sound marks a crossing, the label pops.
+            const stage = SE.terraformStage(world.elevation[SE.idx(x, y)]);
+            if (stage !== this.stage) {
+                if (this.stage >= 0)
+                    this.sound.stage(this.stage, stage);
+                this.stage = stage;
+                this.popAt = performance.now();
+            }
+            return s;
+        }
+        /** Pointer up: the tiles the stroke touched, or null when no stroke was running. */
+        end() {
+            if (!this.last)
+                return null;
+            this.last = null;
+            this.sound.stop();
+            return this.touched;
+        }
+        /**
+         * Every moved tile glints and throws particles in proportion to how far it
+         * moved: dust off rising ground, grit off sinking ground, bubbles where
+         * water is, and a burst where land breaks the surface or drowns.
+         */
+        react(world, s) {
+            const e = world.elevation;
+            const now = performance.now();
+            const burst = s.tiles.length > 0 ? (s.emerged + s.flooded) * 4 / s.tiles.length : 0;
+            for (const i of s.tiles) {
+                const d = e[i] - this.seen[i];
+                if (d === 0)
+                    continue;
+                this.seen[i] = e[i];
+                const a = Math.abs(d);
+                this.glints.set(i, { t: now, a: Math.min(1, a / GLINT_FULL), up: d > 0 });
+                const count = Math.floor(a * PARTICLES_PER_UNIT + burst + Math.random());
+                for (let k = 0; k < count; k++) {
+                    const px = (i % SE.GRID_W) * 16 + Math.random() * 16;
+                    const py = ((i / SE.GRID_W) | 0) * 16 + Math.random() * 16;
+                    if (e[i] < 0) {
+                        this.particles.spawn(px, py, (Math.random() - 0.5) * 8, -10 - Math.random() * 10, 0.5 + Math.random() * 0.4, 0, BUBBLE);
+                    }
+                    else if (d > 0) {
+                        this.particles.spawn(px, py, (Math.random() - 0.5) * 30, -24 - Math.random() * 26, 0.45 + Math.random() * 0.35, 110, e[i] > SE.SNOW_LINE ? SNOW : DUST);
+                    }
+                    else {
+                        this.particles.spawn(px, py, (Math.random() - 0.5) * 12, -8 - Math.random() * 8, 0.3 + Math.random() * 0.25, 70, GRIT);
+                    }
+                }
+            }
+        }
+        /**
+         * The brush over the map, identity transform (device pixels): glints on
+         * the tiles that just moved, the particles, a ring of art-pixel squares
+         * at the radius tinted by the height stage under its centre, a dotted
+         * ring where the falloff is half, a plus or minus in the middle, and a
+         * label with the stage and the height.
+         */
+        draw(ctx, cam, world, sign, now) {
+            const dt = this.lastDraw ? Math.min(0.1, (now - this.lastDraw) / 1000) : 0;
+            this.lastDraw = now;
+            const T = cam.tilePx * cam.dpr;
+            const viewW = ctx.canvas.width;
+            const nearView = (x, reach) => {
+                let rx = (((x - cam.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
+                if (rx * T - reach > viewW)
+                    rx -= SE.GRID_W;
+                return rx * T;
+            };
+            this.drawGlints(ctx, cam, nearView, now);
+            this.particles.update(dt);
+            this.particles.draw(ctx, cam, false);
+            const p = this.pointer;
+            if (!p) {
+                this.cursor.shown = false;
+                return;
+            }
+            // The ring follows the pointer, eased a little against uneven pointer events.
+            const tx = cam.scrollX + p.x / cam.tilePx;
+            const ty = cam.scrollY + p.y / cam.tilePx;
+            const c = this.cursor;
+            if (!c.shown) {
+                c.x = tx;
+                c.y = ty;
+                c.shown = true;
+            }
+            const ease = 1 - Math.exp(-dt * 40);
+            let ddx = tx - c.x;
+            if (ddx > SE.GRID_W / 2)
+                ddx -= SE.GRID_W;
+            if (ddx < -SE.GRID_W / 2)
+                ddx += SE.GRID_W;
+            c.x = (c.x + ddx * ease + SE.GRID_W) % SE.GRID_W;
+            c.y += (ty - c.y) * ease;
+            const tileX = SE.wrapX(Math.floor(tx));
+            const tileY = SE.clamp(Math.floor(ty), 0, SE.GRID_H - 1);
+            const elevation = world.elevation[SE.idx(tileX, tileY)];
+            const stage = this.active ? this.stage : SE.terraformStage(elevation);
+            const R = this.radius * T;
+            const sq = Math.max(2, Math.round(T / 8));
+            // The whole ring moves in steps of its own squares, so it never shimmers.
+            const gx = Math.round(nearView(c.x, R) / sq) * sq;
+            const gy = Math.round(((c.y - cam.scrollY) * T) / sq) * sq;
+            const ink = sign > 0 ? RAISE_INK : LOWER_INK;
+            const tint = STAGE_INK[stage];
+            ctx.fillStyle = sign > 0 ? `rgba(255,233,166,${this.active ? 0.1 : 0.05})` : `rgba(128,200,204,${this.active ? 0.13 : 0.07})`;
+            ctx.beginPath();
+            ctx.arc(gx, gy, R, 0, Math.PI * 2);
+            ctx.fill();
+            const outer = [];
+            const inner = [];
+            const ring = (into, radius, gap) => {
+                const steps = Math.max(12, Math.round((Math.PI * 2 * radius) / (sq * gap)));
+                for (let k = 0; k < steps; k++) {
+                    const a = (k / steps) * Math.PI * 2;
+                    into.push(gx + Math.round((Math.cos(a) * radius) / sq) * sq, gy + Math.round((Math.sin(a) * radius) / sq) * sq);
+                }
+            };
+            ring(outer, R, 1.5);
+            ring(inner, R / 2, 3.5);
+            // The sign: a plus to raise, a minus to lower, three squares wide.
+            const glyph = [gx - sq, gy, gx, gy, gx + sq, gy];
+            if (sign > 0)
+                glyph.push(gx, gy - sq, gx, gy + sq);
+            const half = sq / 2;
+            ctx.fillStyle = SHADOW_INK;
+            for (const list of [outer, inner, glyph]) {
+                for (let k = 0; k < list.length; k += 2)
+                    ctx.fillRect(list[k] - half - 1, list[k + 1] - half - 1, sq + 2, sq + 2);
+            }
+            const squares = (list, color, alpha) => {
+                ctx.globalAlpha = alpha;
+                ctx.fillStyle = color;
+                for (let k = 0; k < list.length; k += 2)
+                    ctx.fillRect(list[k] - half, list[k + 1] - half, sq, sq);
+            };
+            squares(outer, tint, 1);
+            squares(inner, ink, 0.6);
+            squares(glyph, ink, 1);
+            ctx.globalAlpha = 1;
+            this.drawLabel(ctx, cam, gx + R * 0.72 + 6 * cam.dpr, gy + R * 0.72, stage, elevation, now);
+        }
+        /** Tiles that moved in the last GLINT_MS: lighter where they rose, darker where they sank. */
+        drawGlints(ctx, cam, nearView, now) {
+            if (this.glints.size === 0)
+                return;
+            const T = cam.tilePx * cam.dpr;
+            const size = Math.ceil(T);
+            for (const [i, g] of this.glints) {
+                const age = (now - g.t) / GLINT_MS;
+                if (age >= 1) {
+                    this.glints.delete(i);
+                    continue;
+                }
+                const a = GLINT_ALPHA * g.a * (1 - age);
+                ctx.fillStyle = g.up ? `rgba(255,244,214,${a})` : `rgba(4,18,34,${a})`;
+                ctx.fillRect(Math.round(nearView(i % SE.GRID_W, T)), Math.round((((i / SE.GRID_W) | 0) - cam.scrollY) * T), size, size);
+            }
+        }
+        /** "Hügel · 1.240 m" in a dark pixel box beside the ring; it pops when the stage changes under a stroke. */
+        drawLabel(ctx, cam, x, y, stage, elevation, now) {
+            const meters = Math.round((elevation * SE.ELEVATION_KM * 1000) / 10) * 10;
+            const text = `${SE.TERRAFORM_STAGES[stage].name} · ${SE.fmt.int(meters).replace('-', '−')} m`;
+            const pop = Math.max(0, 1 - (now - this.popAt) / POP_MS);
+            const scale = 1 + 0.3 * pop * pop;
+            const px = 13 * cam.dpr;
+            ctx.save();
+            ctx.translate(Math.round(x), Math.round(y));
+            ctx.scale(scale, scale);
+            ctx.font = `600 ${px}px "Pixelify Sans", "Segoe UI", sans-serif`;
+            ctx.textBaseline = 'middle';
+            const chip = Math.round(px * 0.6);
+            const pad = Math.round(px * 0.45);
+            const w = Math.round(ctx.measureText(text).width) + chip + pad * 3;
+            const h = Math.round(px * 1.7);
+            ctx.fillStyle = 'rgba(8,14,18,0.86)';
+            ctx.fillRect(0, -h / 2, w, h);
+            ctx.fillStyle = pop > 0 ? `rgba(255,255,255,${0.35 + 0.65 * pop})` : 'rgba(255,255,255,0.18)';
+            const b = Math.max(1, Math.round(cam.dpr * (pop > 0 ? 2 : 1)));
+            ctx.fillRect(0, -h / 2, w, b);
+            ctx.fillRect(0, h / 2 - b, w, b);
+            ctx.fillRect(0, -h / 2, b, h);
+            ctx.fillRect(w - b, -h / 2, b, h);
+            ctx.fillStyle = STAGE_INK[stage];
+            ctx.fillRect(pad, -chip / 2, chip, chip);
+            ctx.fillStyle = '#f6f1df';
+            ctx.fillText(text, pad * 2 + chip, 1);
+            ctx.restore();
+        }
+    }
+    SE.TerraformTool = TerraformTool;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the intro before the first world
+ * -----------------------------------------------------------------------------
+ * Plays after "Spiel starten". Before the very first world in full: black,
+ * the studio card, the logo, the Big Bang behind it, the planets forming, then
+ * a flight into the player's own planet. On every later new world it starts
+ * at INTRO_SHORT_FROM instead: the point of light, the bang, planets and dive,
+ * without studio card and logo. At the land cue the map takes over beneath
+ * the white on the tile the dive aimed at, and glides in while the clouds
+ * part over it (INTRO_REVEAL); the intro track dies away over the map and the
+ * game's music follows on the dot. Skippable at any time (button or Esc).
+ *
+ * One clock drives everything: the intro track's playback position while it
+ * plays, so the cues land on the music, else the frame clock. Every scene is
+ * a pure function of that clock: the intro can seek (tools/intro-record.js),
+ * skip and drop frames without a scene noticing.
+ *
+ * Scenes: introtitle.ts (studio card, logo), introcosmos.ts (Big Bang,
+ * planets forming), introflight.ts (the dive onto the map).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /**
+     * Developer mode, while the intro is being made: the settings switch picks the
+     * full intro or the short one for every "Spiel starten", and playing it does
+     * not tick it off.
+     * SET TO false BEFORE RELEASE: then the full intro plays once, before the
+     * first world, and the short one before every later new world.
+     */
+    SE.INTRO_DEV = true;
+    /**
+     * When each beat starts, in seconds on the intro clock. Measured from the
+     * loudness of IntroMusic.mp3 (MUSIC_TRACKS.intro) in 50 ms steps; retime
+     * here when the music changes.
+     */
+    SE.INTRO_CUES = {
+        /** "DreamStudios präsentiert" fades in softly with the music (it rises from 0.45 s to about 2.5 s). */
+        studio: 0.6,
+        /** The SimEarth 2 logo lands on the first big hit (a swell from 6.15 s, the hit at 6.6 s, +11 dB). */
+        logo: 6.6,
+        /** The Big Bang behind the logo: the music breathes in at 12.0–12.5 s and swells again from here. */
+        bang: 12.55,
+        /** The sun ignites on the loudest moment of the track; the planets form, the player's among them. */
+        planets: 15.6,
+        /**
+         * The camera hurls toward the player's planet. Hand-over from the cosmos:
+         * the planet sits at the screen centre with radius introHandoffRadius().
+         */
+        flight: 22,
+        /** Through the clouds into white on the music's drop: the map takes over beneath it. */
+        land: 27.2,
+    };
+    /**
+     * Where the short intro (no studio card, no logo) starts on the clock, and the
+     * intro track with it: black, then the point of light gathers from a second
+     * before the bang. The track is near the end of a loud stretch here; its
+     * 1.2 s fade-in carries it into the breath before the bang.
+     */
+    SE.INTRO_SHORT_FROM = 11;
+    /**
+     * Seconds after INTRO_CUES.land in which the clouds part over the map (the
+     * canvas is see-through from the land cue on) while the map glides in; then
+     * the intro is gone.
+     */
+    SE.INTRO_REVEAL = 2.4;
+    /** The map's zoom (px per tile) when it takes over beneath the clouds; it glides to the player's zoom through INTRO_REVEAL. */
+    SE.INTRO_GLIDE_FROM = 10;
+    /** Where the intro track has died away (below -55 dB): the game's music starts right there. */
+    SE.INTRO_MUSIC_END = 30.85;
+    /** Seconds after INTRO_CUES.flight in which the cosmos's sky fades out and the flight's stars fade in. */
+    SE.INTRO_HANDOFF_FADE = 0.6;
+    /** The player's planet's radius at the hand-over from cosmos to flight, CSS px. */
+    function introHandoffRadius(w, h) {
+        return 0.08 * Math.min(w, h);
+    }
+    SE.introHandoffRadius = introHandoffRadius;
+    /** The player's planet's turn at intro time t; the flight lands on the tile in the middle at INTRO_CUES.land. */
+    function introSpin(t) {
+        return 2.4 + landingTurn + t * 0.12;
+    }
+    SE.introSpin = introSpin;
+    /** Added to every turn, per world, so the dive lands on a coast (see aimAtCoast). */
+    let landingTurn = 0;
+    /** Share of land the landing view should show: a coast, neither open sea nor a sea of rock. */
+    const LANDING_LAND = 0.6;
+    /**
+     * Turn the planet so that the tile in the middle of the disc at the land cue
+     * (always on the equator) is the one whose surroundings come closest to
+     * LANDING_LAND, instead of wherever a fixed turn happens to point.
+     */
+    function aimAtCoast(world) {
+        const y0 = SE.GRID_H >> 1;
+        let best = 0;
+        let bestScore = Infinity;
+        for (let x = 0; x < SE.GRID_W; x++) {
+            let land = 0;
+            let seen = 0;
+            for (let dy = -8; dy <= 8; dy++) {
+                for (let dx = -12; dx <= 12; dx++) {
+                    seen++;
+                    if (!world.isWater(SE.idx(SE.wrapX(x + dx), y0 + dy)))
+                        land++;
+                }
+            }
+            const score = Math.abs(land / seen - LANDING_LAND);
+            if (score < bestScore) {
+                bestScore = score;
+                best = x;
+            }
+        }
+        // TitleGlobe puts column (spin / 2π + 0.5) · GRID_W in the middle of the disc.
+        landingTurn = 0;
+        const want = Math.PI * 2 * (best / SE.GRID_W - 0.5);
+        const have = introSpin(SE.INTRO_CUES.land);
+        landingTurn = want - have - Math.PI * 2 * Math.round((want - have) / (Math.PI * 2));
+    }
+    /** 0 before `from`, 1 after `to`, linear between. */
+    function introSpan(t, from, to) {
+        return SE.clamp((t - from) / (to - from), 0, 1);
+    }
+    SE.introSpan = introSpan;
+    /** Visible from `from` to `to`: rises over `edge` seconds after `from`, falls over `edge` before `to`. */
+    function introFade(t, from, to, edge) {
+        return Math.min(introSpan(t, from, from + edge), 1 - introSpan(t, to - edge, to));
+    }
+    SE.introFade = introFade;
+    /** The player's planet as the title globe paints it, in a hidden box, drawn onto the intro canvas. */
+    class IntroPlanet {
+        constructor(host, world) {
+            this.world = world;
+            this.spun = NaN;
+            const box = SE.make('div', 'intro-globe-host');
+            const canvas = SE.make('canvas');
+            box.appendChild(canvas);
+            host.appendChild(box);
+            this.globe = new SE.TitleGlobe(canvas);
+        }
+        /** The disc centred on (cx, cy), radius r, turned by `spin` (see introSpin). */
+        draw(ctx, cx, cy, r, spin) {
+            if (spin !== this.spun) {
+                this.spun = spin;
+                this.globe.spin = spin;
+                this.globe.render(this.world);
+            }
+            this.globe.drawTo(ctx, cx, cy, r);
+        }
+        /** The tile in the middle of the disc at `spin`. */
+        tileAt(spin) {
+            this.spun = NaN;
+            this.globe.spin = spin;
+            return this.globe.centerTile();
+        }
+    }
+    SE.IntroPlanet = IntroPlanet;
+    /** The intro on screen, if any: the click sounds stay quiet under it, recordings seek it. */
+    SE.activeIntro = null;
+    /** A frame clock step longer than this is a stall (tab switch, debugger), not time that passed. */
+    const MAX_STEP = 0.1;
+    /** How far behind the frame clock the music may report before it counts as having looped back. */
+    const MUSIC_SLACK = 0.25;
+    const LEAVE_MS = 800;
+    class IntroPlayer {
+        /** `from`: where the clock starts, 0 for the full intro, INTRO_SHORT_FROM for the short one without titles. */
+        constructor(host, hooks, from = 0) {
+            this.hooks = hooks;
+            this.from = from;
+            this.t = 0;
+            this.last = 0;
+            /** A recording holds the clock still. */
+            this.held = false;
+            /** The map lies beneath: from the land cue on, or after a skip. */
+            this.landed = false;
+            this.ended = false;
+            this.onKey = (e) => {
+                if (e.key !== 'Escape')
+                    return;
+                e.preventDefault();
+                this.finish();
+            };
+            this.loop = (now) => {
+                if (this.ended)
+                    return;
+                const dt = this.last ? (now - this.last) / 1000 : 0;
+                this.last = now;
+                if (!this.held)
+                    this.advance(dt);
+                this.step();
+                if (this.t >= SE.INTRO_CUES.land + SE.INTRO_REVEAL && !this.held)
+                    this.end(false);
+                else
+                    window.requestAnimationFrame(this.loop);
+            };
+            this.t = from;
+            this.root = SE.make('div', 'intro');
+            this.root.setAttribute('role', 'dialog');
+            this.root.setAttribute('aria-modal', 'true');
+            this.root.setAttribute('aria-label', 'Intro');
+            this.canvas = SE.make('canvas', 'intro-canvas');
+            this.canvas.setAttribute('aria-hidden', 'true');
+            const ctx = this.canvas.getContext('2d');
+            if (!ctx)
+                throw new Error('SimEarth: 2D context unavailable for the intro');
+            this.ctx = ctx;
+            const layer = SE.make('div', 'intro-layer');
+            const skip = SE.button({ label: 'Überspringen', icon: SE.uiIcon('chevron-right'), cls: 'btn intro-skip', onClick: () => this.finish() });
+            this.root.append(this.canvas, layer, skip);
+            host.appendChild(this.root);
+            const world = hooks.world();
+            aimAtCoast(world);
+            this.planet = new IntroPlanet(this.root, world);
+            const stage = { world, layer, planet: this.planet };
+            this.scenes = [SE.introCosmos(stage), SE.introFlight(stage)];
+            if (from <= 0)
+                this.scenes.push(SE.introTitles(stage));
+            document.addEventListener('keydown', this.onKey);
+            setGameInert(true);
+            SE.activeIntro = this;
+            window.requestAnimationFrame(this.loop);
+            skip.focus({ preventScroll: true });
+        }
+        /** Freeze the clock at `t` seconds and draw that frame now: for tools/intro-record.js. */
+        hold(t) {
+            this.held = true;
+            this.t = t;
+            this.step();
+        }
+        advance(dt) {
+            const music = this.hooks.musicTime();
+            // The music is the clock; once it loops back (or never started) the frame clock carries on.
+            if (music !== null && music >= this.t - MUSIC_SLACK)
+                this.t = Math.max(this.t, music);
+            else if (!document.hidden)
+                this.t += Math.min(dt, MAX_STEP);
+        }
+        /** The frame at the clock; from the land cue on the map lies beneath and glides in with the clouds parting. */
+        step() {
+            if (this.t >= SE.INTRO_CUES.land)
+                this.land(false);
+            this.draw();
+            if (this.landed)
+                this.hooks.reveal(introSpan(this.t, SE.INTRO_CUES.land, SE.INTRO_CUES.land + SE.INTRO_REVEAL));
+        }
+        draw() {
+            const dpr = window.devicePixelRatio || 1;
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            const pw = Math.round(w * dpr);
+            const ph = Math.round(h * dpr);
+            if (this.canvas.width !== pw || this.canvas.height !== ph) {
+                this.canvas.width = pw;
+                this.canvas.height = ph;
+            }
+            const ctx = this.ctx;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            if (this.t >= SE.INTRO_CUES.land) {
+                ctx.clearRect(0, 0, w, h);
+            }
+            else {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, w, h);
+            }
+            const frame = { t: this.t, ctx, w, h, still: this.hooks.reduceEffects() };
+            for (const scene of this.scenes) {
+                ctx.save();
+                scene.draw(frame);
+                ctx.restore();
+            }
+        }
+        /** The map takes over beneath the intro, on the tile the dive aimed at. */
+        land(skipped) {
+            if (this.landed)
+                return;
+            this.landed = true;
+            this.root.classList.add('revealing');
+            const [x, y] = this.planet.tileAt(introSpin(SE.INTRO_CUES.land));
+            this.hooks.land(x, y, skipped);
+        }
+        /** Skipped (button or Esc): straight to the map, the intro fades out. */
+        finish() {
+            if (this.ended)
+                return;
+            if (!this.landed)
+                this.land(true);
+            this.end(true);
+        }
+        end(fade) {
+            this.ended = true;
+            SE.activeIntro = null;
+            document.removeEventListener('keydown', this.onKey);
+            setGameInert(false);
+            this.hooks.done();
+            if (!fade) {
+                this.root.remove();
+                return;
+            }
+            this.root.classList.add('leaving');
+            window.setTimeout(() => this.root.remove(), LEAVE_MS);
+        }
+    }
+    SE.IntroPlayer = IntroPlayer;
+    /** The game behind stays out of reach of Tab and screen readers while the intro covers it. */
+    function setGameInert(on) {
+        document.querySelectorAll('#topbar, #desktop').forEach((el) => { el.inert = on; });
+    }
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — intro: studio card and logo
+ * -----------------------------------------------------------------------------
+ * "DreamStudios präsentiert" in white pixel type on black, gathering softly
+ * pixel by pixel with the music and dissolving again. Then the logo lands on
+ * the first hit: a small living planet with the Gaia sprout and an orbit
+ * ring, rising behind the SimEarth wordmark with its "2" badge, and "Der
+ * lebende Planet" between two waves. The Big Bang behind it lights its rim
+ * at INTRO_CUES.bang; it dissolves into sparks as the planets form.
+ *
+ * Everything is painted at art resolution into an ImageData, one pixel per
+ * art pixel, and scaled up by a whole number of device pixels: crisp at any
+ * size. A pure function of the clock (see intro.ts).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const FONT = '"Pixelify Sans"';
+    /** Type is drawn this many times larger and averaged down, so the art pixels sit where the glyphs' ink is. */
+    const SUPER = 8;
+    const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
+    /** Planet radius, orbit ring radii and tilt, in art pixels / radians. */
+    const R = 21;
+    const RING_X = 50;
+    const RING_Y = 8;
+    const RING_TILT = -0.16;
+    /** The Gaia sprout on the pole: o outline, L leaf, l leaf shade, s stem. */
+    const SPROUT = [
+        '.oo.....oo.',
+        'oLLo...oLLo',
+        'oLllo.ollLo',
+        '.olllolllo.',
+        '..ooosooo..',
+        '.....s.....',
+        '.....s.....',
+    ];
+    /** 0xAABBGGRR, as a little-endian Uint32 view of ImageData reads it. */
+    function rgb(hex) {
+        const n = parseInt(hex.slice(1), 16);
+        return (0xff000000 | ((n & 0xff) << 16) | (n & 0xff00) | (n >> 16)) >>> 0;
+    }
+    /** `c` moved toward `to` by k (0..1); alpha stays opaque. */
+    function mix(c, to, k) {
+        if (k <= 0)
+            return c;
+        if (k >= 1)
+            return to;
+        const ch = (s) => {
+            const a = (c >> s) & 0xff;
+            return Math.round(a + (((to >> s) & 0xff) - a) * k) << s;
+        };
+        return (0xff000000 | ch(16) | ch(8) | ch(0)) >>> 0;
+    }
+    function hash(x, y, seed) {
+        let h = Math.imul(x + 0x9e37, 0x85ebca6b) ^ Math.imul(y + 0x7f4a, 0xc2b2ae35) ^ seed;
+        h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+        return ((h ^ (h >>> 13)) >>> 0) / 4294967296;
+    }
+    const bayer = (x, y) => BAYER[(y & 3) * 4 + (x & 3)];
+    const ease = (t) => t * t * (3 - 2 * t);
+    const C = {
+        white: rgb('#ffffff'),
+        studioDim: rgb('#aeb9c4'),
+        studioGrey: rgb('#3c4650'),
+        rim: rgb('#fff1cc'),
+        outline: rgb('#04161c'),
+        extrude: [rgb('#0b3a46'), rgb('#072630')],
+        bands: ['#fff7da', '#ecf8d4', '#bdf3d4', '#84e9da', '#4fd6e0', '#2db4cf'].map(rgb),
+        bandStops: [0.3, 0.44, 0.57, 0.7, 0.84, 1],
+        badgeLine: rgb('#63c16f'),
+        badgeFill: rgb('#02050b'),
+        badgeDigit: rgb('#8fdc9a'),
+        tag: rgb('#4fd6e0'),
+        waveNear: rgb('#4fd6e0'),
+        waveFar: rgb('#174f5c'),
+        ringFront: rgb('#4fd6e0'),
+        ringBack: rgb('#1a5868'),
+        spark: rgb('#dffcff'),
+        air: rgb('#9ff6ff'),
+        halo: rgb('#16495a'),
+        ocean: ['#03101a', '#0c2c47', '#165a7a', '#2a88a2'].map(rgb),
+        shelf: ['#05202a', '#14505e', '#2c8a98', '#5cc4c8'].map(rgb),
+        land: ['#0c2414', '#2f6b36', '#4f9a4a', '#8ad16f'].map(rgb),
+        hill: ['#1d1710', '#6f5438', '#a5874f', '#e0c68e'].map(rgb),
+        ice: ['#1d2a36', '#8aa4b4', '#cfe4ec', '#f6f1df'].map(rgb),
+        sprout: { o: rgb('#173d22'), L: rgb('#8ad16f'), l: rgb('#4f9a4a'), s: rgb('#6f5438') },
+    };
+    /** `text` as a tight 1-bit mask, `size` px type, `track` extra art pixels between letters. */
+    function rasterText(text, weight, size, track = 0) {
+        const cv = document.createElement('canvas');
+        const g = cv.getContext('2d', { willReadFrequently: true });
+        if (!g)
+            throw new Error('SimEarth: 2D context unavailable for the intro titles');
+        const font = `${weight} ${size * SUPER}px ${FONT}`;
+        g.font = font;
+        const chars = [...text];
+        const advance = chars.map((ch) => g.measureText(ch).width + track * SUPER);
+        const total = advance.reduce((a, b) => a + b, 0);
+        const pad = 2 * SUPER;
+        cv.width = Math.ceil(total + 2 * pad);
+        cv.height = Math.ceil(size * SUPER * 1.6 + 2 * pad);
+        g.font = font;
+        g.fillStyle = '#fff';
+        let x = pad;
+        for (let k = 0; k < chars.length; k++) {
+            g.fillText(chars[k], x, pad + size * SUPER * 1.2);
+            x += advance[k];
+        }
+        const src = g.getImageData(0, 0, cv.width, cv.height).data;
+        const w = Math.floor(cv.width / SUPER);
+        const h = Math.floor(cv.height / SUPER);
+        const full = new Uint8Array(w * h);
+        let x0 = w, x1 = -1, y0 = h, y1 = -1;
+        for (let y = 0; y < h; y++) {
+            for (let cx = 0; cx < w; cx++) {
+                let sum = 0;
+                for (let dy = 0; dy < SUPER; dy++) {
+                    let i = ((y * SUPER + dy) * cv.width + cx * SUPER) * 4 + 3;
+                    for (let dx = 0; dx < SUPER; dx++, i += 4)
+                        sum += src[i];
+                }
+                if (sum < 0.5 * 255 * SUPER * SUPER)
+                    continue;
+                full[y * w + cx] = 1;
+                x0 = Math.min(x0, cx);
+                x1 = Math.max(x1, cx);
+                y0 = Math.min(y0, y);
+                y1 = Math.max(y1, y);
+            }
+        }
+        const tw = Math.max(0, x1 - x0 + 1);
+        const th = Math.max(0, y1 - y0 + 1);
+        const on = new Uint8Array(tw * th);
+        for (let y = 0; y < th; y++)
+            on.set(full.subarray((y + y0) * w + x0, (y + y0) * w + x0 + tw), y * tw);
+        return { w: tw, h: th, on };
+    }
+    /** Paints art pixels: an ImageData and the canvas it is scaled up from. */
+    class Pixels {
+        constructor(w, h) {
+            this.w = w;
+            this.h = h;
+            this.img = new ImageData(w, h);
+            this.px = new Uint32Array(this.img.data.buffer);
+        }
+        set(x, y, c) {
+            if (x >= 0 && y >= 0 && x < this.w && y < this.h)
+                this.px[y * this.w + x] = c;
+        }
+    }
+    function buildLogo() {
+        const word = rasterText('SimEarth', 700, 28);
+        const digit = rasterText('2', 700, 20);
+        const tag = rasterText('DER LEBENDE PLANET', 400, 10, 2);
+        const bw = digit.w + 6;
+        const bh = digit.h + 4;
+        const rowW = word.w + 4 + bw;
+        const waveLen = 14;
+        const w = Math.max(rowW, 2 * RING_X + 4, tag.w + 2 * (waveLen + 5)) + 4;
+        const cx = Math.floor(w / 2);
+        const cy = SPROUT.length + R;
+        const wordX = Math.round(cx - rowW / 2);
+        const wordY = cy + Math.round(R * 0.42);
+        const tagY = wordY + word.h + 9;
+        const h = tagY + tag.h + 2;
+        const col = new Uint32Array(w * h);
+        const part = new Uint8Array(w * h);
+        const rim = new Uint8Array(w * h);
+        const put = (x, y, c, p) => {
+            if (x < 0 || y < 0 || x >= w || y >= h)
+                return;
+            col[y * w + x] = c;
+            part[y * w + x] = p;
+        };
+        // The wordmark: a two-pixel extrusion under the banded face.
+        for (let y = 0; y < word.h; y++) {
+            for (let x = 0; x < word.w; x++) {
+                if (!word.on[y * word.w + x])
+                    continue;
+                for (let d = 2; d >= 1; d--)
+                    put(wordX + x, wordY + y + d, C.extrude[d - 1], 1 /* Part.Word */);
+            }
+        }
+        for (let y = 0; y < word.h; y++) {
+            const band = C.bandStops.findIndex((s) => (y + 0.5) / word.h <= s);
+            for (let x = 0; x < word.w; x++)
+                if (word.on[y * word.w + x])
+                    put(wordX + x, wordY + y, C.bands[band], 1 /* Part.Word */);
+        }
+        // The "2" in its box, as on the title screen.
+        const bx = wordX + word.w + 4;
+        const by = wordY;
+        for (let y = 0; y < bh; y++) {
+            for (let x = 0; x < bw; x++) {
+                const edge = x === 0 || y === 0 || x === bw - 1 || y === bh - 1;
+                put(bx + x, by + y, edge ? C.badgeLine : C.badgeFill, 2 /* Part.Badge */);
+            }
+        }
+        for (let y = 0; y < digit.h; y++) {
+            for (let x = 0; x < digit.w; x++)
+                if (digit.on[y * digit.w + x])
+                    put(bx + 3 + x, by + 2 + y, C.badgeDigit, 3 /* Part.Digit */);
+        }
+        // One dark pixel around word and badge, so they part from the planet and from the flash behind.
+        const filled = part.slice();
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                if (filled[y * w + x])
+                    continue;
+                let near = 0;
+                for (let dy = -1; dy <= 1 && !near; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && ny >= 0 && nx < w && ny < h && filled[ny * w + nx]) {
+                            near = filled[ny * w + nx];
+                            break;
+                        }
+                    }
+                }
+                if (!near)
+                    continue;
+                put(x, y, C.outline, near === 3 /* Part.Digit */ ? 2 /* Part.Badge */ : near);
+                rim[y * w + x] = 1;
+            }
+        }
+        const tagX = Math.round(cx - tag.w / 2);
+        for (let y = 0; y < tag.h; y++) {
+            for (let x = 0; x < tag.w; x++)
+                if (tag.on[y * tag.w + x])
+                    put(tagX + x, tagY + y, C.tag, 4 /* Part.Tag */);
+        }
+        return {
+            w, h, cx, cy, col, part, rim, wordX0: wordX, wordX1: wordX + word.w,
+            badge: { x: bx, y: by, w: bw, h: bh },
+            tag: { x: tagX, y: tagY, w: tag.w, h: tag.h },
+        };
+    }
+    function buildStudio() {
+        const name = rasterText('DreamStudios', 700, 20);
+        const sub = rasterText('präsentiert', 500, 13, 2);
+        const w = Math.max(name.w, sub.w) + 2;
+        const subY = name.h + 7;
+        return { name, sub, w, h: subY + sub.h + 1, subY };
+    }
+    /** Seconds before the logo cue: the music swells, a faint glow gathers where the logo will land. */
+    const SWELL = 0.45;
+    /**
+     * Draws `p` centred (plus `ox`, `oy` art pixels), scaled by the largest whole device-pixel factor that fits
+     * `fit` CSS px per art pixel, `bump` times larger on top while that still fits the width (in whole device pixels too).
+     */
+    function blit(f, p, buf, fit, bump, ox, oy, glow, blur) {
+        const bctx = buf.getContext('2d');
+        if (!bctx)
+            return;
+        bctx.putImageData(p.img, 0, 0);
+        const dpr = f.ctx.getTransform().a || 1;
+        const base = Math.max(1, Math.floor(fit * dpr));
+        const sd = Math.max(base, Math.min(base + Math.round(base * bump), Math.floor((f.w * dpr * 0.98) / p.w)));
+        const x = Math.round((f.w * dpr - p.w * sd) / 2) + ox * base;
+        const y = Math.round((f.h * dpr - p.h * sd) / 2) + oy * base;
+        const { ctx } = f;
+        ctx.imageSmoothingEnabled = false;
+        if (blur > 0) {
+            ctx.shadowColor = glow;
+            ctx.shadowBlur = blur * dpr;
+        }
+        ctx.drawImage(buf, 0, 0, p.w, p.h, x / dpr, y / dpr, (p.w * sd) / dpr, (p.h * sd) / dpr);
+    }
+    /** CSS px per art pixel the logo aims for: wide on phones, a strong centre piece on larger screens. */
+    function logoFit(f, art) {
+        return Math.min((f.w * (f.w < 600 ? 0.9 : 0.62)) / art.w, (f.h * 0.56) / art.h);
+    }
+    function introTitles(stage) {
+        const said = SE.make('p', 'sr-only', 'DreamStudios präsentiert: SimEarth 2 – Der lebende Planet');
+        stage.layer.appendChild(said);
+        const buf = document.createElement('canvas');
+        let studio = null;
+        let logo = null;
+        void document.fonts.load(`700 16px ${FONT}`);
+        void document.fonts.load(`400 16px ${FONT}`);
+        const ready = () => {
+            if (studio && logo)
+                return true;
+            if (!document.fonts.check(`700 16px ${FONT}`) || !document.fonts.check(`400 16px ${FONT}`))
+                return false;
+            const s = buildStudio();
+            const l = buildLogo();
+            studio = { art: s, px: new Pixels(s.w, s.h) };
+            logo = { art: l, px: new Pixels(l.w, l.h) };
+            buf.width = Math.max(s.w, l.w);
+            buf.height = Math.max(s.h, l.h);
+            return true;
+        };
+        return {
+            draw(f) {
+                const c = SE.INTRO_CUES;
+                if (f.t < c.studio || f.t >= c.planets || !ready() || !studio || !logo)
+                    return;
+                if (f.t < c.logo - SWELL)
+                    drawStudio(f, studio.art, studio.px, buf);
+                else if (f.t < c.logo && !f.still)
+                    drawSwell(f, logo.art);
+                else
+                    drawLogo(f, logo.art, logo.px, buf);
+            },
+        };
+    }
+    SE.introTitles = introTitles;
+    /* ------------------------------------------------------------ studio card -- */
+    /** Soft, with the music fading in: the pixels gather slowly and settle from grey to white; gone before the swell. */
+    function drawStudio(f, art, p, buf) {
+        const t = f.t - SE.INTRO_CUES.studio;
+        const end = SE.INTRO_CUES.logo - SWELL - SE.INTRO_CUES.studio - 0.1;
+        const { name, sub } = art;
+        const nameIn = SE.introSpan(t, 0, 2.4);
+        const subIn = SE.introSpan(t, 1.2, 3.0);
+        const gone = SE.introSpan(t, end - 1.1, end);
+        const still = f.still;
+        p.px.fill(0);
+        // A pixel arrives at its rank, grey, and turns white over the next stretch of the build.
+        const paint = (mask, ox, oy, prog, seed, top) => {
+            for (let y = 0; y < mask.h; y++) {
+                for (let x = 0; x < mask.w; x++) {
+                    if (!mask.on[y * mask.w + x])
+                        continue;
+                    if (still) {
+                        p.set(ox + x, oy + y, top);
+                        continue;
+                    }
+                    const r = hash(x, y, seed) * 0.6 + bayer(x, y) * 0.4;
+                    const k = (prog * 1.35 - r) / 0.35;
+                    if (k <= 0 || hash(x, y, seed + 1) < gone * 1.15 - 0.1)
+                        continue;
+                    p.set(ox + x, oy + y, mix(C.studioGrey, top, k));
+                }
+            }
+        };
+        paint(name, Math.floor((art.w - name.w) / 2), 0, ease(nameIn), 11, C.white);
+        paint(sub, Math.floor((art.w - sub.w) / 2), art.subY, ease(subIn), 23, C.studioDim);
+        f.ctx.globalAlpha = still ? SE.introFade(t, 0, end, 1.6) : Math.min(0.35 + 0.65 * ease(nameIn), 1 - gone * gone);
+        const fit = Math.min((f.w * (f.w < 600 ? 0.84 : 0.5)) / art.w, (f.h * 0.3) / art.h);
+        blit(f, p, buf, fit, 0, 0, 0, 'rgba(190, 225, 255, 0.4)', 12);
+    }
+    /** The swell before the hit: black, and a faint cool glow gathering where the planet will be. */
+    function drawSwell(f, art) {
+        const k = SE.introSpan(f.t, SE.INTRO_CUES.logo - SWELL, SE.INTRO_CUES.logo) ** 2;
+        const { ctx, w, h } = f;
+        const fit = logoFit(f, art);
+        const cx = w / 2 + (art.cx - art.w / 2) * fit;
+        const cy = h / 2 + (art.cy - art.h / 2) * fit;
+        const r = R * fit * (1.2 + 1.3 * k);
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0, `rgba(120, 220, 235, ${(0.22 * k).toFixed(3)})`);
+        g.addColorStop(1, 'rgba(120, 220, 235, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+    }
+    /* ------------------------------------------------------------------- logo -- */
+    /** How strongly the Big Bang behind lights the logo: a glimmer as its light gathers, the blast, then a lasting glow. */
+    function backlight(t, still) {
+        const b = SE.INTRO_CUES.bang;
+        if (still)
+            return 0.5 * ease(SE.introSpan(t, b - 0.3, b + 1.5));
+        if (t < b)
+            return 0.3 * SE.introSpan(t, b - 0.35, b) ** 2;
+        return 0.5 + 0.5 * (1 - ease(SE.introSpan(t, b, b + 1.6)));
+    }
+    function drawLogo(f, art, p, buf) {
+        const t = f.t;
+        const c = SE.INTRO_CUES;
+        const still = f.still;
+        const s0 = c.logo;
+        // The hit: the logo is there at once, white-hot and a size larger, and cools into its colours.
+        const hit = still ? 0 : 1 - ease(SE.introSpan(t, s0, s0 + 0.5));
+        const slam = still ? 0 : 1 - SE.introSpan(t, s0, s0 + 0.16);
+        const pTag = SE.introSpan(t, s0 + 0.35, s0 + 1.1);
+        const pWave = ease(SE.introSpan(t, s0 + 0.6, s0 + 1.6));
+        const gone = SE.introSpan(t, c.planets - 1.5, c.planets - 0.15);
+        const light = backlight(t, still);
+        const bangFlash = still || t < c.bang ? 0 : 1 - SE.introSpan(t, c.bang, c.bang + 0.5);
+        // Two highlights sweep the word: after the hit and after the bang.
+        const gleams = [(t - s0 - 0.25) / 0.9, (t - c.bang - 0.1) / 0.9];
+        const px = p.px;
+        const w = p.w;
+        px.fill(0);
+        paintRing(p, art, false);
+        paintPlanet(p, art, t, light);
+        const top = art.cy - R - SPROUT.length + 1;
+        SPROUT.forEach((row, y) => {
+            for (let x = 0; x < row.length; x++) {
+                const k = C.sprout[row[x]];
+                if (k)
+                    p.set(art.cx - 5 + x, top + y, mix(k, C.rim, row[x] === 'o' ? light * 0.8 : 0));
+            }
+        });
+        paintRing(p, art, true);
+        // A light running round the ring.
+        const a = Math.PI * 0.75 + (t - s0) * 0.9;
+        const [lx, ly] = ringAt(art, a);
+        if (!(Math.sin(a) < 0 && (lx - art.cx) ** 2 + (ly - art.cy) ** 2 < (R + 1) ** 2)) {
+            p.set(lx, ly, C.white);
+            for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+                p.set(lx + dx, ly + dy, C.air);
+        }
+        // Word, badge and tagline over it all.
+        const tg = art.tag;
+        const span = w + art.h * 0.7;
+        for (let i = 0; i < art.col.length; i++) {
+            const part = art.part[i];
+            if (!part)
+                continue;
+            const x = i % w;
+            const y = (i - x) / w;
+            let col = art.col[i];
+            if (part === 4 /* Part.Tag */) {
+                // Typed in a few columns at a time.
+                if (still ? pTag < 0.5 : Math.floor((x - tg.x) / 4) / Math.ceil(tg.w / 4) >= pTag)
+                    continue;
+            }
+            else if (art.rim[i]) {
+                // Lit from behind, but dark against the flash itself, so the letters keep their edge.
+                col = mix(col, C.rim, light * 0.7 * (1 - bangFlash));
+            }
+            else {
+                if (bangFlash > 0)
+                    col = mix(col, C.white, bangFlash * 0.3);
+                for (const g of gleams) {
+                    const d = (x + y * 0.7) / span - g * 1.2 + 0.1;
+                    if (d > -0.05 && d < 0)
+                        col = mix(col, C.white, still ? 0.35 : 0.85);
+                }
+            }
+            px[i] = col;
+        }
+        // Two waves running out from the tagline.
+        if (pWave > 0) {
+            const len = Math.round(pWave * 14);
+            const y0 = tg.y + Math.floor(tg.h / 2);
+            for (let k = 0; k < len; k++) {
+                const colour = mix(C.waveNear, C.waveFar, k / 14);
+                for (const side of [-1, 1]) {
+                    const x = side < 0 ? tg.x - 5 - k : tg.x + tg.w + 4 + k;
+                    p.set(x, y0 + Math.round(Math.sin(x * 0.75 - t * 3) * 1.1), colour);
+                }
+            }
+        }
+        for (let i = 0; i < px.length; i++) {
+            if (!px[i])
+                continue;
+            if (hit > 0)
+                px[i] = mix(px[i], C.white, hit * 0.95);
+            if (gone > 0 && !still) {
+                // As the planets form, the logo dissolves into sparks, from the top down.
+                const y = Math.floor(i / w);
+                const r = hash(i % w, y, 41) * 0.75 + (y / p.h) * 0.25;
+                if (r < gone * 1.1 - 0.08)
+                    px[i] = 0;
+                else if (r < gone * 1.1)
+                    px[i] = C.spark;
+            }
+        }
+        let ox = 0, oy = 0;
+        for (const [at, amp] of [[s0, 3], [c.bang, 4]]) {
+            if (still || t < at || t >= at + 0.4)
+                continue;
+            const k = 1 - (t - at) / 0.4;
+            const n = Math.floor(t * 30);
+            ox = Math.round((hash(n, 1, 5) - 0.5) * amp * k);
+            oy = Math.round((hash(n, 2, 5) - 0.5) * amp * 0.7 * k);
+        }
+        // The music breathes in before the bang: the logo settles back a little.
+        const settle = 1 - 0.3 * SE.introFade(t, c.bang - 0.55, c.bang + 0.15, 0.3);
+        // Reduced: a calm fade over the swell, so it is all there on the hit.
+        f.ctx.globalAlpha = (still ? Math.min(SE.introSpan(t, s0 - SWELL, s0), 1 - SE.introSpan(t, c.planets - 1.2, c.planets)) : 1) * settle;
+        const glow = Math.max(light, hit);
+        const colour = hit > light ? `rgba(200, 245, 255, ${(0.8 * hit).toFixed(3)})` : `rgba(255, 214, 150, ${(0.25 + 0.6 * light).toFixed(3)})`;
+        blit(f, p, buf, logoFit(f, art), slam * 0.25, ox, oy, glow > 0.05 ? colour : 'rgba(79, 214, 224, 0.3)', 10 + 34 * glow);
+    }
+    function ringAt(art, a) {
+        const ex = Math.cos(a) * RING_X;
+        const ey = Math.sin(a) * RING_Y;
+        return [
+            Math.round(art.cx + ex * Math.cos(RING_TILT) - ey * Math.sin(RING_TILT)),
+            Math.round(art.cy + ex * Math.sin(RING_TILT) + ey * Math.cos(RING_TILT)),
+        ];
+    }
+    /** The near half of the orbit ring (over the planet) or the far half (only beside it, dimmer toward the back). */
+    function paintRing(p, art, front) {
+        const steps = 360;
+        for (let k = 0; k < steps; k++) {
+            const a = (k / steps) * Math.PI * 2;
+            if (Math.sin(a) > 0 !== front)
+                continue;
+            const [x, y] = ringAt(art, a);
+            if (front) {
+                p.set(x, y, C.ringFront);
+                continue;
+            }
+            if ((x - art.cx) ** 2 + (y - art.cy) ** 2 < R * R)
+                continue;
+            p.set(x, y, mix(C.ringBack, C.badgeFill, 0.5 - 0.5 * Math.abs(Math.cos(a))));
+        }
+    }
+    /** The planet: turning continents, ordered-dither shading, a lit rim of air, its edge lit by the bang behind. */
+    function paintPlanet(p, art, t, light) {
+        const spin = t * 0.22;
+        const lx = -0.52, ly = -0.48, lz = 0.71;
+        for (let y = -R - 1; y <= R + 1; y++) {
+            for (let x = -R - 1; x <= R + 1; x++) {
+                const nx = (x + 0.5) / R;
+                const ny = (y + 0.5) / R;
+                const r2 = nx * nx + ny * ny;
+                const px = art.cx + x, py = art.cy + y;
+                if (r2 > 1) {
+                    // A one-pixel haze of air on the lit side.
+                    if (r2 < (1 + 1.3 / R) ** 2 && nx * lx + ny * ly > 0.25)
+                        p.set(px, py, mix(C.halo, C.rim, light * 0.6));
+                    continue;
+                }
+                const nz = Math.sqrt(1 - r2);
+                const lit = nx * lx + ny * ly + nz * lz;
+                const lat = Math.asin(-ny);
+                const lon = Math.atan2(nx, nz) + spin;
+                const n = Math.sin(lon * 2 + 0.6) * Math.cos(lat * 1.7 - 0.3) + 0.55 * Math.sin(lon * 3.3 - lat * 2.6 + 1.9) + 0.3 * Math.sin(lon * 7.1 + lat * 5.3);
+                const pal = Math.abs(lat) > 1.02 ? C.ice : n > 1.1 ? C.hill : n > 0.1 ? C.land : n > -0.04 ? C.shelf : C.ocean;
+                const level = lit < 0.04 ? 0 : SE.clamp(Math.floor(lit * 2.7 + bayer(px, py) - 0.6) + 1, 1, 3);
+                let col = pal[level];
+                if (lit > 0.985 && pal === C.ocean)
+                    col = C.air;
+                if (r2 > (1 - 1.6 / R) ** 2)
+                    col = mix(col, lit > 0.15 ? C.air : C.rim, lit > 0.15 ? 0.45 : light * 0.9);
+                p.set(px, py, col);
+            }
+        }
+    }
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — intro: the Big Bang and the planets forming
+ * -----------------------------------------------------------------------------
+ * A point of light; at INTRO_CUES.bang the hit: flash, shockwave, a shell of
+ * stars and gas racing outward and cooling from white-hot to teal, blue and
+ * violet, settling into a star field and a nebula. From INTRO_CUES.planets a
+ * sun ignites, a dust disk swirls round it and gathers into glowing clumps
+ * that become planets; one is the player's. The camera closes in so that at
+ * INTRO_CUES.flight it sits at the centre with radius introHandoffRadius().
+ *
+ * Painted in software into a coarse light buffer (ART_SHORT pixels across the
+ * short side), tone-mapped with an ordered dither and scaled up sharp, so
+ * every glow steps in pixel-art bands. A pure function of the clock: all
+ * randomness is drawn once below.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const ART_SHORT = 180;
+    /** Brightness steps per channel: few in the bang, so faint gas dithers visibly; more from the sun on, so slow glows don't crawl. */
+    const LEVELS_BANG = 10;
+    const LEVELS_SUN = 18;
+    const DITHER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((b) => (b + 0.5) / 16);
+    const BANG_COUNT = 1500;
+    const FAR_COUNT = 420;
+    const DUST_COUNT = 700;
+    /** Side of the precomputed nebula field. */
+    const NEB = 96;
+    /** The disk is seen from a little above: its orbits squash to ellipses this flat. */
+    const TILT = 0.38;
+    /** Orbital speed at unit radius (Kepler: ω ∝ a^-1.5), radians per second. */
+    const KEPLER = 0.02;
+    const SUN_R = 0.03;
+    const HOME = 2;
+    /** The player's planet's place on its orbit at the hand-over: lower right of the sun, as the globe is lit from the upper left. */
+    const HOME_AT_FLIGHT = 1.15;
+    /** Seconds the player's planet takes to cool once gathered: it finishes as the camera brings it close. */
+    const HOME_COOL = 3;
+    const BODIES = [
+        { a: 0.11, r: 0.006, phase: 2.2, color: [0.66, 0.54, 0.46], form: 2.3 },
+        { a: 0.18, r: 0.01, phase: 4.3, color: [0.92, 0.8, 0.55], form: 2.5 },
+        { a: 0.27, r: 0.012, phase: 0, color: [0.3, 0.5, 0.8], form: 2.8 },
+        { a: 0.36, r: 0.008, phase: 3.4, color: [0.82, 0.4, 0.27], form: 2.65 },
+        { a: 0.47, r: 0.026, phase: 2.55, color: [0.86, 0.68, 0.47], form: 2.4, ring: true },
+    ];
+    /** Cooling ramps of the bang, temperature 1 → 0: white-hot, then each family's colour, then pale star light. */
+    const FAMILIES = [[0.3, 0.85, 0.9], [0.35, 0.5, 1], [0.72, 0.48, 1]];
+    const TEMP_STEPS = 32;
+    const COOLING = FAMILIES.map((fam) => {
+        const ramp = [
+            [0, [SE.lerp(fam[0], 1, 0.55), SE.lerp(fam[1], 1, 0.55), SE.lerp(fam[2], 1, 0.55)]],
+            [0.18, fam], [0.38, [0.55, 0.88, 1]], [0.65, [1, 0.93, 0.78]], [1, [1.6, 1.6, 1.6]],
+        ];
+        return Array.from({ length: TEMP_STEPS + 1 }, (_, n) => SE.sampleRamp(ramp, n / TEMP_STEPS));
+    });
+    const DUST_RAMP = [[0.08, [1, 0.62, 0.32]], [0.22, [0.9, 0.74, 0.52]], [0.4, [0.55, 0.62, 0.82]]];
+    /** The disk's colour by radius, 0..DISK_OUT in DISK_STEPS. */
+    const DISK_OUT = 0.6;
+    const DISK_STEPS = 96;
+    const DISK_GRID = 160;
+    const DISK_COLORS = Array.from({ length: DISK_STEPS + 1 }, (_, n) => SE.sampleRamp(DUST_RAMP, (n / DISK_STEPS) * DISK_OUT));
+    /** Molten rock by heat, coolest first: dull crust, red, orange, white-hot. */
+    const LAVA = [[120, 35, 22], [225, 80, 30], [255, 160, 60], [255, 236, 170]];
+    const angleTo = (from, to) => ((((to - from + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
+    const ease = (t) => SE.smoothstep(SE.clamp(t, 0, 1));
+    /** Smoother still: no jolt in acceleration where a camera move starts or stops. */
+    const glide = (t) => { const u = SE.clamp(t, 0, 1); return u * u * u * (u * (u * 6 - 15) + 10); };
+    /** Value noise summed over octaves, n×n, 0..1. */
+    function fbm(rng, n) {
+        const out = new Float32Array(n * n);
+        let amp = 0.5;
+        for (let cells = 4; cells <= 32; cells *= 2, amp /= 2) {
+            const lat = Float32Array.from({ length: (cells + 1) * (cells + 1) }, () => rng.next());
+            for (let y = 0; y < n; y++) {
+                const fy = (y / n) * cells, iy = Math.floor(fy), ty = SE.smoothstep(fy - iy);
+                for (let x = 0; x < n; x++) {
+                    const fx = (x / n) * cells, ix = Math.floor(fx), tx = SE.smoothstep(fx - ix);
+                    const o = iy * (cells + 1) + ix;
+                    out[y * n + x] += amp * SE.lerp(SE.lerp(lat[o], lat[o + 1], tx), SE.lerp(lat[o + cells + 1], lat[o + cells + 2], tx), ty);
+                }
+            }
+        }
+        return out;
+    }
+    function introCosmos(stage) {
+        const rng = new SE.Rng(0x0b16ba46);
+        const gauss = () => (rng.next() + rng.next() + rng.next() - 1.5) / 1.5;
+        // The bang's shell: directions on a sphere seen from outside, most near the rim, the rest filling the ball.
+        const bx = new Float32Array(BANG_COUNT), by = new Float32Array(BANG_COUNT);
+        const bCool = new Float32Array(BANG_COUNT), bLum = new Float32Array(BANG_COUNT), bTw = new Float32Array(BANG_COUNT);
+        const bFam = new Uint8Array(BANG_COUNT);
+        for (let i = 0; i < BANG_COUNT; i++) {
+            const z = rng.range(-1, 1), phi = rng.range(0, Math.PI * 2), rr = Math.sqrt(1 - z * z);
+            const k = rng.chance(0.55) ? rng.range(0.8, 1) : Math.cbrt(rng.next());
+            bx[i] = rr * Math.cos(phi) * k;
+            by[i] = rr * Math.sin(phi) * k;
+            bCool[i] = rng.range(0.6, 1.3);
+            bLum[i] = rng.chance(0.08) ? rng.range(1, 1.8) : rng.range(0.25, 0.8);
+            bTw[i] = rng.range(0, Math.PI * 2);
+            bFam[i] = rng.int(FAMILIES.length);
+        }
+        const far = Array.from({ length: FAR_COUNT }, () => ({ x: rng.next(), y: rng.next(), lum: rng.chance(0.04) ? 1.1 : rng.range(0.12, 0.45), tw: rng.range(0, 6.3), glint: rng.chance(0.04) }));
+        const nebA = fbm(rng, NEB), nebB = fbm(rng, NEB);
+        for (let p = 0; p < NEB * NEB; p++) {
+            nebA[p] = Math.max(0, nebA[p] - 0.44) * 3.2;
+            nebB[p] = Math.max(0, nebB[p] - 0.46) * 3.2;
+        }
+        // The disk: each grain belongs to a body's clump (or none) and orbits until it is pulled in.
+        const dBody = new Int8Array(DUST_COUNT), dR = new Float32Array(DUST_COUNT), dA = new Float32Array(DUST_COUNT);
+        const dSub = new Int8Array(DUST_COUNT), dOx = new Float32Array(DUST_COUNT), dOy = new Float32Array(DUST_COUNT), dLum = new Float32Array(DUST_COUNT);
+        const dCol = [];
+        for (let i = 0; i < DUST_COUNT; i++) {
+            const b = rng.chance(0.25) ? -1 : rng.int(BODIES.length);
+            dBody[i] = b;
+            dR[i] = b < 0 ? rng.range(0.07, 0.56) : Math.max(0.06, BODIES[b].a + gauss() * 0.065);
+            dA[i] = rng.range(0, Math.PI * 2);
+            dSub[i] = rng.chance(0.5) ? 1 : -1;
+            const oa = rng.range(0, Math.PI * 2), od = Math.sqrt(rng.next());
+            dOx[i] = Math.cos(oa) * od;
+            dOy[i] = Math.sin(oa) * od;
+            dLum[i] = rng.range(0.22, 0.6);
+            dCol.push(SE.sampleRamp(DUST_RAMP, dR[i]));
+        }
+        const dW = dR.map((r) => KEPLER * Math.pow(r, -1.5));
+        /** Veins of lava on the player's molten planet, in disc coordinates. */
+        const veins = fbm(rng, 32);
+        // The disk plane on a grid, so a frame costs one sine per sample: radius, the arms' phase, how fast they wind.
+        const dgR = new Float32Array(DISK_GRID * DISK_GRID), dgA = new Float32Array(DISK_GRID * DISK_GRID), dgW = new Float32Array(DISK_GRID * DISK_GRID);
+        for (let gy = 0; gy < DISK_GRID; gy++) {
+            for (let gx = 0; gx < DISK_GRID; gx++) {
+                const dx = ((gx + 0.5) / DISK_GRID * 2 - 1) * DISK_OUT, dy = ((gy + 0.5) / DISK_GRID * 2 - 1) * DISK_OUT;
+                const r = Math.max(0.01, Math.hypot(dx, dy)), g = gy * DISK_GRID + gx;
+                dgR[g] = r;
+                dgA[g] = 2 * Math.atan2(dy, dx) + 7 * Math.log(r);
+                dgW[g] = (2 * KEPLER) / (r * Math.sqrt(r));
+            }
+        }
+        const radial = new Float32Array(DISK_STEPS + 1);
+        const spin = (b) => KEPLER * Math.pow(b.a, -1.5);
+        const angleOf = (b, t) => {
+            const body = BODIES[b];
+            const phase = b === HOME ? HOME_AT_FLIGHT - spin(body) * (SE.INTRO_CUES.flight - SE.INTRO_CUES.planets) : body.phase;
+            return phase + spin(body) * (t - SE.INTRO_CUES.planets);
+        };
+        // The light buffer and its painters, in art pixels.
+        const art = document.createElement('canvas');
+        const actx = art.getContext('2d');
+        if (!actx)
+            throw new Error('SimEarth: 2D context unavailable for the intro cosmos');
+        let img = actx.createImageData(1, 1);
+        let buf = new Float32Array(3);
+        let W = 1, H = 1;
+        const add = (x, y, r, g, b) => {
+            const px = Math.floor(x), py = Math.floor(y);
+            if (px < 0 || py < 0 || px >= W || py >= H)
+                return;
+            const q = (py * W + px) * 3;
+            buf[q] += r;
+            buf[q + 1] += g;
+            buf[q + 2] += b;
+        };
+        const glow = (cx, cy, rad, c, i) => {
+            if (i <= 0.02 || rad < 0.5)
+                return;
+            const x0 = Math.max(0, Math.floor(cx - rad)), x1 = Math.min(W - 1, Math.ceil(cx + rad));
+            const y0 = Math.max(0, Math.floor(cy - rad)), y1 = Math.min(H - 1, Math.ceil(cy + rad));
+            const inv = 1 / (rad * rad);
+            for (let y = y0; y <= y1; y++) {
+                const dy = y + 0.5 - cy;
+                for (let x = x0; x <= x1; x++) {
+                    const dx = x + 0.5 - cx;
+                    let k = 1 - (dx * dx + dy * dy) * inv;
+                    if (k <= 0)
+                        continue;
+                    k *= k * i;
+                    const q = (y * W + x) * 3;
+                    buf[q] += c[0] * k;
+                    buf[q + 1] += c[1] * k;
+                    buf[q + 2] += c[2] * k;
+                }
+            }
+        };
+        const ring = (cx, cy, rad, c, i, tilt = 1) => {
+            if (i <= 0.01 || rad < 1)
+                return;
+            const n = Math.ceil(rad * 7);
+            for (let s = 0; s < n; s++) {
+                const a = (s / n) * Math.PI * 2;
+                const thin = DITHER[s & 15] < i * 1.5 ? 1 : 0.35;
+                add(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad * tilt, c[0] * i * thin, c[1] * i * thin, c[2] * i * thin);
+            }
+        };
+        /** An opaque lit ball: banded light from (lx, ly) in screen space, `heat` glowing molten. */
+        const sphere = (cx, cy, rad, c, lx, ly, heat, banded) => {
+            const ll = Math.hypot(lx, ly, 0.5) || 1;
+            const Lx = lx / ll, Ly = ly / ll, Lz = 0.5 / ll;
+            const r2 = Math.max(rad, 0.6);
+            for (let y = Math.floor(cy - r2); y <= Math.ceil(cy + r2); y++) {
+                if (y < 0 || y >= H)
+                    continue;
+                for (let x = Math.floor(cx - r2); x <= Math.ceil(cx + r2); x++) {
+                    if (x < 0 || x >= W)
+                        continue;
+                    const nx = (x + 0.5 - cx) / r2, ny = (y + 0.5 - cy) / r2, d2 = nx * nx + ny * ny;
+                    if (d2 > 1)
+                        continue;
+                    const nz = Math.sqrt(1 - d2);
+                    const lit = nx * Lx + ny * Ly + nz * Lz + (DITHER[(y & 3) * 4 + (x & 3)] - 0.5) * 0.3;
+                    let k = lit > 0.55 ? 1 : lit > 0.25 ? 0.72 : lit > 0 ? 0.45 : lit > -0.3 ? 0.26 : 0.16;
+                    if (banded)
+                        k *= Math.sin(ny * 9 + nx * 0.6) > 0.2 ? 0.82 : 1;
+                    const hot = heat * (0.55 + 0.45 * nz);
+                    const q = (y * W + x) * 3;
+                    // Opaque, but a little of the glow behind scatters round the night side, so a transit never reads as a black hole.
+                    buf[q] = Math.max(buf[q] * 0.3, c[0] * k * (1 - heat) + hot * 1.1);
+                    buf[q + 1] = Math.max(buf[q + 1] * 0.3, c[1] * k * (1 - heat) + hot * 0.42);
+                    buf[q + 2] = Math.max(buf[q + 2] * 0.3, c[2] * k * (1 - heat) + hot * 0.12);
+                }
+            }
+        };
+        /** Tone-map with a white spill, dither to LEVELS, show. */
+        const present = (flash, levels) => {
+            const d = new Uint32Array(img.data.buffer);
+            const inv = 1.5 / Math.hypot(W, H);
+            const step = 255 / levels;
+            for (let y = 0, p = 0, q = 0; y < H; y++) {
+                const row = (y & 3) * 4, dy = y - H / 2;
+                for (let x = 0; x < W; x++, p += 3, q++) {
+                    // The flash is brightest at the centre, so it fades as light, not as a flat grey; a black point keeps faint light black space.
+                    const fl = flash ? flash * SE.clamp(1.2 - Math.sqrt((x - W / 2) * (x - W / 2) + dy * dy) * inv, 0.1, 1) : 0;
+                    let r = buf[p] + fl - 0.03, g = buf[p + 1] + fl * 0.97 - 0.03, b = buf[p + 2] + fl * 0.9 - 0.03;
+                    const mx = r > g ? (r > b ? r : b) : g > b ? g : b;
+                    if (mx < 0.003) {
+                        d[q] = 0xff000000;
+                        continue;
+                    }
+                    if (mx > 1) {
+                        const s = (mx - 1) * 0.5;
+                        r += s;
+                        g += s;
+                        b += s;
+                    }
+                    const th = DITHER[row + (x & 3)];
+                    const R = Math.min(levels, Math.max(0, Math.floor(r * levels + th))) * step;
+                    const G = Math.min(levels, Math.max(0, Math.floor(g * levels + th))) * step;
+                    const B = Math.min(levels, Math.max(0, Math.floor(b * levels + th))) * step;
+                    // ImageData is RGBA in memory: little-endian ABGR as one word.
+                    d[q] = (0xff000000 | (B << 16) | (G << 8) | R) >>> 0;
+                }
+            }
+            actx.putImageData(img, 0, 0);
+        };
+        // The player's planet, drawn once per frame: the real globe, under molten rock while it is young.
+        const homeCanvas = document.createElement('canvas');
+        const hctx = homeCanvas.getContext('2d', { willReadFrequently: true });
+        if (!hctx)
+            throw new Error('SimEarth: 2D context unavailable for the intro planet');
+        /**
+         * The globe at (cx, cy) radius r (CSS px). With `heat` it is painted in device pixels into homeCanvas, at the
+         * same sub-pixel offset as a direct draw, and lava covers it: the edges and the night side crust over first,
+         * veins glow longest. Once the lava is gone it is drawn straight, so the flight's frame is pixel-identical.
+         */
+        const drawHome = (ctx, cx, cy, r, spinAt, heat, dpr) => {
+            if (r * dpr < 0.5)
+                return;
+            if (heat <= 0) {
+                stage.planet.draw(ctx, cx, cy, r, spinAt);
+                return;
+            }
+            const R = r * dpr, px = cx * dpr, py = cy * dpr, ext = R * 1.09 + 2;
+            const x0 = Math.floor(px - ext), y0 = Math.floor(py - ext), S = Math.ceil(px + ext) - x0;
+            if (homeCanvas.width < S)
+                homeCanvas.width = homeCanvas.height = S;
+            hctx.clearRect(0, 0, S, S);
+            stage.planet.draw(hctx, px - x0, py - y0, R, spinAt);
+            const im = hctx.getImageData(0, 0, S, S), d = im.data;
+            const lx = px - x0, ly = py - y0;
+            for (let y = 0, q = 0; y < S; y++) {
+                for (let x = 0; x < S; x++, q += 4) {
+                    if (d[q + 3] === 0)
+                        continue;
+                    const nx = (x + 0.5 - lx) / R, ny = (y + 0.5 - ly) / R, d2 = nx * nx + ny * ny;
+                    if (d2 >= 1) {
+                        // The air glows with the heat below.
+                        const k = heat * 0.85;
+                        d[q] = SE.lerp(d[q], 255, k);
+                        d[q + 1] = SE.lerp(d[q + 1], 120, k);
+                        d[q + 2] = SE.lerp(d[q + 2], 40, k);
+                        continue;
+                    }
+                    const night = Math.max(0, nx * 0.78 + ny * 0.63);
+                    const v = veins[(((ny * 0.5 + 0.5) * 31) | 0) * 32 + (((nx * 0.5 + 0.5) * 31) | 0)];
+                    const vein = Math.max(0, 1 - Math.abs(v - 0.5) * 9);
+                    const local = heat * 1.3 - 0.12 - 0.35 * d2 - 0.3 * night + vein * 0.45 * heat + (DITHER[(y & 3) * 4 + (x & 3)] - 0.5) * 0.12;
+                    if (local <= 0)
+                        continue;
+                    const lava = LAVA[local > 0.9 ? 3 : local > 0.6 ? 2 : local > 0.3 ? 1 : 0];
+                    const cover = Math.min(1, local * 2.2);
+                    d[q] = SE.lerp(d[q], lava[0], cover);
+                    d[q + 1] = SE.lerp(d[q + 1], lava[1], cover);
+                    d[q + 2] = SE.lerp(d[q + 2], lava[2], cover);
+                }
+            }
+            hctx.putImageData(im, 0, 0);
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(homeCanvas, 0, 0, S, S, x0, y0, S, S);
+            ctx.restore();
+        };
+        return {
+            draw(f) {
+                const c = SE.INTRO_CUES;
+                const t = f.t;
+                // Past the flight cue only the sky stays, fading under the flight's stars.
+                if (t < c.bang - 1 || t >= c.flight + SE.INTRO_HANDOFF_FADE)
+                    return;
+                const { ctx, w, h, still } = f;
+                const dpr = window.devicePixelRatio || 1;
+                const m = Math.min(w, h);
+                const scale = Math.max(1, Math.round((m * dpr) / ART_SHORT));
+                const k = dpr / scale;
+                const nw = Math.ceil(w * k), nh = Math.ceil(h * k);
+                if (nw !== W || nh !== H) {
+                    W = art.width = nw;
+                    H = art.height = nh;
+                    img = actx.createImageData(W, H);
+                    buf = new Float32Array(W * H * 3);
+                }
+                else
+                    buf.fill(0);
+                // The camera: one continuous glide from the whole system to the player's planet, which comes to rest at the
+                // centre with the hand-over radius. The pan leads the zoom a little; both end at rest.
+                const P = c.planets;
+                const move = glide(SE.introSpan(t, P + 1.8, c.flight));
+                const pan = Math.pow(move, 1.3);
+                const zoomE = Math.pow(move, 1.8);
+                const home = BODIES[HOME];
+                const z0 = 0.9;
+                const zEnd = SE.introHandoffRadius(w, h) / (home.r * m);
+                const Z = z0 * Math.exp(zoomE * Math.log(zEnd / z0));
+                // Everything but the target rushes outward as the camera closes in, so the sun leaves the frame.
+                const rush = Z * (1 + 1.6 * zoomE * zoomE);
+                const ha = angleOf(HOME, t);
+                const hwx = Math.cos(ha) * home.a, hwy = Math.sin(ha) * home.a * TILT;
+                const hx = w / 2 + (1 - pan) * hwx * m * Z, hy = h / 2 + (1 - pan) * hwy * m * Z;
+                const toX = (x) => (hx + (x - hwx) * m * rush) * k;
+                const toY = (y) => (hy + (y - hwy) * m * rush) * k;
+                const unit = m * Z * k;
+                // Background parallax: the sky barely moves as the camera closes in.
+                const zs = Math.pow(Z, 0.12);
+                const skyX = W / 2 - pan * hwx * m * k * 0.3, skyY = H / 2 - pan * hwy * m * k * 0.3;
+                // Before the bang: a point of light gathering, motes falling into it.
+                const s = t - c.bang;
+                const shake = still || s < 0 ? 0 : 3 * Math.exp(-s * 7);
+                const ox = W / 2 + Math.round(shake * Math.sin(s * 90)), oy = H / 2 + Math.round(shake * Math.cos(s * 71));
+                const diag = Math.hypot(W, H);
+                if (s < 0) {
+                    const p = SE.introSpan(t, c.bang - 1, c.bang), i = p * p * (1 + 0.12 * Math.sin(t * 37));
+                    glow(ox, oy, 2 + 6 * i, [0.7, 0.85, 1], 0.6 * i);
+                    glow(ox, oy, 8 + 50 * i, [0.45, 0.7, 1], 1.4 * i);
+                    add(ox, oy, 1 + 3 * i, 1 + 3 * i, 1 + 3 * i);
+                    // Long cross spikes, so the point reads past the logo in front of it.
+                    const len = Math.round(3 + 60 * i);
+                    for (let a = 1; a <= len; a++) {
+                        const v = 1.6 * i * (1 - a / (len + 1));
+                        add(ox + a, oy, v, v, v);
+                        add(ox - a, oy, v, v, v);
+                        add(ox, oy + a, v, v, v);
+                        add(ox, oy - a, v, v, v);
+                    }
+                    const q = SE.introSpan(t, c.bang - 0.55, c.bang), mote = 1.6 * q * (1 - q);
+                    if (mote > 0)
+                        for (let n = 0; n < 60; n++) {
+                            const r = diag * 0.3 * (1 - q) * (1 - q) * (0.5 + bLum[n]);
+                            add(ox + bx[n] * r, oy + by[n] * r, mote * 0.7, mote * 0.85, mote);
+                        }
+                }
+                let flash = 0;
+                // Toward the hand-over the sky thins to the flight's sparser stars.
+                const handoff = 1 - SE.introSpan(t, c.flight, c.flight + SE.INTRO_HANDOFF_FADE);
+                const thin = (1 - 0.55 * SE.introSpan(t, c.flight - 1.6, c.flight)) * handoff;
+                if (s >= 0) {
+                    const sp = still ? s * 0.6 : s;
+                    const out = 1 - Math.exp(-sp * 2.2);
+                    const rmax = diag * 0.6 * zs;
+                    // The gas: a fixed nebula blown up from the centre, glowing hot, then cooling to a calm backdrop.
+                    const nebI = (0.35 + 1.4 * Math.exp(-sp * 1.3)) * (still ? 0.8 : 1) * (1 - SE.introSpan(t, c.flight - 4, c.flight - 0.4) * 0.65)
+                        * (1 - SE.introSpan(t, c.flight - 1.6, c.flight - 0.2));
+                    const heat = Math.exp(-sp * 1.1);
+                    const E = diag * 0.62 * zs * (0.08 + 0.92 * out + 0.015 * sp);
+                    if (nebI > 0.01) {
+                        const shell = Math.exp(-sp * 0.5);
+                        const ex = ox + skyX - W / 2, ey = oy + skyY - H / 2;
+                        const tr = 0.15 + 0.3 * heat, tg = 0.55 + 0.4 * heat, tb = 0.62 + 0.38 * heat;
+                        const vr = 0.42 + 0.58 * heat, vg = 0.22 + 0.7 * heat, vb = 0.75 + 0.25 * heat;
+                        // Sampled on 2×2 blocks: the gas is soft, and the dither in present() breaks the blocks up again.
+                        for (let y = 0; y < H; y += 2) {
+                            const dy = (y + 1 - ey) / E;
+                            if (dy <= -1 || dy >= 1)
+                                continue;
+                            for (let x = 0; x < W; x += 2) {
+                                const dx = (x + 1 - ex) / E, rho2 = dx * dx + dy * dy;
+                                if (rho2 >= 1)
+                                    continue;
+                                const sh = Math.max(0, 1 - ((rho2 - 0.67) / 0.3) ** 2);
+                                const mask = (1 - rho2) * SE.lerp(1, sh * sh * 2.2, shell) * nebI;
+                                const fx = (dx * 0.5 + 0.5) * (NEB - 1), fy = (dy * 0.5 + 0.5) * (NEB - 1);
+                                const ix = fx | 0, iy = fy | 0, tx = fx - ix, ty = fy - iy, o = iy * NEB + ix;
+                                const a = SE.lerp(SE.lerp(nebA[o], nebA[o + 1], tx), SE.lerp(nebA[o + NEB], nebA[o + NEB + 1], tx), ty) * mask;
+                                const b = SE.lerp(SE.lerp(nebB[o], nebB[o + 1], tx), SE.lerp(nebB[o + NEB], nebB[o + NEB + 1], tx), ty) * mask;
+                                if (a + b < 0.004)
+                                    continue;
+                                const base = (a + b) * 0.12;
+                                const cr = a * tr + b * vr + base * 0.3, cg = a * tg + b * vg + base * 0.35, cb = a * tb + b * vb + base;
+                                for (let q = (y * W + x) * 3, n = 0; n < 4; n++) {
+                                    const qq = q + ((n & 1) + (n >> 1) * W) * 3;
+                                    if ((n & 1 && x + 1 >= W) || (n >> 1 && y + 1 >= H))
+                                        continue;
+                                    buf[qq] += cr;
+                                    buf[qq + 1] += cg;
+                                    buf[qq + 2] += cb;
+                                }
+                            }
+                        }
+                    }
+                    // The fireball, the shockwaves and the flash.
+                    const fire = Math.exp(-sp * 2.4) * (still ? 1.1 : 3.2);
+                    glow(ox, oy, Math.min(diag * 0.35, 6 + sp * diag * 0.5), [1, 0.95, 0.85], fire);
+                    glow(ox, oy, 3 + sp * 8, [1, 1, 1], fire * 0.8);
+                    if (!still)
+                        flash = 4 * Math.exp(-s * 11);
+                    const wave = still ? 0.5 : 1;
+                    ring(ox, oy, diag * 0.75 * (1 - Math.exp(-sp * 2.8)), [1, 0.96, 0.9], 1.6 * Math.exp(-sp * 1.7) * wave);
+                    ring(ox, oy, diag * 0.6 * (1 - Math.exp(-sp * 1.5)), [0.35, 0.85, 0.9], 0.9 * Math.exp(-sp * 1.3) * wave);
+                    // The shell of stars: racing out with trails while hot, then twinkling where they came to rest.
+                    const vel = rmax * 2.2 * Math.exp(-sp * 2.2);
+                    const reach = rmax * (out + 0.012 * sp);
+                    const bright = 0.4 + 2.4 * Math.exp(-sp * 1.6);
+                    const sx = ox + skyX - W / 2, sy = oy + skyY - H / 2;
+                    for (let i = 0; i < BANG_COUNT; i++) {
+                        const x = sx + bx[i] * reach, y = sy + by[i] * reach;
+                        if (x < -8 || y < -8 || x > W + 8 || y > H + 8)
+                            continue;
+                        const temp = Math.exp(-sp * bCool[i]);
+                        const col = COOLING[bFam[i]][Math.round(temp * TEMP_STEPS)];
+                        const lum = bLum[i] * (bLum[i] > 0.9 ? handoff : thin) * bright * (0.75 + 0.25 * Math.sin(t * (2 + bLum[i] * 3) + bTw[i]));
+                        add(x, y, col[0] * lum, col[1] * lum, col[2] * lum);
+                        const len = still ? 0 : Math.min(6, Math.floor(vel * Math.hypot(bx[i], by[i]) * 0.025));
+                        if (len > 0) {
+                            const d = Math.hypot(bx[i], by[i]) || 1, ux = bx[i] / d, uy = by[i] / d;
+                            for (let n = 1; n <= len; n++) {
+                                const tl = lum * (1 - n / (len + 1)) * 0.7;
+                                add(x - ux * n, y - uy * n, col[0] * tl, col[1] * tl, col[2] * tl);
+                            }
+                        }
+                    }
+                    // The far sky settles in behind.
+                    const farIn = SE.introSpan(t, c.bang + 0.8, c.bang + 3.5);
+                    if (farIn > 0)
+                        for (const st of far) {
+                            const x = skyX + (st.x - 0.5) * W * zs, y = skyY + (st.y - 0.5) * H * zs;
+                            const l = st.lum * thin * farIn * (0.7 + 0.3 * Math.sin(t * 1.7 + st.tw * 3) * Math.sin(t * 0.9 + st.tw));
+                            add(x, y, l * 0.9, l * 0.95, l);
+                            if (st.glint) {
+                                const g = l * 0.45;
+                                add(x + 1, y, g, g, g);
+                                add(x - 1, y, g, g, g);
+                                add(x, y + 1, g, g, g);
+                                add(x, y - 1, g, g, g);
+                            }
+                        }
+                }
+                if (t >= P - 1) {
+                    const after = t - P;
+                    const sxp = toX(0), syp = toY(0), sr = SUN_R * unit;
+                    const sunK = 1 - SE.introSpan(t, c.flight - 1.4, c.flight - 0.3);
+                    // The collapse: a red cloud gathers and shrinks; on the music's loudest hit it ignites.
+                    const gather = SE.introSpan(t, P - 1, P);
+                    const ign = ease(SE.introSpan(t, P - 0.04, P + 0.3));
+                    glow(sxp, syp, sr * (10 - 7 * gather), [1, 0.4, 0.18], 0.55 * gather * gather * (1 - ign));
+                    const burst = after <= 0 ? 0 : still ? Math.sin(Math.PI * SE.introSpan(after, 0, 1.6)) * 0.35 : Math.exp(-after * 2.2);
+                    const settle = ign * (1 + 0.03 * Math.sin(t * 5)) * sunK;
+                    glow(sxp, syp, sr * (3.5 + 3 * ign + 7 * burst), [1, 0.6, 0.25], 0.75 * settle + burst * 1.1);
+                    glow(sxp, syp, sr * (1.5 + 0.5 * ign + burst), [1, 0.85, 0.55], 0.9 * settle + burst * 0.8);
+                    glow(sxp, syp, sr * 1.25, [1, 0.92, 0.75], 5 * settle);
+                    if (!still && burst > 0.02) {
+                        // A lens streak across the frame, as a camera would catch the flare.
+                        const len = Math.round(unit * (0.35 + 0.5 * after)), v0 = burst * 1.4;
+                        for (let a = 1; a <= len; a++) {
+                            const v = v0 * (1 - a / (len + 1)) ** 2;
+                            add(sxp + a, syp, v, v * 0.85, v * 0.6);
+                            add(sxp - a, syp, v, v * 0.85, v * 0.6);
+                            if (a < len / 4) {
+                                add(sxp, syp + a, v * 0.5, v * 0.4, v * 0.3);
+                                add(sxp, syp - a, v * 0.5, v * 0.4, v * 0.3);
+                            }
+                        }
+                    }
+                    const ringR = after > 0 ? after * 0.4 : -1;
+                    if (after > 0)
+                        ring(sxp, syp, ringR * unit, [1, 0.8, 0.45], 0.7 * Math.exp(-after * 1.6) * (still ? 0.4 : 1), TILT);
+                    // The disk as a soft field: spiral arms wound tighter by its own rotation, lit by the ignition's ring as it
+                    // passes, and gaps opening where the planets sweep their orbits clear.
+                    const swirl = ease(SE.introSpan(t, P - 0.8, P + 1.2));
+                    const clump = BODIES.map((b) => ease(SE.introSpan(t, P + 0.6 + b.form * 0.2, P + b.form)));
+                    const diskI = swirl * (1 - 0.8 * ease(SE.introSpan(t, P + 2, P + 3.6))) * (1 - ease(SE.introSpan(t, c.flight - 3.2, c.flight - 1.8)));
+                    if (diskI > 0.01) {
+                        const sc = 1 + 0.9 * (1 - swirl), twist = 1.4 * (1 - swirl);
+                        const ext = DISK_OUT * sc * m * rush * k;
+                        const x0 = Math.max(0, Math.floor(sxp - ext)) & ~1, x1 = Math.min(W - 1, Math.ceil(sxp + ext));
+                        const y0 = Math.max(0, Math.floor(syp - ext * TILT)) & ~1, y1 = Math.min(H - 1, Math.ceil(syp + ext * TILT));
+                        const inv = 1 / (m * rush * k * sc), age = t - P + 3;
+                        // Everything that depends on the radius alone, once per frame: edges, the gaps the planets clear, the ring.
+                        for (let n = 0; n <= DISK_STEPS; n++) {
+                            const r = (n / DISK_STEPS) * DISK_OUT;
+                            let dens = r < 0.035 ? 0 : Math.min(1, (r - 0.035) / 0.05) * (1 - r / DISK_OUT) ** 1.4 * diskI * 0.75;
+                            for (let b = 0; b < BODIES.length; b++) {
+                                const g = (r - BODIES[b].a) / (b === 4 ? 0.04 : 0.022);
+                                dens *= 1 - 0.85 * clump[b] * Math.exp(-g * g);
+                            }
+                            if (ringR > 0) {
+                                const g = (r - ringR) / 0.05;
+                                dens *= 1 + 1.4 * Math.exp(-g * g - after * 1.2);
+                            }
+                            radial[n] = dens;
+                        }
+                        const gs = DISK_GRID / (2 * DISK_OUT), spinA = 2 * twist;
+                        for (let y = y0; y <= y1; y += 2) {
+                            const gy = Math.floor((((y + 1 - syp) * inv) / TILT) * gs + DISK_GRID / 2);
+                            if (gy < 0 || gy >= DISK_GRID)
+                                continue;
+                            for (let x = x0; x <= x1; x += 2) {
+                                const gx = Math.floor((x + 1 - sxp) * inv * gs + DISK_GRID / 2);
+                                if (gx < 0 || gx >= DISK_GRID)
+                                    continue;
+                                const g = gy * DISK_GRID + gx, r = dgR[g];
+                                if (r >= DISK_OUT)
+                                    continue;
+                                const bin = Math.round((r / DISK_OUT) * DISK_STEPS), base = radial[bin];
+                                if (base < 0.004)
+                                    continue;
+                                const dens = base * (0.62 + 0.38 * Math.sin(dgA[g] - dgW[g] * age + spinA));
+                                const col = DISK_COLORS[bin];
+                                const cr = col[0] * dens, cg = col[1] * dens, cb = col[2] * dens;
+                                for (let n = 0, q = (y * W + x) * 3; n < 4; n++) {
+                                    if ((n & 1 && x + 1 >= W) || (n >> 1 && y + 1 >= H))
+                                        continue;
+                                    const qq = q + ((n & 1) + (n >> 1) * W) * 3;
+                                    buf[qq] += cr;
+                                    buf[qq + 1] += cg;
+                                    buf[qq + 2] += cb;
+                                }
+                            }
+                        }
+                    }
+                    // A few grains over it: orbiting, then streaming along their orbit into a clump, warming as they crowd.
+                    const eaten = BODIES.map((b) => 1 - SE.introSpan(t, P + b.form - 0.3, P + b.form + 0.4));
+                    const split = BODIES.map((b, n) => (n === HOME ? 0.45 * (1 - ease(SE.introSpan(t, P + 1.2, P + b.form))) : 0));
+                    const bodyA = BODIES.map((_, n) => angleOf(n, t));
+                    const freeFade = 1 - SE.introSpan(t, c.flight - 3, c.flight - 1.2);
+                    for (let i = 0; i < DUST_COUNT; i++) {
+                        const b = dBody[i];
+                        let r = dR[i] * (1 + 0.9 * (1 - swirl));
+                        let a = dA[i] + dW[i] * (t - P) - 1.4 * (1 - swirl);
+                        let px = 0, py = 0, alpha = swirl * 0.6, warm = 0;
+                        if (b >= 0) {
+                            const da = angleTo(a, bodyA[b] + dSub[i] * split[b]);
+                            const pull = ease(clump[b] * 1.6 - 0.6 * Math.abs(da) / Math.PI);
+                            a += da * pull;
+                            r = SE.lerp(r, BODIES[b].a, pull);
+                            const spread = Math.min(BODIES[b].r * 2.5, 0.025) * pull;
+                            px = dOx[i] * spread;
+                            py = dOy[i] * spread;
+                            alpha *= eaten[b] * (1 - 0.4 * pull);
+                            warm = pull;
+                        }
+                        else
+                            alpha *= freeFade;
+                        if (alpha <= 0.01)
+                            continue;
+                        const l = dLum[i] * alpha, col = dCol[i];
+                        add(toX(Math.cos(a) * r + px), toY(Math.sin(a) * r * TILT + py), SE.lerp(col[0], 1, warm) * l, SE.lerp(col[1], 0.5, warm) * l, SE.lerp(col[2], 0.2, warm) * l);
+                    }
+                    // The bodies: a clump glows orange, a molten ball grows inside it and cools. The player's planet merges
+                    // from two clumps; its ball is the real globe (drawn below), here only its glow and the haze of young air.
+                    for (let n = 0; n < BODIES.length; n++) {
+                        const b = BODIES[n];
+                        const x = toX(Math.cos(bodyA[n]) * b.a), y = toY(Math.sin(bodyA[n]) * b.a * TILT);
+                        const grow = ease(SE.introSpan(t, P + b.form - 0.7, P + b.form + 0.2));
+                        const heat = 1 - ease(SE.introSpan(t, P + b.form, P + b.form + (n === HOME ? HOME_COOL : 1.6)));
+                        const merge = n === HOME ? Math.sin(Math.PI * SE.introSpan(t, P + b.form - 0.5, P + b.form + 0.5)) ** 2 * (still ? 0.25 : 0.7) : 0;
+                        const rad = b.r * unit * grow;
+                        glow(x, y, b.r * unit * (2.5 + 2.5 * clump[n]), [1, 0.5, 0.2], clump[n] * clump[n] * 0.55 * SE.lerp(1, heat, grow) + merge);
+                        if (n === HOME) {
+                            const haze = Math.sin(Math.PI * SE.introSpan(t, P + b.form + 0.4, P + b.form + 3)) * 0.3;
+                            glow(x, y, rad * 1.6, [0.5, 0.7, 1], haze);
+                            continue;
+                        }
+                        if (rad < 1) {
+                            add(x, y, (b.color[0] * (1 - heat) + heat * 1.1) * rad, (b.color[1] * (1 - heat) + heat * 0.42) * rad, b.color[2] * (1 - heat) * rad);
+                            continue;
+                        }
+                        sphere(x, y, rad, b.color, toX(0) - x, toY(0) - y, heat, !!b.ring);
+                        if (b.ring)
+                            for (let s2 = 0; s2 < 64; s2++) {
+                                const ra = (s2 / 64) * Math.PI * 2, rx = Math.cos(ra) * rad * 2, ry = Math.sin(ra) * rad * 0.5;
+                                if (ry < 0 && rx * rx + ry * ry < rad * rad)
+                                    continue;
+                                const v = 0.55 * grow;
+                                add(x + rx, y + ry, 0.8 * v, 0.7 * v, 0.55 * v);
+                            }
+                    }
+                }
+                present(flash, t < P ? LEVELS_BANG : LEVELS_SUN);
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(art, 0, 0, W / k, H / k);
+                // The player's planet: one object from the first molten ball to the hand-over, cooling into the player's world.
+                if (t < c.flight) {
+                    const grow = ease(SE.introSpan(t, P + home.form - 0.7, P + home.form + 0.2));
+                    const heat = 1 - ease(SE.introSpan(t, P + home.form, P + home.form + HOME_COOL));
+                    drawHome(ctx, hx, hy, home.r * m * Z * grow, SE.introSpin(t), heat, dpr);
+                }
+            },
+        };
+    }
+    SE.introCosmos = introCosmos;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — intro: the dive into the player's planet
+ * -----------------------------------------------------------------------------
+ * From INTRO_CUES.flight the camera hurls at the player's planet: it starts at
+ * the centre with radius introHandoffRadius() (where the cosmos left it), draws
+ * back for a beat, then accelerates: stars stretch to streaks, the disc swells
+ * until its pixel terrain overfills the screen, the sky hazes over it and the
+ * camera punches through a deck of pixel clouds into white by
+ * INTRO_CUES.land. There the map takes over beneath the (now see-through)
+ * canvas on the tile in the middle of the disc (introSpin at the land cue),
+ * and through INTRO_REVEAL the descent carries on: the white tears open from
+ * the middle and the last clouds rush outward past the camera while the map
+ * glides in below. Canvas, a pure function of the clock.
+ *
+ * One camera: its altitude above the surface is exp(-zoom) (1 at the
+ * hand-over), the disc's radius r0 / altitude, and a cloud at altitude a sits
+ * at depth altitude - a, so the clouds and the terrain move as one world.
+ * Lengths are in units of `reach` (half the screen diagonal), so every aspect
+ * ratio sees the same dive. The clouds are painted soft into a low-resolution
+ * buffer and then quantized to a few tones with an ordered dither, so however
+ * close a cloud comes, its pixels stay the size of the game's pixels.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const STARS = 280;
+    const CLOUDS = 116;
+    /** Clouds below the camera at the land cue. */
+    const BELOW = 26;
+    const CLOUD_SPRITES = 8;
+    /** Seconds of camera travel each star streak shows. */
+    const SHUTTER = 0.07;
+    /** ln(final disc radius / hand-over radius) of the full dive; `still` dives less deep. */
+    const DIVE = 5.7;
+    const DIVE_STILL = 3.2;
+    /** Seconds in which the descent brakes after the land cue, toward the map's own glide. */
+    const SETTLE = 0.6;
+    /** The fog the camera falls out of at the land cue, as a share of the camera's altitude there. */
+    const FOG_ALT = 0.3;
+    const SKY = 'rgb(126,206,255)';
+    /** Cloud pixel colours from shadow to highlight; sun from the upper left as on the globe. */
+    const CLOUD_TONES = [[150, 172, 202], [194, 210, 228], [230, 239, 248], [255, 255, 255]];
+    /** Grey that quantizes to exactly CLOUD_TONES[2]: the flat white the map fades in under. */
+    const WHITEOUT = 'rgb(159,159,159)';
+    const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((b) => (b + 0.5) / 16);
+    function introFlight(stage) {
+        const rng = new SE.Rng(0x5eed1e55);
+        const stars = Array.from({ length: STARS }, () => ({ a: rng.range(0, Math.PI * 2), d: Math.sqrt(rng.range(0.004, 1)), z: rng.next() }));
+        const sprites = Array.from({ length: CLOUD_SPRITES }, () => cloudSprite(rng));
+        // Lowest first: from the camera the farthest, drawn first.
+        const landAlt = Math.exp(-DIVE);
+        const clouds = Array.from({ length: CLOUDS }, (_, k) => {
+            const high = k < 14;
+            // The last ones lie below the camera at the land cue and rush past while the map glides in, clear of the middle.
+            const below = k >= CLOUDS - BELOW;
+            return {
+                alt: below ? landAlt * rng.range(0.45, 0.92) : high ? rng.range(0.016, 0.03) : Math.exp(rng.range(Math.log(0.0045), Math.log(0.022))),
+                ang: rng.range(0, Math.PI * 2),
+                off: below ? rng.range(0.12, 0.7) : high ? rng.range(0.25, 1.4) : Math.pow(rng.next(), 0.8) * 1.3,
+                size: high ? rng.range(0.25, 0.5) : below ? rng.range(0.3, 0.6) : rng.range(0.4, 0.95),
+                sprite: rng.pick(sprites),
+            };
+        }).sort((p, q) => p.alt - q.alt);
+        const fog = fogSprite(rng);
+        const buf = SE.make('canvas');
+        const bctx = buf.getContext('2d', { willReadFrequently: true });
+        return {
+            draw(f) {
+                const c = SE.INTRO_CUES;
+                if (f.t < c.flight)
+                    return;
+                const { ctx, w, h, t, still } = f;
+                const reach = Math.hypot(w, h) / 2;
+                const px = Math.max(3, Math.round(Math.min(w, h) / 135));
+                const landSpeed = (DIVE * 1.3) / (c.land - c.flight - 0.45);
+                const zoom = (at) => {
+                    const since = at - c.land;
+                    if (still)
+                        return DIVE_STILL * SE.smoothstep(SE.introSpan(at, c.flight, c.land)) + 0.35 * SE.smoothstep(SE.introSpan(since, 0, SE.INTRO_REVEAL));
+                    // After the land cue the descent keeps its speed and brakes smoothly, as the map's glide does.
+                    if (since > 0)
+                        return DIVE + landSpeed * SETTLE * (1 - Math.exp(-since / SETTLE));
+                    return DIVE * Math.pow(SE.introSpan(at, c.flight + 0.45, c.land), 1.3) - 0.12 * Math.sin(Math.PI * SE.introSpan(at, c.flight, c.flight + 0.6)) ** 2;
+                };
+                const after = t - c.land;
+                const landed = after >= 0;
+                const alt = Math.exp(-zoom(t));
+                const r = SE.introHandoffRadius(w, h) / alt;
+                ctx.imageSmoothingEnabled = false;
+                // Turbulence in the upper air: a few pixels of shake, never in still mode.
+                let cx = w / 2;
+                let cy = h / 2;
+                if (!still) {
+                    const shake = Math.sin(Math.PI * SE.introSpan(t, c.land - 1.5, c.land - 0.3)) * Math.min(w, h) * 0.006;
+                    cx += Math.round(shake * (Math.sin(t * 71) + 0.5 * Math.sin(t * 131)));
+                    cy += Math.round(shake * (Math.sin(t * 83 + 1) + 0.5 * Math.sin(t * 149)));
+                }
+                // Stars: a tunnel the camera flies down, streaking with its speed; dots in still mode.
+                const starFade = (1 - SE.introSpan(r, reach * 0.6, reach * 1.1)) * SE.introSpan(t, c.flight, c.flight + SE.INTRO_HANDOFF_FADE);
+                if (starFade > 0) {
+                    const travel = (at) => (still ? 0.06 * SE.introSpan(at, c.flight, c.land) : 0.16 * zoom(at));
+                    const now = travel(t);
+                    const before = travel(t - SHUTTER);
+                    const bands = [new Path2D(), new Path2D(), new Path2D()];
+                    for (const star of stars) {
+                        const z = 0.06 + 0.94 * frac(star.z - now);
+                        if (z > 0.85)
+                            continue;
+                        const zt = 0.06 + 0.94 * frac(star.z - before);
+                        const sx = Math.cos(star.a) * star.d * reach * 0.12;
+                        const sy = Math.sin(star.a) * star.d * reach * 0.12;
+                        const path = bands[z < 0.25 ? 2 : z < 0.6 ? 1 : 0];
+                        path.moveTo(cx + sx / z, cy + sy / z);
+                        if (!still && zt > z && zt - z < 0.3)
+                            path.lineTo(cx + sx / zt, cy + sy / zt);
+                        else
+                            path.lineTo(cx + sx / z + 1, cy + sy / z);
+                    }
+                    ctx.lineCap = 'square';
+                    bands.forEach((path, k) => {
+                        // Far stars fade in as they come out of the dark, so none pops up at the vanishing point.
+                        ctx.strokeStyle = `rgba(235,242,255,${starFade * [0.3, 0.6, 0.95][k]})`;
+                        ctx.lineWidth = k === 2 ? 2 : 1;
+                        ctx.stroke(path);
+                    });
+                }
+                // Atmosphere on the limb: three crisp bands, thicker toward the sun.
+                if (r < reach * 1.2) {
+                    const glow = SE.introSpan(t, c.flight, c.flight + 1.2);
+                    ctx.lineWidth = Math.max(1, r * 0.035);
+                    for (let k = 0; k < 3; k++) {
+                        ctx.strokeStyle = `rgba(126,206,255,${glow * [0.42, 0.2, 0.08][k]})`;
+                        ctx.beginPath();
+                        ctx.arc(cx - r * 0.012, cy - r * 0.01, r * (1.035 + k * 0.035), 0, Math.PI * 2);
+                        ctx.stroke();
+                    }
+                }
+                // The planet, turning so that the camera settles on the landing tile.
+                const whiteout = landed
+                    ? 1 - (still ? SE.smoothstep(SE.introSpan(after, 0.2, 1.7)) : SE.introSpan(after, 0.15, 0.45))
+                    : still ? SE.introSpan(t, c.land - 0.9, c.land - 0.05) : SE.introSpan(t, c.land - 0.65, c.land - 0.05);
+                if (!landed && whiteout < 1)
+                    stage.planet.draw(ctx, cx, cy, r, diveSpin(t));
+                // The sky thickens as the camera sinks into the air.
+                ctx.globalAlpha = SE.introSpan(r / reach, 1.05, still ? 1.9 : 6) * 0.45 * (1 - SE.introSpan(after, 0.1, 1.2));
+                ctx.fillStyle = SKY;
+                ctx.fillRect(0, 0, w, h);
+                ctx.globalAlpha = 1;
+                // The cloud deck, soft into the pixel buffer.
+                const bw = Math.ceil(w / px);
+                const bh = Math.ceil(h / px);
+                if (buf.width !== bw || buf.height !== bh) {
+                    buf.width = bw;
+                    buf.height = bh;
+                }
+                bctx.clearRect(0, 0, bw, bh);
+                bctx.imageSmoothingEnabled = true;
+                let painted = false;
+                // The fog the camera falls out of: thinnest in the middle, so the map shows there first.
+                const fogLevel = still ? 0 : landed ? 1 - SE.introSpan(after, 0.9, 1.5) : whiteout;
+                if (fogLevel > 0) {
+                    const size = (2.4 * reach * landAlt * (1 - FOG_ALT)) / (alt - landAlt * FOG_ALT);
+                    bctx.globalAlpha = fogLevel;
+                    bctx.drawImage(fog, (cx - size / 2) / px, (cy - size / 2) / px, size / px, size / px);
+                    painted = true;
+                }
+                // Everything clears well before the overlay goes.
+                const leave = 1 - SE.introSpan(after, still ? 0.6 : 1, still ? 2 : 1.8);
+                for (const cl of clouds) {
+                    let scale;
+                    let alpha;
+                    if (still) {
+                        // No rush: the deck fades in where it is and swells a little.
+                        scale = (0.5 + 0.3 * SE.introSpan(t, c.land - 2.4, c.land) + cl.alt * 6) * Math.exp(Math.max(0, zoom(t) - DIVE_STILL));
+                        alpha = SE.introSpan(t, c.land - 2.4 + cl.alt * 25, c.land - 1 + cl.alt * 25) * leave;
+                    }
+                    else {
+                        const depth = alt - cl.alt;
+                        if (depth <= cl.alt * 0.08)
+                            continue;
+                        scale = cl.alt / depth;
+                        alpha = SE.introSpan(scale, 0.1, 0.3) * (1 - SE.introSpan(scale, 5, 10)) * leave;
+                    }
+                    const dist = cl.off * reach * scale;
+                    // Clouds hug the planet: none outside its disc, none before its own clouds are bigger than them.
+                    alpha *= (1 - SE.introSpan(dist, r * 0.75, r * 0.92)) * SE.introSpan(r, reach * 0.8, reach * (still ? 1.2 : 1.5));
+                    if (alpha <= 0)
+                        continue;
+                    const sw = cl.size * reach * scale;
+                    const sh = (sw * cl.sprite.height) / cl.sprite.width;
+                    const x = cx + Math.cos(cl.ang) * dist - sw / 2;
+                    const y = cy + Math.sin(cl.ang) * dist - sh / 2;
+                    if (x + sw < 0 || x > w || y + sh < 0 || y > h)
+                        continue;
+                    bctx.globalAlpha = alpha;
+                    bctx.drawImage(cl.sprite, x / px, y / px, sw / px, sh / px);
+                    painted = true;
+                }
+                if (whiteout > 0 && !still) {
+                    bctx.globalAlpha = whiteout;
+                    bctx.fillStyle = WHITEOUT;
+                    bctx.fillRect(0, 0, bw, bh);
+                    painted = true;
+                }
+                bctx.globalAlpha = 1;
+                if (painted) {
+                    const img = bctx.getImageData(0, 0, bw, bh);
+                    quantize(img, still ? 1 : SE.introSpan(after, 0, 0.3));
+                    bctx.putImageData(img, 0, 0);
+                    ctx.drawImage(buf, 0, 0, bw * px, bh * px);
+                }
+                // Still mode: a soft fade into and out of the white instead of a dithered dissolve.
+                if (whiteout > 0 && still) {
+                    const [wr, wg, wb] = CLOUD_TONES[2];
+                    ctx.fillStyle = `rgba(${wr},${wg},${wb},${whiteout})`;
+                    ctx.fillRect(0, 0, w, h);
+                }
+            },
+        };
+    }
+    SE.introFlight = introFlight;
+    /**
+     * Soft cloud pixels to crisp ones: shade through an ordered dither to the tones,
+     * coverage dithered too, or kept soft (for `soft` 1) where the clouds part over
+     * the map, which a screen-door pattern would hide.
+     */
+    function quantize(img, soft) {
+        const d = img.data;
+        const w = img.width;
+        for (let p = 0, q = 0; q < d.length; p++, q += 4) {
+            const x = p % w;
+            const y = (p - x) / w;
+            const cover = d[q + 3];
+            const hard = cover > BAYER[(y & 3) * 4 + (x & 3)] * 255 ? 255 : 0;
+            if (cover === 0 || (hard === 0 && soft === 0)) {
+                d[q + 3] = 0;
+                continue;
+            }
+            const b = BAYER[((y + 1) & 3) * 4 + ((x + 2) & 3)];
+            const tone = CLOUD_TONES[SE.clamp(Math.floor((d[q] / 255) * 4 + (b - 0.5) * 0.8), 0, 3)];
+            d[q] = tone[0];
+            d[q + 1] = tone[1];
+            d[q + 2] = tone[2];
+            d[q + 3] = hard + (cover - hard) * soft;
+        }
+    }
+    function frac(v) {
+        return v - Math.floor(v);
+    }
+    /**
+     * introSpin from the flight cue on, but the whole turn to the landing tile is
+     * done in the first half of the dive, while the disc is small: the texture
+     * turns in whole texels, which on the magnified disc would jump. Same speed
+     * at the hand-over, the land cue's spin from mid-dive on.
+     */
+    function diveSpin(t) {
+        const c = SE.INTRO_CUES;
+        const half = (c.land - c.flight) / 2;
+        const u = SE.introSpan(t, c.flight, c.flight + half);
+        const from = SE.introSpin(c.flight);
+        const turn = SE.introSpin(c.land) - from;
+        const a = ((SE.introSpin(c.flight + 1) - from) * half) / turn;
+        // e(0) = 0, e(1) = 1, e'(0) = a, e'(1) = 0: the integral of (1 - u)^2 (a + b u), b chosen to reach 1.
+        const b = 12 - 4 * a;
+        const e = a * u + ((b - 2 * a) / 2) * u ** 2 + ((a - 2 * b) / 3) * u ** 3 + (b / 4) * u ** 4;
+        return from + turn * e;
+    }
+    /** The fog filling the screen at the land cue: soft puffs with a ragged hole in the middle that widens as the camera falls through. */
+    function fogSprite(rng) {
+        const N = 96;
+        const puffs = Array.from({ length: 60 }, () => ({ x: rng.range(0, N), y: rng.range(0, N), r: rng.range(8, 22) }));
+        const density = (x, y) => {
+            let d = 0;
+            for (const p of puffs)
+                d += Math.max(0, 1 - Math.hypot(x - p.x, y - p.y) / p.r) ** 2;
+            return d;
+        };
+        const canvas = SE.make('canvas');
+        canvas.width = canvas.height = N;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(N, N);
+        for (let y = 0; y < N; y++) {
+            for (let x = 0; x < N; x++) {
+                const d = density(x + 0.5, y + 0.5);
+                const lit = density(x + 3.5, y + 3.5) - density(x - 2.5, y - 2.5);
+                const mid = SE.smoothstep(SE.clamp((Math.hypot(x + 0.5 - N / 2, y + 0.5 - N / 2) / (N / 2)) * 1.3, 0, 1));
+                const q = (y * N + x) * 4;
+                img.data[q] = img.data[q + 1] = img.data[q + 2] = SE.clamp(0.66 + lit * 0.35, 0.05, 1) * 255;
+                img.data[q + 3] = SE.smoothstep(SE.clamp((d - 0.15 - 0.75 * (1 - mid)) / 0.35, 0, 1)) * 255;
+            }
+        }
+        ctx.putImageData(img, 0, 0);
+        return canvas;
+    }
+    /** One soft cloud: a few puffs along a band, grey for its shade (lit from the upper left), alpha for its cover. */
+    function cloudSprite(rng) {
+        const W = 64;
+        const H = 36;
+        const puffs = Array.from({ length: rng.int(4) + 4 }, (_, k) => {
+            const x = 11 + (k / 7) * (W - 22) + rng.range(-4, 4);
+            const mid = 1 - Math.abs(x - W / 2) / (W / 2);
+            return { x, y: H / 2 + rng.range(-3, 4) - mid * 3, r: 6 + mid * 8 + rng.range(0, 4) };
+        });
+        const density = (x, y) => {
+            let d = 0;
+            for (const p of puffs)
+                d = Math.max(d, 1 - Math.hypot(x - p.x, (y - p.y) * 1.25) / p.r);
+            return d;
+        };
+        const canvas = SE.make('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(W, H);
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const d = density(x + 0.5, y + 0.5);
+                if (d <= 0)
+                    continue;
+                const lit = density(x + 3.5, y + 3.5) - density(x - 2.5, y - 2.5);
+                const shade = SE.clamp(0.68 + lit * 0.6, 0.05, 1);
+                const q = (y * W + x) * 4;
+                img.data[q] = img.data[q + 1] = img.data[q + 2] = shade * 255;
+                img.data[q + 3] = SE.smoothstep(SE.clamp(d * 3, 0, 1)) * 255;
+            }
+        }
+        ctx.putImageData(img, 0, 0);
+        return canvas;
+    }
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — application wiring
@@ -51553,12 +55258,26 @@ var SE;
     const SPEED_NAMES = ['Pause', 'Sehr langsam', 'Langsam', 'Mittel', 'Schnell'];
     /** Wall-clock milliseconds per simulation tick, index-aligned with SPEED_NAMES. */
     const SPEED_TICK_MS = [0, 2500, 1000, 400, 150];
-    const SPEED_ICONS = ['pause', 'speed-slow', 'speed-slow', 'speed-normal', 'speed-fast'];
+    /** Keyboard shortcut of each tool, index-aligned with TOOL_NAMES (wired in wireKeyboard). */
+    const TOOL_KEYS = ['U', 'V', 'H', 'P', 'L', 'K'];
+    /** The overview-map legend that matches a climate overlay's colours (winds and currents are arrows). */
+    const OVERLAY_LEGEND_MODES = [SE.MapMode.AirTemp, SE.MapMode.Rainfall, null, null, SE.MapMode.OceanTemp, null];
     /** Unsaved play is written to the autosave slot this often while running. */
     const AUTOSAVE_MS = 3 * 60 * 1000;
     const SETTINGS_KEY = 'simearth2.settings';
     /** Minimum gap between flat overview-map redraws. */
     const MAP_RENDER_MS = 250;
+    /** A finger held this long without moving starts the terraforming brush. */
+    const TOUCH_HOLD_MS = 150;
+    /** WASD by KeyboardEvent.code: the direction each key pans the map. */
+    const PAN_KEYS = {
+        KeyW: [0, -1], KeyA: [-1, 0], KeyS: [0, 1], KeyD: [1, 0],
+    };
+    /** Screen pixels per second the held keys pan at full speed, reached over PAN_EASE_MS: a tap nudges, holding sweeps. */
+    const PAN_PX_PER_S = 900;
+    const PAN_EASE_MS = 200;
+    /** A tap with the brush pushes as long as a hold of this many ms. */
+    const TAP_PUSH_MS = 150;
     /** Footprint radius of each disaster, matching EventSystem's brushes. */
     const EVENT_RADIUS = [8, 8, 6, 4, 6, 6, 6, 8];
     /** The ping where the camera lands on a disaster, in the disaster tool's colour. */
@@ -51600,7 +55319,7 @@ var SE;
             /* ---- state ---- */
             this.speed = 3;
             this.lastRunningSpeed = 3;
-            this.settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion() };
+            this.settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
             this.mapShowsInfo = false;
             this.selection = {
                 tool: SE.Tool.Examine, altitudeRaise: true, flora: SE.Flora.LandPlants, clearing: false,
@@ -51616,6 +55335,15 @@ var SE;
             this.pinch = null;
             /** A finger that has touched the map but not yet tapped, stroked or pinched. */
             this.touchPending = null;
+            /** The terraforming brush, and where the pointer holding it is (client pixels). */
+            this.terraform = new SE.TerraformTool();
+            this.strokeAt = null;
+            /** WASD keys held down (KeyboardEvent.code), and how far the pan has eased in, 0..1. */
+            this.panKeys = new Set();
+            this.panEase = 0;
+            this.lastNudge = 0;
+            /** A finished stroke whose settling waits a frame, so releasing the brush never stalls the frame that shows it. */
+            this.settleDue = null;
             /** Progress made since the last save — guards New Planet and Load. */
             this.unsaved = false;
             this.savingNow = false;
@@ -51651,6 +55379,14 @@ var SE;
                 else {
                     this.accumulator = 0;
                 }
+                // A finger held still on the map starts the brush.
+                const held = this.touchPending;
+                if (held && this.selection.tool === SE.Tool.SetAltitude && now - held.t > TOUCH_HOLD_MS) {
+                    this.touchPending = null;
+                    this.beginStroke(held.x, held.y, false);
+                }
+                this.strokeFrame(delta);
+                this.panFrame(delta);
                 this.editView.editRectInto(this.mapView);
                 this.editView.render(this.world);
                 if (now - this.lastSurfCheck > 400) {
@@ -51677,6 +55413,7 @@ var SE;
                     this.lastUi = now;
                     this.updateUi();
                 }
+                this.settle();
                 if (this.speed > 0 && this.unsaved && now - this.lastAutosave > AUTOSAVE_MS && this.world.evo.developed.size > 0) {
                     this.lastAutosave = now;
                     void this.writeSave(SE.AUTOSAVE_KEY, true);
@@ -51688,6 +55425,10 @@ var SE;
             this.loadSettings();
             this.music = new SE.MusicPlayer(this.settings.music, this.settings.musicVolume);
             SE.SFX.volume = () => (this.settings.sound ? this.settings.soundVolume : 0);
+            // Every press anywhere, UI or map: capture phase, so stopPropagation can't swallow it.
+            // Not under the intro: its music has the stage.
+            document.addEventListener('pointerdown', (e) => { if (e.button === 0 && !SE.activeIntro)
+                SE.playClick(); }, { capture: true });
             this.windows = new SE.WindowManager(this.stage);
             this.notifier = new SE.Notifier(SE.el('toasts'), SE.el('milestones'), {
                 reported: (key) => this.world.evo.reported.add(key),
@@ -51742,33 +55483,50 @@ var SE;
             this.editView.reduceEffects = this.settings.reduceEffects;
             this.hazards.onStart = (h) => this.hazardNews.push(h);
             this.wireCanvas(canvas);
-            /* ---- tool dock ---- */
-            const dock = SE.make('aside', 'dock glass');
+            /* ---- tool rail and the active tool's card ---- */
+            const dock = SE.make('aside', 'dock');
             dock.setAttribute('aria-label', 'Werkzeuge');
             this.dock = dock;
-            const tools = SE.make('div', 'dock-tools');
+            const tools = SE.make('div', 'dock-tools glass');
             tools.setAttribute('role', 'toolbar');
             tools.setAttribute('aria-label', 'Werkzeuge');
+            tools.setAttribute('aria-orientation', 'vertical');
             for (let t = 0; t < SE.TOOL_NAMES.length; t++) {
                 const tool = t;
                 const b = SE.button({
-                    label: SE.TOOL_NAMES[t], icon: SE.uiIcon(SE.TOOL_ICONS[t]), cls: 'tool-btn',
-                    title: `${SE.TOOL_NAMES[t]} (Taste ${['U', 'V', 'H', 'P', 'L', 'K'][t]})`,
-                    onClick: () => this.selectTool(tool),
+                    label: SE.TOOL_NAMES[t], icon: SE.uiIcon(SE.TOOL_ICONS[t]), cls: 'tool-btn', showLabel: false,
+                    title: `${SE.TOOL_NAMES[t]} (Taste ${TOOL_KEYS[t]})`,
+                    // The active tool's button opens and closes its card.
+                    onClick: () => {
+                        if (this.selection.tool === tool && !this.settings.dockCollapsed)
+                            this.setDockCollapsed(true);
+                        else
+                            this.selectTool(tool);
+                    },
                 });
+                b.setAttribute('aria-keyshortcuts', TOOL_KEYS[t]);
+                const key = SE.make('span', 'tool-key', TOOL_KEYS[t]);
+                key.setAttribute('aria-hidden', 'true');
+                b.appendChild(key);
                 tools.appendChild(b);
                 this.toolButtons.set(tool, b);
             }
-            const collapse = SE.button({
-                label: 'Werkzeugbereich ein-/ausklappen', icon: SE.uiIcon('chevron-right'), cls: 'icon-btn dock-collapse', showLabel: false,
-                onClick: () => this.setDockCollapsed(!this.settings.dockCollapsed),
-            });
-            tools.appendChild(collapse);
-            const panel = SE.make('div', 'dock-panel');
+            const panel = SE.make('section', 'dock-panel glass');
+            panel.id = 'tool-card';
+            const head = SE.make('div', 'dock-head');
             this.toolTitle = SE.make('h2', 'dock-title');
+            this.toolKey = SE.make('span', 'kbd');
+            this.toolKey.setAttribute('aria-hidden', 'true');
+            const close = SE.button({
+                label: 'Werkzeugkarte schließen', icon: SE.uiIcon('close'), cls: 'icon-btn dock-close', showLabel: false,
+                onClick: () => this.setDockCollapsed(true),
+            });
+            head.append(this.toolTitle, this.toolKey, close);
+            panel.setAttribute('aria-labelledby', 'tool-card-title');
+            this.toolTitle.id = 'tool-card-title';
             this.toolHint = SE.make('p', 'dock-hint');
             this.toolOptions = SE.make('div', 'tool-options');
-            panel.append(this.toolTitle, this.toolHint, this.toolOptions, this.buildLayerBox());
+            panel.append(head, this.toolHint, this.toolOptions);
             dock.append(tools, panel);
             this.stage.appendChild(dock);
             this.setDockCollapsed(this.settings.dockCollapsed);
@@ -51778,53 +55536,137 @@ var SE;
             this.goalAnnounce = SE.make('div', 'sr-only');
             this.goalAnnounce.setAttribute('aria-live', 'polite');
             this.stage.appendChild(this.goalAnnounce);
-            /* ---- zoom controls for the map ---- */
+            /* ---- map controls: layers, overview map, zoom ---- */
             const zoom = SE.make('div', 'map-zoom glass');
-            zoom.append(SE.button({ label: 'Hineinzoomen', icon: SE.uiIcon('zoom-in'), cls: 'icon-btn', showLabel: false, onClick: () => this.zoomMap(1.25) }), SE.button({ label: 'Herauszoomen', icon: SE.uiIcon('zoom-out'), cls: 'icon-btn', showLabel: false, onClick: () => this.zoomMap(0.8) }));
-            this.stage.appendChild(zoom);
+            zoom.setAttribute('role', 'toolbar');
+            zoom.setAttribute('aria-label', 'Karte');
+            zoom.setAttribute('aria-orientation', 'vertical');
+            this.layerBtn = SE.button({
+                label: 'Kartenebenen', icon: SE.uiIcon('layers'), cls: 'icon-btn', showLabel: false, title: 'Kartenebenen und Klima-Überlagerung',
+                onClick: () => this.setLayersOpen(this.layerPop.hidden),
+            });
+            this.layerBtn.setAttribute('aria-expanded', 'false');
+            this.layerBtn.setAttribute('aria-controls', 'layer-pop');
+            this.mapBtn = SE.button({
+                label: 'Übersichtskarte', icon: SE.uiIcon('map'), cls: 'icon-btn', showLabel: false, title: 'Übersichtskarte (M)',
+                onClick: () => this.windows.toggle('map'),
+            });
+            zoom.append(this.layerBtn, this.mapBtn, SE.make('div', 'map-zoom-sep'), SE.button({ label: 'Hineinzoomen', icon: SE.uiIcon('zoom-in'), cls: 'icon-btn', showLabel: false, title: 'Hineinzoomen (+)', onClick: () => this.zoomMap(1.25) }), SE.button({ label: 'Herauszoomen', icon: SE.uiIcon('zoom-out'), cls: 'icon-btn', showLabel: false, title: 'Herauszoomen (−)', onClick: () => this.zoomMap(0.8) }));
+            this.layerPop = this.buildLayerPopover();
+            this.stage.append(this.layerPop, zoom);
+            // A click anywhere else closes the popover, as a menu would.
+            document.addEventListener('pointerdown', (e) => {
+                if (this.layerPop.hidden || !(e.target instanceof Node))
+                    return;
+                if (!this.layerPop.contains(e.target) && !this.layerBtn.contains(e.target))
+                    this.setLayersOpen(false);
+            });
             this.hoverTip = SE.make('div', 'hover-tip');
             this.hoverTip.setAttribute('aria-hidden', 'true');
             this.stage.appendChild(this.hoverTip);
-            this.selectTool(SE.Tool.Examine);
+            this.selectTool(SE.Tool.Examine, false);
         }
-        buildLayerBox() {
-            const box = document.createElement('details');
-            box.className = 'layer-box';
-            // Open where there is room for it; on a phone the dock stays short.
-            box.open = this.stage.clientWidth >= SE.NARROW_PX;
-            const summary = document.createElement('summary');
-            summary.append(SE.img(SE.uiIcon('layers'), 'ico'), SE.make('span', undefined, 'Kartenebenen'));
-            box.appendChild(summary);
-            const layers = SE.make('div', 'chip-grid');
+        /** The map-layers popover beside the map controls: additive layers and one climate overlay. */
+        buildLayerPopover() {
+            const pop = SE.make('section', 'layer-pop glass');
+            pop.id = 'layer-pop';
+            pop.hidden = true;
+            pop.setAttribute('aria-labelledby', 'layer-pop-title');
+            const head = SE.make('div', 'layer-pop-head');
+            const title = SE.make('h2', 'layer-pop-title', 'Kartenebenen');
+            title.id = 'layer-pop-title';
+            head.append(SE.img(SE.uiIcon('layers'), 'ico'), title, SE.button({
+                label: 'Kartenebenen schließen', icon: SE.uiIcon('close'), cls: 'icon-btn layer-pop-close', showLabel: false,
+                onClick: () => this.setLayersOpen(false, true),
+            }));
+            const layers = SE.make('div', 'layer-grid');
+            layers.setAttribute('role', 'group');
+            layers.setAttribute('aria-label', 'Ebenen, beliebig kombinierbar');
             const keys = ['oceans', 'biomes', 'cities', 'life', 'events', 'clouds'];
             SE.DATA_LAYERS.forEach((name, i) => {
                 const key = keys[i];
                 const b = SE.button({
-                    label: name, icon: SE.uiIcon(SE.DATA_LAYER_ICONS[i]), cls: 'chip-btn',
+                    label: name, icon: SE.uiIcon(SE.DATA_LAYER_ICONS[i]), cls: 'layer-tg',
                     onClick: () => { this.editView.layers[key] = !this.editView.layers[key]; this.syncLayerButtons(); this.editView.markDirty(); },
                 });
                 layers.appendChild(b);
                 this.layerButtons.push(b);
             });
-            const overlays = SE.make('div', 'chip-grid');
-            SE.OVERLAY_NAMES.forEach((name, i) => {
-                const ov = i;
-                const b = SE.button({
-                    label: name, icon: SE.uiIcon(SE.OVERLAY_ICONS[i]), cls: 'chip-btn',
-                    onClick: () => { this.editView.overlay = this.editView.overlay === ov ? SE.Overlay.None : ov; this.syncLayerButtons(); this.editView.markDirty(); },
-                });
+            const overlays = SE.make('div', 'overlay-list');
+            overlays.setAttribute('role', 'radiogroup');
+            overlays.setAttribute('aria-labelledby', 'overlay-h');
+            const radio = (ov, name, icon) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'overlay-radio';
+                b.setAttribute('role', 'radio');
+                b.append(SE.make('i', 'overlay-dot'), icon ? SE.img(icon, 'ico') : SE.make('span', 'ico'), SE.make('span', undefined, name));
+                b.addEventListener('click', () => { this.editView.overlay = ov; this.syncLayerButtons(); this.editView.markDirty(); });
                 overlays.appendChild(b);
                 this.overlayButtons.set(ov, b);
+            };
+            radio(SE.Overlay.None, 'Keine', null);
+            SE.OVERLAY_NAMES.forEach((name, i) => radio(i, name, SE.uiIcon(SE.OVERLAY_ICONS[i])));
+            const overlayHead = SE.make('div', 'layer-h', 'Klima-Überlagerung · eine zur Zeit');
+            overlayHead.id = 'overlay-h';
+            this.overlayLegend = SE.make('div', 'map-legend overlay-legend');
+            pop.append(head, layers, overlayHead, overlays, this.overlayLegend);
+            pop.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.setLayersOpen(false, true);
+                }
             });
-            box.append(SE.make('div', 'layer-h', 'Ebenen (beliebig kombinierbar)'), layers, SE.make('div', 'layer-h', 'Klima-Überlagerung (eine)'), overlays);
-            return box;
+            return pop;
+        }
+        setLayersOpen(open, refocus = false) {
+            this.layerPop.hidden = !open;
+            SE.setPressed(this.layerBtn, open);
+            this.layerBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open)
+                this.syncLayerButtons();
+            if (refocus)
+                this.layerBtn.focus();
         }
         syncLayerButtons() {
             const keys = ['oceans', 'biomes', 'cities', 'life', 'events', 'clouds'];
             this.layerButtons.forEach((b, i) => SE.setPressed(b, this.editView.layers[keys[i]]));
-            for (const [ov, b] of this.overlayButtons)
-                SE.setPressed(b, this.editView.overlay === ov);
+            for (const [ov, b] of this.overlayButtons) {
+                const on = this.editView.overlay === ov;
+                b.classList.toggle('on', on);
+                b.setAttribute('aria-checked', on ? 'true' : 'false');
+                b.tabIndex = on ? 0 : -1;
+            }
+            // The layers button glows while the map shows a climate overlay.
+            this.layerBtn.classList.toggle('lit', this.editView.overlay !== SE.Overlay.None);
+            this.renderOverlayLegend();
         }
+        /** The colour scale of the active climate overlay, under its radio list. */
+        renderOverlayLegend() {
+            const host = this.overlayLegend;
+            const ov = this.editView.overlay;
+            const mode = ov === SE.Overlay.None ? null : OVERLAY_LEGEND_MODES[ov];
+            host.hidden = ov === SE.Overlay.None;
+            if (mode !== null) {
+                SE.renderMapLegend(host, this.world, mode, false);
+                return;
+            }
+            host.innerHTML = '';
+            if (ov === SE.Overlay.Magma) {
+                const box = SE.make('div', 'legend-strip');
+                const bar = SE.make('div', 'legend-strip-bar');
+                bar.style.background = `linear-gradient(90deg, ${SE.MAGMA_RAMP.map(([v, c]) => `${SE.rgbCss(c)} ${v * 100}%`).join(', ')})`;
+                const marks = SE.make('div', 'legend-strip-labels');
+                marks.append(SE.make('span', undefined, 'wenig Magma'), SE.make('span', undefined, 'viel'));
+                box.append(bar, marks);
+                host.appendChild(box);
+            }
+            else if (ov !== SE.Overlay.None) {
+                host.appendChild(SE.make('p', 'overlay-note', 'Pfeile zeigen die Richtung.'));
+            }
+        }
+        /** Closes or reopens the active tool's card; the rail stays. */
         setDockCollapsed(on) {
             this.settings.dockCollapsed = on;
             this.dock.classList.toggle('collapsed', on);
@@ -51845,6 +55687,7 @@ var SE;
                         // about to do with the tool is cancelled, and nothing is charged.
                         this.touchPending = null;
                         this.painting = false;
+                        this.endStroke();
                         const [a, b] = Array.from(this.touches.values());
                         this.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, px: this.editView.tilePx };
                         this.panState = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, sx: this.editView.scrollX, sy: this.editView.scrollY, id: -1 };
@@ -51857,7 +55700,7 @@ var SE;
                     }
                     // One finger: wait to see whether this is a tap, a stroke or the
                     // start of a pinch before the tool does anything.
-                    this.touchPending = { id: e.pointerId, x: e.clientX, y: e.clientY };
+                    this.touchPending = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
                     return;
                 }
                 // Only the primary button uses the tool. Middle and right drag the
@@ -51871,12 +55714,18 @@ var SE;
                     canvas.classList.add('panning');
                     return;
                 }
+                if (this.selection.tool === SE.Tool.SetAltitude) {
+                    this.beginStroke(e.clientX, e.clientY, e.shiftKey);
+                    return;
+                }
                 this.painting = true;
                 this.lastPainted = null;
                 this.applyAt(e.clientX, e.clientY);
             });
             canvas.addEventListener('pointermove', (e) => {
                 this.editView.hover = this.editView.tileAt(e.clientX, e.clientY);
+                const box = canvas.getBoundingClientRect();
+                this.terraform.pointer = this.editView.hover ? { x: e.clientX - box.left, y: e.clientY - box.top } : null;
                 this.updateHoverTip(e);
                 if (e.pointerType === 'touch' && this.touches.has(e.pointerId)) {
                     this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -51902,6 +55751,9 @@ var SE;
                             // Dragging with a one-shot tool moves the map, as any map app does.
                             this.panState = { x: pending.x, y: pending.y, sx: this.editView.scrollX, sy: this.editView.scrollY, id: e.pointerId };
                         }
+                        else if (this.selection.tool === SE.Tool.SetAltitude) {
+                            this.beginStroke(pending.x, pending.y, false);
+                        }
                         else {
                             this.painting = true;
                             this.lastPainted = null;
@@ -51914,6 +55766,12 @@ var SE;
                     this.editView.scrollX = this.panState.sx + (this.panState.x - e.clientX) / size;
                     this.editView.scrollY = this.panState.sy + (this.panState.y - e.clientY) / size;
                     this.editView.scrollBy(0, 0);
+                    return;
+                }
+                if (e.pointerType === 'mouse')
+                    this.terraform.invert = e.shiftKey;
+                if (this.strokeAt) {
+                    this.strokeAt = { x: e.clientX, y: e.clientY };
                     return;
                 }
                 if (this.painting && !App.isSingleShot(this.selection.tool))
@@ -51936,6 +55794,7 @@ var SE;
                     this.panState = null;
                 this.painting = false;
                 this.lastPainted = null;
+                this.endStroke();
                 canvas.classList.remove('panning');
                 if (canvas.hasPointerCapture(e.pointerId))
                     canvas.releasePointerCapture(e.pointerId);
@@ -51944,11 +55803,16 @@ var SE;
             canvas.addEventListener('pointercancel', (e) => stop(e, false));
             canvas.addEventListener('pointerleave', () => {
                 this.editView.hover = null;
+                this.terraform.pointer = null;
                 this.hoverTip.classList.remove('show');
             });
             canvas.addEventListener('contextmenu', (e) => e.preventDefault());
             canvas.addEventListener('wheel', (e) => {
                 e.preventDefault();
+                if (e.altKey && this.selection.tool === SE.Tool.SetAltitude) {
+                    this.resizeBrush(e.deltaY < 0 ? 1 : -1);
+                    return;
+                }
                 this.editView.zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
             }, { passive: false });
             canvas.addEventListener('keydown', (e) => {
@@ -51963,7 +55827,8 @@ var SE;
         }
         updateHoverTip(e) {
             const tile = this.editView.hover;
-            if (!tile || e.pointerType !== 'mouse' || this.panState) {
+            // The brush shows stage and height in its own label.
+            if (!tile || e.pointerType !== 'mouse' || this.panState || this.selection.tool === SE.Tool.SetAltitude) {
                 this.hoverTip.classList.remove('show');
                 return;
             }
@@ -52071,7 +55936,7 @@ var SE;
             gloss.body.appendChild(glossBody);
             SE.buildGlossary(glossBody);
             // Examine
-            const exam = this.windows.create({ id: 'examine', title: 'Untersuchen', icon: SE.uiIcon('examine'), x: 100, y: 12, width: 398, height: 540, cls: 'win-examine', docked: true, onShow: () => revealExaminedTile() });
+            const exam = this.windows.create({ id: 'examine', title: 'Untersuchen', icon: SE.uiIcon('examine'), x: 84, y: 12, width: 398, height: 540, cls: 'win-examine', docked: true, onShow: () => revealExaminedTile() });
             const revealExaminedTile = SE.installExamineDock(exam, this.editView, this.canvas, () => this.examineTile);
             const examBody = SE.make('div', 'examine-body');
             exam.body.appendChild(examBody);
@@ -52265,15 +56130,19 @@ var SE;
                 },
                 checked: () => this.windows.isVisible(id),
             });
+            // Three menus with text; speed lives in the status bar, map layers at the map.
             const defs = [
                 {
-                    title: 'Datei', icon: SE.uiIcon('menu-file'),
+                    title: 'Spiel', icon: SE.uiIcon('menu-file'),
                     items: [
                         { label: 'Neuer Planet …', icon: SE.uiIcon('new-planet'), action: () => void this.confirmNewPlanet() },
-                        { label: 'Spielstände …', icon: SE.uiIcon('slot'), hint: 'S', action: () => void this.openSaves() },
+                        { label: 'Spielstände …', icon: SE.uiIcon('slot'), hint: 'O', action: () => void this.openSaves() },
                         { label: 'Schnell speichern', icon: SE.uiIcon('save'), hint: 'Strg+S', action: () => void this.saveTo(this.settings.lastSlot) },
-                        { separator: true, label: '' },
                         { label: 'Schnappschuss der Karte', icon: SE.uiIcon('snapshot'), action: () => this.snapshot() },
+                        { separator: true, label: '' },
+                        { label: 'Zum letzten Ereignis springen', icon: SE.uiIcon('target'), action: () => this.gotoEvent() },
+                        { separator: true, label: '' },
+                        { label: 'Einstellungen …', icon: SE.uiIcon('menu-options'), action: () => void SE.openSettings(this.settingDefs()) },
                     ],
                 },
                 {
@@ -52281,64 +56150,34 @@ var SE;
                     items: [
                         winItem('Evolutionsbaum', 'evolution', 'evolution', 'E'),
                         winItem('Chronik', 'chronicle', 'chronicle', 'C'),
-                        winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'A'),
+                        winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'X'),
                         winItem('Übersichtskarte', 'map', 'map', 'M'),
                         winItem('Gaia', 'gaia', 'gaia'),
                         winItem('Verlauf', 'history', 'history'),
                         winItem('Bericht', 'report', 'report', 'B'),
                         winItem('Glossar', 'glossary', 'glossary'),
                         { separator: true, label: '' },
-                        {
-                            label: 'Werkzeugbereich anzeigen', icon: SE.uiIcon('layers'),
-                            action: () => this.setDockCollapsed(!this.settings.dockCollapsed),
-                            checked: () => !this.settings.dockCollapsed,
-                        },
                         { label: 'Fenster zurücksetzen', icon: SE.uiIcon('zoom-fit'), action: () => this.windows.resetLayout() },
                     ],
                 },
                 {
-                    title: 'Modelle', icon: SE.uiIcon('menu-models'),
+                    title: 'Planet', icon: SE.uiIcon('menu-models'),
                     items: [
-                        modelItem('Geosphäre', 'model-geo'),
-                        modelItem('Atmosphäre', 'model-atmo'),
-                        modelItem('Biosphäre', 'model-bio'),
-                        modelItem('Zivilisation', 'model-civ'),
-                    ],
-                },
-                {
-                    title: 'Diagramme', icon: SE.uiIcon('menu-graphs'),
-                    items: [
+                        modelItem('Modell Geosphäre', 'model-geo'),
+                        modelItem('Modell Atmosphäre', 'model-atmo'),
+                        modelItem('Modell Biosphäre', 'model-bio'),
+                        modelItem('Modell Zivilisation', 'model-civ'),
+                        { separator: true, label: '' },
                         winItem('Luftzusammensetzung', 'graph-air', 'overlay-wind'),
                         winItem('Lebensraumanteile', 'graph-biomes', 'layer-biomes'),
                         winItem('Lebensformen', 'graph-life', 'layer-life'),
                         winItem('Technologie', 'graph-tech', 'layer-cities'),
                     ],
                 },
-                {
-                    title: 'Optionen', icon: SE.uiIcon('menu-options'),
-                    items: [
-                        { label: 'Zum letzten Ereignis springen', icon: SE.uiIcon('target'), action: () => this.gotoEvent() },
-                        {
-                            label: 'Ereignisse auf der Karte zeigen', icon: SE.uiIcon('layer-events'),
-                            action: () => { this.editView.layers.events = !this.editView.layers.events; this.syncLayerButtons(); this.editView.markDirty(); },
-                            checked: () => this.editView.layers.events,
-                        },
-                        { separator: true, label: '' },
-                        ...SE.settingMenuItems(this.settingDefs()),
-                    ],
-                },
-                {
-                    title: 'Tempo', icon: SE.uiIcon('menu-speed'),
-                    items: SPEED_NAMES.map((name, i) => ({
-                        label: name, icon: SE.uiIcon(SPEED_ICONS[i]), hint: i === 0 ? 'Leertaste' : String(i),
-                        action: () => this.setSpeed(i),
-                        checked: () => this.speed === i,
-                    })),
-                },
             ];
             this.menuBar = new SE.MenuBar(SE.el('menubar'), defs);
         }
-        /** The lasting preferences, for the "Optionen" menu and the title's settings dialog. */
+        /** The lasting preferences, for the "Einstellungen" dialog (menu "Spiel" and the title screen). */
         settingDefs() {
             return [
                 {
@@ -52364,6 +56203,17 @@ var SE;
                     toggle: () => { this.settings.reduceEffects = !this.settings.reduceEffects; this.editView.reduceEffects = this.settings.reduceEffects; this.saveSettings(); },
                 },
                 {
+                    kind: 'toggle', label: SE.INTRO_DEV ? 'Studio- und Logo-Intro bei jedem Start zeigen (Dev)' : 'Ganzes Intro beim nächsten „Spiel starten“ zeigen', icon: SE.uiIcon('play'),
+                    on: () => this.fullIntroWanted,
+                    toggle: () => {
+                        if (SE.INTRO_DEV)
+                            this.settings.introDevOff = !this.settings.introDevOff;
+                        else
+                            this.settings.introSeen = !this.settings.introSeen;
+                        this.saveSettings();
+                    },
+                },
+                {
                     kind: 'toggle', group: true, label: 'Meeresrauschen', icon: SE.uiIcon('menu-sound-on'), iconOff: SE.uiIcon('menu-sound'),
                     on: () => this.settings.ambient,
                     toggle: () => { this.settings.ambient = !this.settings.ambient; this.saveSettings(); },
@@ -52385,9 +56235,18 @@ var SE;
         }
         syncWindowButtons() {
             SE.setPressed(this.hud.evoBtn, this.windows.isVisible('evolution'));
+            SE.setPressed(this.mapBtn, this.windows.isVisible('map'));
         }
         /* ======================================================= keyboard === */
         wireKeyboard() {
+            // Shift flips the brush preview at once, not only on the next pointer move.
+            const shift = (e) => { if (e.key === 'Shift')
+                this.terraform.invert = e.type === 'keydown'; };
+            document.addEventListener('keydown', shift);
+            document.addEventListener('keyup', shift);
+            document.addEventListener('keyup', (e) => { this.panKeys.delete(e.code); });
+            // A key released outside the window never sends its keyup.
+            window.addEventListener('blur', () => this.panKeys.clear());
             document.addEventListener('keydown', (e) => {
                 if (SE.Modal.open || e.defaultPrevented || this.title)
                     return;
@@ -52400,8 +56259,19 @@ var SE;
                 const target = e.target instanceof HTMLElement ? e.target : document.body;
                 if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
                     return;
+                // Before the modifier check: on a German keyboard [ and ] need AltGr.
+                if ((e.key === '[' || e.key === ']') && this.selection.tool === SE.Tool.SetAltitude) {
+                    this.resizeBrush(e.key === ']' ? 1 : -1);
+                    return;
+                }
                 if (e.ctrlKey || e.metaKey || e.altKey)
                     return;
+                // WASD by key position, so it is the same block on any layout; works with a tool button focused too.
+                if (PAN_KEYS[e.code]) {
+                    this.panKeys.add(e.code);
+                    e.preventDefault();
+                    return;
+                }
                 // Let buttons and the tree keep their own keys.
                 const inControl = !!target.closest('button, .tree-viewport, [role="menu"], [role="menubar"]');
                 switch (e.key) {
@@ -52409,6 +56279,11 @@ var SE;
                         // An open menu takes the Escape for itself: one key, one thing closed.
                         if (this.menuBar.isOpen) {
                             this.menuBar.closeAll();
+                            e.preventDefault();
+                            return;
+                        }
+                        if (!this.layerPop.hidden) {
+                            this.setLayersOpen(false);
                             e.preventDefault();
                             return;
                         }
@@ -52439,8 +56314,8 @@ var SE;
                     case 'C':
                         this.windows.toggle('chronicle');
                         return;
-                    case 'a':
-                    case 'A':
+                    case 'x':
+                    case 'X':
                         this.windows.toggle('lexicon');
                         return;
                     case 'm':
@@ -52451,8 +56326,8 @@ var SE;
                     case 'B':
                         this.windows.toggle('report');
                         return;
-                    case 's':
-                    case 'S':
+                    case 'o':
+                    case 'O':
                         void this.openSaves();
                         return;
                     case '+':
@@ -52489,15 +56364,20 @@ var SE;
             });
         }
         /* ========================================================== tools === */
-        selectTool(tool) {
+        /** Arm a tool; `reveal` reopens its card when the player closed it. */
+        selectTool(tool, reveal = true) {
+            this.endStroke();
             if (tool !== SE.Tool.Examine)
                 this.windows.hide('examine');
             this.selection.tool = tool;
+            this.editView.decor = tool === SE.Tool.SetAltitude
+                ? (ctx, cam, now) => this.terraform.draw(ctx, cam, this.world, this.terraform.active ? this.terraform.sign : this.brushSign(), now)
+                : null;
             for (const [t, b] of this.toolButtons)
                 SE.setPressed(b, t === tool);
             this.canvas.dataset.tool = String(tool);
             this.buildToolOptions();
-            if (this.settings.dockCollapsed && this.windows.narrow)
+            if (reveal && this.settings.dockCollapsed)
                 this.setDockCollapsed(false);
         }
         /** Cost of one application of the armed tool. */
@@ -52505,7 +56385,7 @@ var SE;
             const s = this.selection;
             switch (s.tool) {
                 case SE.Tool.Examine: return SE.EXAMINE_COST;
-                case SE.Tool.SetAltitude: return SE.ALTITUDE_COST;
+                case SE.Tool.SetAltitude: return 0; // paid by the elevation moved, see strokeFrame
                 case SE.Tool.PlantBiome: return SE.BIOME_COST;
                 case SE.Tool.TriggerEvent: return SE.EVENT_COST;
                 case SE.Tool.PlaceLife:
@@ -52516,7 +56396,7 @@ var SE;
         brushRadius() {
             const s = this.selection;
             switch (s.tool) {
-                case SE.Tool.SetAltitude:
+                case SE.Tool.SetAltitude: return Math.round(this.terraform.radius);
                 case SE.Tool.PlantBiome: return 2;
                 case SE.Tool.TriggerEvent: return SE.HAZARD_RULES[s.event] ? 0 : EVENT_RADIUS[s.event]; // one tile for disasters with a rule (docs/ereignisse-spec.md)
                 case SE.Tool.PlaceLife: return s.lifeMode === 'terraformer' && s.terraformer === SE.Terraformer.VaporGenerator ? 2 : 0;
@@ -52527,33 +56407,45 @@ var SE;
         buildToolOptions() {
             const s = this.selection;
             const host = this.toolOptions;
+            // A pick rebuilds the card; keep keyboard focus inside it.
+            const hadFocus = host.contains(document.activeElement);
             host.innerHTML = '';
             this.toolRevision = this.evolution.revision;
             this.toolTitle.textContent = SE.TOOL_NAMES[s.tool];
+            this.toolKey.textContent = TOOL_KEYS[s.tool];
             this.toolHint.textContent = SE.TOOL_HINTS[s.tool];
+            this.dock.dataset.tool = String(s.tool);
             this.editView.brushRadius = this.brushRadius();
             this.editView.brushColor = s.tool === SE.Tool.TriggerEvent ? 'rgba(255,122,107,0.95)' : 'rgba(246,241,223,0.9)';
             const list = SE.make('div', 'opt-list');
             list.setAttribute('role', 'listbox');
             list.setAttribute('aria-label', SE.TOOL_NAMES[s.tool]);
+            const costTag = (n) => {
+                const cost = SE.make('span', 'opt-cost');
+                cost.append(SE.make('span', undefined, SE.fmt.int(n)), SE.img(SE.resIcon('energy'), 'ico'));
+                return cost;
+            };
+            // Locked choices fold into one row under the tiles; the chosen one gets the details.
+            const locked = [];
+            let picked = null;
+            let longestWord = 0;
             const option = (o) => {
+                if (o.locked) {
+                    locked.push(o);
+                    return;
+                }
+                if (o.active)
+                    picked = o;
+                longestWord = Math.max(longestWord, ...o.label.split(/[\s-]/).map((w) => w.length));
                 const b = document.createElement('button');
                 b.type = 'button';
-                b.className = `opt${o.active ? ' on' : ''}${o.locked ? ' locked' : ''}`;
+                b.className = `opt-tile${o.active ? ' on' : ''}`;
                 b.setAttribute('role', 'option');
                 b.setAttribute('aria-selected', o.active ? 'true' : 'false');
-                const text = SE.make('span', 'opt-text');
-                text.append(SE.make('span', 'opt-label', o.label));
-                if (o.sub || o.locked)
-                    text.append(SE.make('span', 'opt-sub', o.locked ?? o.sub ?? ''));
-                b.append(SE.img(o.icon, 'opt-icon'), text);
-                if (o.cost !== undefined && o.cost > 0) {
-                    const cost = SE.make('span', 'opt-cost');
-                    cost.append(SE.make('span', undefined, SE.fmt.int(o.cost)), SE.img(SE.resIcon('energy'), 'ico'));
-                    b.appendChild(cost);
-                }
-                if (o.locked)
-                    b.appendChild(SE.img(SE.uiIcon('lock'), 'ico opt-lock'));
+                b.title = o.sub ? `${o.label} – ${o.sub}` : o.label;
+                b.append(SE.img(o.icon, 'opt-icon'), SE.make('span', 'opt-label', o.label));
+                if (o.cost !== undefined && o.cost > 0)
+                    b.appendChild(costTag(o.cost));
                 b.addEventListener('click', () => { o.onPick(); this.buildToolOptions(); });
                 list.appendChild(b);
             };
@@ -52571,8 +56463,8 @@ var SE;
             };
             switch (s.tool) {
                 case SE.Tool.SetAltitude:
-                    option({ label: 'Anheben', icon: SE.uiIcon('tool-altitude'), cost: SE.ALTITUDE_COST, active: s.altitudeRaise, sub: 'Land wächst, Küsten verschieben sich', onPick: () => { s.altitudeRaise = true; } });
-                    option({ label: 'Absenken', icon: SE.uiIcon('chevron-down'), cost: SE.ALTITUDE_COST, active: !s.altitudeRaise, sub: 'Täler und neue Buchten', onPick: () => { s.altitudeRaise = false; } });
+                    option({ label: 'Anheben', icon: SE.uiIcon('tool-altitude'), active: s.altitudeRaise, sub: 'Land steigt aus dem Meer, hohe Gipfel tragen Schnee', onPick: () => { s.altitudeRaise = true; } });
+                    option({ label: 'Absenken', icon: SE.uiIcon('chevron-down'), active: !s.altitudeRaise, sub: 'Täler und Buchten, tief unten quillt Grundwasser', onPick: () => { s.altitudeRaise = false; } });
                     break;
                 case SE.Tool.PlantBiome: {
                     const selected = SE.nodeForFlora(s.flora);
@@ -52641,8 +56533,35 @@ var SE;
                     host.appendChild(SE.make('p', 'opt-note', cost));
                 }
             }
+            // Words like "Informationszeitalter" don't fit three tiles a row in the pixel font.
+            list.classList.toggle('opt-list-wide', longestWord >= 17);
             if (list.childElementCount > 0)
                 host.appendChild(list);
+            if (locked.length > 0) {
+                const first = locked[0];
+                const more = SE.button({
+                    label: `+${locked.length} noch nicht entwickelt`, icon: SE.uiIcon('lock'), cls: 'opt-more',
+                    title: `Im Evolutionsbaum: ${locked.map((o) => o.label).join(', ')}`,
+                    onClick: () => first.onPick(),
+                });
+                more.appendChild(SE.make('span', 'opt-more-go', 'Baum ›'));
+                host.appendChild(more);
+            }
+            const chosen = picked;
+            if (chosen && (chosen.sub || chosen.cost)) {
+                const detail = SE.make('div', 'opt-detail');
+                detail.appendChild(SE.make('span', 'opt-detail-title', chosen.label));
+                if (chosen.cost)
+                    detail.appendChild(costTag(chosen.cost));
+                if (chosen.sub)
+                    detail.appendChild(SE.make('span', 'opt-sub', chosen.sub));
+                host.appendChild(detail);
+            }
+            if (hadFocus)
+                (host.querySelector('.opt-tile.on') ?? host.querySelector('button'))?.focus();
+            if (s.tool === SE.Tool.SetAltitude) {
+                host.append(this.terraform.strengthControl(), this.terraform.sizeControl(), SE.make('p', 'opt-note', SE.TERRAFORM_NOTE));
+            }
             this.editView.brushRadius = this.brushRadius();
         }
         /** Arm the matching placement tool for a developed tree node. */
@@ -52672,6 +56591,117 @@ var SE;
         }
         static isSingleShot(tool) {
             return tool === SE.Tool.Examine || tool === SE.Tool.PlaceLife || tool === SE.Tool.TriggerEvent;
+        }
+        /* ---- terraforming brush ---- */
+        brushSign() {
+            return this.selection.altitudeRaise !== this.terraform.invert ? 1 : -1;
+        }
+        beginStroke(clientX, clientY, invert) {
+            const tile = this.editView.tileAt(clientX, clientY);
+            if (!tile)
+                return;
+            this.settle(true);
+            this.terraform.invert = invert;
+            this.terraform.begin(this.world, this.brushSign(), tile.x, tile.y);
+            this.strokeAt = { x: clientX, y: clientY };
+            this.editView.holdWorld = true;
+        }
+        /** One frame of a held brush: dab along the pointer's way, pay for the elevation moved, redraw those tiles. */
+        strokeFrame(deltaMs) {
+            const at = this.strokeAt;
+            const tile = at && this.editView.tileAt(at.x, at.y);
+            if (!tile)
+                return;
+            const w = this.world;
+            const t = this.terraform;
+            // The brush slows down to what the energy left can pay, from what the last frame cost per second.
+            const perSecond = t.perSecond * SE.TERRAFORM_COST_PER_UNIT;
+            if (w.omega < 1) {
+                this.notifier.message(`Zu wenig Energie – ${SE.fmt.int(Math.max(1, perSecond))} Ω je Sekunde benötigt, ${SE.fmt.int(w.omega)} Ω vorhanden.`, 'warn');
+                this.endStroke(true);
+                return;
+            }
+            const dt = perSecond > 0 ? Math.min(deltaMs / 1000, w.omega / perSecond) : deltaMs / 1000;
+            const s = t.step(w, tile.x, tile.y, dt);
+            if (s.moved === 0)
+                return;
+            // ponytail: the first dab of a stroke is paid after the fact (no rate known yet), so it can overdraw by one frame; clamped at 0.
+            w.omega = Math.max(0, w.omega - s.moved * SE.TERRAFORM_COST_PER_UNIT);
+            this.editView.markDirtyTiles(s.x0, s.y0, s.x1, s.y1);
+            const now = performance.now();
+            if ((s.emerged > 0 || s.flooded > 0) && now - this.lastNudge > 900) {
+                this.lastNudge = now;
+                if (!this.settings.reduceEffects) {
+                    this.canvas.animate([
+                        { transform: 'translate(0, 0)' }, { transform: 'translate(1px, -2px)' },
+                        { transform: 'translate(-1px, 1px)' }, { transform: 'translate(0, 0)' },
+                    ], { duration: 160 });
+                }
+            }
+        }
+        /** Pointer up: the slow consequences over everything the stroke touched, as after any edit. */
+        endStroke(quiet = false) {
+            const tiles = this.terraform.end();
+            this.strokeAt = null;
+            if (!tiles)
+                return;
+            if (this.terraform.moved === 0) {
+                this.editView.holdWorld = false;
+                if (!quiet)
+                    this.notifier.message(this.terraform.sign > 0 ? 'Hier ist bereits die größte Höhe erreicht.' : 'Hier ist bereits die größte Tiefe erreicht.', 'warn');
+                return;
+            }
+            const w = this.world;
+            const steps = SE.terraformSettleSteps(w, tiles);
+            // What afterEdit does, spread over frames too: the evolution statuses
+            // alone cost a frame, and while the world runs its tick rebuilds them
+            // a few times a second anyway, so only a paused world pays for them here.
+            steps.push(() => { this.civ.sync(w, this.params); w.refreshDerived(); }, () => {
+                this.examinePanel.invalidate();
+                if (this.speed === 0)
+                    this.evolution.refresh(w, this.params, true);
+                this.unsaved = true;
+                this.civNews();
+            });
+            this.settleDue = { world: w, steps, phase: 0 };
+        }
+        /**
+         * Settle a finished stroke one step per frame, so its costs never pile
+         * onto one frame: the frame that shows the release, then the settling,
+         * then re-reading the map's field, then (next render) the full redraw.
+         * `all` does what is left at once, before a new stroke starts.
+         */
+        settle(all = false) {
+            const due = this.settleDue;
+            if (!due)
+                return;
+            const w = this.world;
+            if (due.world === w) {
+                if (due.phase === 0 && !all) {
+                    due.phase = 1;
+                    return;
+                }
+                if (due.phase <= 1) {
+                    // One settle step a frame (terraformSettleSteps: none stalls a frame alone).
+                    while (due.steps.length > 0) {
+                        due.steps.shift()();
+                        if (!all)
+                            return;
+                    }
+                    due.phase = 2;
+                    if (!all)
+                        return;
+                }
+                if (!all)
+                    this.editView.warm(w);
+                this.editView.markDirty();
+            }
+            this.settleDue = null;
+            this.editView.holdWorld = this.terraform.active;
+        }
+        resizeBrush(dir) {
+            this.terraform.resize(dir);
+            this.buildToolOptions();
         }
         /** After any edit: derived state, map, open panels and tree all at once. */
         afterEdit() {
@@ -52705,39 +56735,12 @@ var SE;
                     this.examinePanel.update(w, x, y);
                     this.windows.show('examine');
                     break;
-                case SE.Tool.SetAltitude: {
-                    // Measure first, charge only for a real change: a brush pressed
-                    // against the height limit would otherwise cost energy for nothing.
-                    const sign = s.altitudeRaise ? 1 : -1;
-                    const changes = [];
-                    for (let dy = -2; dy <= 2; dy++) {
-                        const yy = y + dy;
-                        if (yy < 0 || yy >= SE.GRID_H)
-                            continue;
-                        for (let dx = -2; dx <= 2; dx++) {
-                            const j = SE.idx(SE.wrapX(x + dx), yy);
-                            const d = Math.max(Math.abs(dx), Math.abs(dy));
-                            const amount = d === 0 ? 0.14 : d === 1 ? 0.10 : 0.05;
-                            const next = SE.clamp(w.elevation[j] + sign * amount, -1, 1);
-                            if (next !== w.elevation[j])
-                                changes.push([j, next]);
-                        }
-                    }
-                    if (changes.length === 0) {
-                        this.notifier.message(s.altitudeRaise ? 'Hier ist bereits die größte Höhe erreicht.' : 'Hier ist bereits die größte Tiefe erreicht.', 'warn');
-                        return;
-                    }
-                    if (!this.spend(SE.ALTITUDE_COST))
-                        return;
-                    for (const [j, v] of changes)
-                        w.elevation[j] = v;
-                    SE.RiverSystem.rebuild(w);
-                    SE.BiomeSystem.step(w, false);
-                    this.civ.sync(w, this.params);
-                    this.afterEdit();
-                    this.civNews();
+                case SE.Tool.SetAltitude:
+                    // A tap (touch): a short push, as if the brush were held for a moment.
+                    this.beginStroke(clientX, clientY, false);
+                    this.strokeFrame(TAP_PUSH_MS);
+                    this.endStroke();
                     break;
-                }
                 case SE.Tool.PlantBiome:
                     this.plantAt(x, y);
                     break;
@@ -53467,6 +57470,22 @@ var SE;
                 this.discoveries.push(this.fauna.pending.splice(0));
             h.oceanO2.textContent = `${SE.fmt.int(w.oceanO2)} %`;
         }
+        /** Held WASD keys glide the map, at the same screen speed at every zoom; opposite keys cancel out. */
+        panFrame(delta) {
+            let dx = 0;
+            let dy = 0;
+            for (const code of this.panKeys) {
+                dx += PAN_KEYS[code][0];
+                dy += PAN_KEYS[code][1];
+            }
+            if (dx === 0 && dy === 0) {
+                this.panEase = 0;
+                return;
+            }
+            this.panEase = Math.min(1, this.panEase + delta / PAN_EASE_MS);
+            const tiles = (PAN_PX_PER_S * (delta / 1000) * SE.smoothstep(this.panEase)) / (Math.hypot(dx, dy) * this.editView.tilePx);
+            this.editView.scrollBy(dx * tiles, dy * tiles);
+        }
         start() {
             this.lastFrame = performance.now();
             this.lastAutosave = this.lastFrame;
@@ -53507,6 +57526,10 @@ var SE;
                     this.settings.epoch = s.epoch;
                 if (typeof s.reduceEffects === 'boolean')
                     this.settings.reduceEffects = s.reduceEffects;
+                if (typeof s.introSeen === 'boolean')
+                    this.settings.introSeen = s.introSeen;
+                if (typeof s.introDevOff === 'boolean')
+                    this.settings.introDevOff = s.introDevOff;
             }
             catch {
                 // Settings are a convenience; defaults are fine.
@@ -53749,15 +57772,66 @@ var SE;
                 openSaves: () => this.openSaves(),
                 openSettings: () => SE.openSettings(this.settingDefs()),
                 reduceEffects: () => this.settings.reduceEffects,
-                start: () => {
+                start: (fresh) => {
                     this.title = null;
-                    this.music.play('game');
-                    this.setSpeed(running, true);
-                    if (!this.windows.narrow)
-                        this.windows.show('map', false);
-                    this.canvas.focus({ preventScroll: true });
+                    if (fresh) {
+                        this.playIntro(running, this.fullIntroWanted);
+                    }
+                    else {
+                        this.music.play('game');
+                        this.enterGame(running);
+                    }
                 },
             });
+        }
+        /** Whether "Spiel starten" plays the full intro (studio card, logo): in developer mode as switched, else only before the first world. */
+        get fullIntroWanted() {
+            return SE.INTRO_DEV ? !this.settings.introDevOff : !this.settings.introSeen;
+        }
+        enterGame(speed) {
+            this.setSpeed(speed, true);
+            if (!this.windows.narrow)
+                this.windows.show('map', false);
+            this.canvas.focus({ preventScroll: true });
+        }
+        /**
+         * The intro before a new world: `full` with studio card and logo, else from
+         * INTRO_SHORT_FROM. It hands over on the map at the tile it dived into: the
+         * map glides in from INTRO_GLIDE_FROM while the clouds part, and the world
+         * only starts turning once the intro is gone.
+         */
+        playIntro(speed, full) {
+            if (full && !SE.INTRO_DEV) {
+                this.settings.introSeen = true;
+                this.saveSettings();
+            }
+            const from = full ? 0 : SE.INTRO_SHORT_FROM;
+            this.music.play('intro', from);
+            const view = this.editView;
+            const zoom = view.tilePx;
+            new SE.IntroPlayer(document.body, {
+                world: () => this.world,
+                reduceEffects: () => this.settings.reduceEffects,
+                musicTime: () => this.music.time(),
+                land: (x, y, skipped) => {
+                    // Played through, the intro track dies away over the map and the game's music follows on the dot.
+                    if (skipped)
+                        this.music.play('game');
+                    else
+                        this.music.playThen('game', SE.INTRO_MUSIC_END);
+                    if (!skipped)
+                        view.glideZoom(SE.INTRO_GLIDE_FROM);
+                    view.centerOn(x, y);
+                    // A fresh picture at this zoom for the glide to stretch, not the title's stale one.
+                    view.markDirty();
+                },
+                // The first stretch stays put: the map composes its picture while the white still covers it.
+                reveal: (p) => view.glideZoom(SE.lerp(SE.INTRO_GLIDE_FROM, zoom, 1 - Math.pow(1 - SE.introSpan(p, 0.12, 1), 3))),
+                done: () => {
+                    view.glideZoom(zoom);
+                    this.enterGame(speed);
+                },
+            }, from);
         }
         /** Save the whole planet, in the overview map's current mode, as a PNG. */
         snapshot() {

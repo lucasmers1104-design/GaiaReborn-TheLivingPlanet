@@ -112,8 +112,8 @@ Rechts der echte Globus des gewählten Planeten (größer, gröber gepixelt, mit
 Umlaufbahnen, zwei Monde und ein Asteroid. Oben rechts eine Infokarte mit Satellit und der Version aus
 `package.json`, unten Zitat und Leitspruch.
 
-- **Einstellungen:** ein Dialog mit denselben Optionen wie das Menü „Optionen“ (Datumsformat, Pausen,
-  Effekte reduzieren, Klang), definiert an einer Stelle (`SettingDef`, `src/settingsview.ts`).
+- **Einstellungen:** ein Dialog (Datumsformat, Pausen, Effekte reduzieren, Klang), im Spiel unter
+  „Spiel › Einstellungen …“, definiert an einer Stelle (`SettingDef`, `src/settingsview.ts`).
 - **Globus:** eigenes Pixel-Bild (`TitleGlobe`, `src/titledecor.ts`): etwa 144 Bildpunkte breit, ganzzahlig
   vergrößert, Licht von links oben in geditherten Stufen, bläuliche Nachtseite, zwei Pixel Luftsaum und
   eigene Wolken, die etwas schneller ziehen als der Boden.
@@ -138,6 +138,36 @@ Geprüft in headless Chrome:
   Scrollen, Überlappen oder abgeschnittene Beschriftungen. Dazu Fokus-Reihenfolge, sichtbarer Fokus,
   alle Buttons, Pfeile, Regler und Epochen, keine laufende Animation bei reduzierten Effekten (Einstellung
   und Systemeinstellung), Schriften über `file://`, keine Konsolenfehler.
+
+## 4b. Werkzeugleiste, Kartenebenen, Menüs (17. 10. 2026)
+
+Vorher stand oben links alles zugleich offen: Werkzeuge mit Text, lange Optionszeilen samt gesperrter Arten,
+darunter 12 Ebenen-Chips; die Menüleiste zeigte unter 2060 px nur sechs Symbole.
+
+- **Werkzeugleiste:** 64 px, sechs Symbole mit Tastenbuchstaben (U V H P L K).
+- **Werkzeugkarte** daneben: Name, Taste, eine Zeile Hinweis, Reiter (Leben/Städte/Terraformer), Kacheln
+  mit Symbol, Name und Kosten (drei je Reihe, zwei bei sehr langen Wörtern). Gesperrte Einträge stehen
+  gesammelt in einer Zeile „+N noch nicht entwickelt › Baum“; die Beschreibung nur für die gewählte Kachel.
+  Das X oder ein zweiter Klick aufs aktive Werkzeug schließt die Karte, jede Werkzeugwahl öffnet sie wieder.
+- **Kartenebenen:** Knopf unten rechts über Übersichtskarte und Zoom; das Popover hat die 6 Ebenen als
+  Schalter und die Klima-Überlagerung als Einfachauswahl („Keine“ + 6) mit Farbskala. Escape schließt.
+- **Menüs:** „Spiel“ (Datei, Zum letzten Ereignis springen, Einstellungen …), „Fenster“, „Planet“ (Modelle
+  und Diagramme), immer mit Text. Weggefallen sind die Doppelungen: das Menü „Tempo“ (Tempo-Leiste,
+  Leertaste, 1–4), „Ereignisse auf der Karte zeigen“ (Ebene „Ereignisse“) und „Werkzeugbereich anzeigen“
+  (X bzw. Werkzeug anklicken).
+
+## 4c. Terraforming-Pinsel und Höhenrelief (17. 10. 2026)
+
+- **Pinsel** („Höhe ändern“, Taste H): gedrückt halten hebt oder senkt (Umschalt kehrt um), Stärke
+  Sanft/Normal/Stark, Größe per Regler, [ ] oder Alt + Mausrad. Ring und Anzeige nennen die Höhenstufe
+  (Tiefsee … Gipfel, `TERRAFORM_STAGES`) und die Höhe in Metern; veränderte Felder leuchten kurz auf.
+- **Stufen:** gehobenes Land läuft live durch Flachwasser, Sandstrand, Tiefland mit dem Bewuchs der
+  Umgebung, Hügel, Bergland, Fels und Gipfelschnee; Absenken denselben Weg zurück. Wasser erst unter dem
+  Meeresspiegel, von der tiefsten Stelle aus.
+- **Übergänge:** ein frisch gemaltes Stück Karte wechselt nicht schlagartig, sondern löst sich in 220 ms
+  Pixel für Pixel (4 × 4-Raster) ins neue Bild auf (`src/landfade.ts`).
+- **Höhenrelief auf der ganzen Karte:** stärkerer Höhenton und eine Krümmungsschattierung (Kuppen heller,
+  Senken dunkler), auch auf Bäumen und Büschen. Auf natürlichen Planeten bewusst dezent.
 
 ## 5. Neue Dateien
 

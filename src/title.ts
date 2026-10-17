@@ -32,8 +32,8 @@ namespace SE {
     openSettings(): Promise<void>;
     /** "Effekte reduzieren": the globe stands still and nothing twinkles. */
     reduceEffects(): boolean;
-    /** The title is gone: start playing. */
-    start(): void;
+    /** The title is gone: start playing; `fresh` after "Spiel starten", not after loading a save. */
+    start(fresh: boolean): void;
   }
 
   /** Radians the title globe turns per frame drawn. */
@@ -177,7 +177,7 @@ namespace SE {
 
     private begin(): void {
       this.flushReshape();
-      this.close();
+      this.close(true);
     }
 
     private reroll(): void {
@@ -226,7 +226,7 @@ namespace SE {
       document.querySelectorAll<HTMLElement>('#topbar, #desktop').forEach((el) => { el.inert = on; });
     }
 
-    close(): void {
+    close(fresh = false): void {
       if (this.closed) return;
       this.closed = true;
       // A loaded save must not be overwritten by a slider move still pending.
@@ -234,7 +234,7 @@ namespace SE {
       this.setBackgroundInert(false);
       this.root.classList.add('leaving');
       window.setTimeout(() => this.root.remove(), 480);
-      this.hooks.start();
+      this.hooks.start(fresh);
     }
   }
 }

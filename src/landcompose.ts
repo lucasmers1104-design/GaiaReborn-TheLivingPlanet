@@ -236,7 +236,7 @@ namespace SE {
         placed[n++] = p;
       }
       placed.length = n;
-      drawLandObjects(this.placements, this.art, b.px, b.water, this.occupied, b.w, b.h, ox, oy, rise, lifts);
+      drawLandObjects(this.placements, this.art, b.px, b.water, this.occupied, b.w, b.h, ox, oy, rise, lifts, f.shade);
       this.motion = seaColor ? NO_LAND_MOTION : collectLandMotion(b, this.art, this.shores, f.paths.sig, PAD, tx0, ty0, tw, th);
       this.emit(out, margin, tw, th, tx0, ty0, seaColor);
     }

@@ -320,7 +320,7 @@ namespace SE {
       const f = land.field;
       placeLandObjects(f, landArt, tx0 - 1, ty0 - 1, tx0 + LAND_CHUNK, ty0 + LAND_CHUNK, this.placements);
       const list = this.placements.filter((p) => !p.water && !f.paths.near(p.fx + 0.5, p.fy + 0.5, RIVER_CLEARANCE));
-      drawLandObjects(list, landArt, objects, this.water, this.occupied, SIDE, SIDE, tx0 * 16 - 8, ty0 * 16 - 8);
+      drawLandObjects(list, landArt, objects, this.water, this.occupied, SIDE, SIDE, tx0 * 16 - 8, ty0 * 16 - 8, null, null, f.shade);
       for (let b = 0; b < px.length; b++) if (layer[b] !== 0 && objects[b] !== 0) px[b] = landArt.rgba[objects[b]];
     }
   }

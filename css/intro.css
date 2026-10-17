@@ -1,0 +1,45 @@
+/* The intro before the first world (src/intro*.ts): black stage, canvas,
+   a centred layer for the studio card and logo, the skip button. */
+
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+  animation: intro-in 600ms ease both;
+}
+.intro.leaving { animation: intro-out 800ms ease forwards; pointer-events: none; }
+@keyframes intro-in { from { opacity: 0; } }
+@keyframes intro-out { to { opacity: 0; } }
+
+.intro-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.intro-layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  pointer-events: none;
+  font-family: "Pixelify Sans", var(--mono);
+  text-align: center;
+}
+.intro-layer > * { grid-area: 1 / 1; opacity: 0; }
+
+.intro .intro-skip {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  opacity: 0.55;
+  transition: opacity 160ms;
+}
+.intro .intro-skip:hover, .intro .intro-skip:focus-visible { opacity: 1; }
+
+/* Hidden but laid out: TitleGlobe sizes its canvas from this box. */
+.intro-globe-host { position: fixed; left: -400px; top: 0; width: 160px; height: 160px; visibility: hidden; pointer-events: none; }
+
+/* From the land cue the clouds part over the map: see-through, and out of the way of the pointer. */
+.intro.revealing { background: transparent; pointer-events: none; }
+.intro.revealing .intro-skip { visibility: hidden; }

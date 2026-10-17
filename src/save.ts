@@ -265,6 +265,7 @@ namespace SE {
         fauna: ctx.fauna ? ctx.fauna.toJSON() : undefined,
         civ: civToJSON(w),
         coal: coalToJSON(w),
+        terraformed: terraformedToJSON(w),
         paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
       };
     }
@@ -375,6 +376,8 @@ namespace SE {
       // (coalsave.ts). Before the landscapes are derived, which ask whether
       // the clubmosses still count as woody.
       restoreCoal(ctx.world, raw.coal);
+      // Land the brush raised (optional field, terraform.ts): its summits keep their snow.
+      restoreTerraformed(ctx.world, raw.terraformed);
       RiverSystem.rebuild(ctx.world);
       BiomeSystem.step(ctx.world, false);
       ctx.world.refreshDerived();

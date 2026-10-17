@@ -286,6 +286,20 @@ namespace SE {
       this.ctx.putImageData(img, 0, 0);
     }
 
+    /** Paint the last render onto another canvas: the disc centred on (cx, cy) with radius r, pixels kept sharp. */
+    drawTo(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number): void {
+      if (!this.side) return;
+      const size = (2 * r) / (2 * DISC);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(this.canvas, cx - size / 2, cy - size / 2, size, size);
+    }
+
+    /** The tile under the middle of the disc at the current spin: on the equator. */
+    centerTile(): [number, number] {
+      const turn = (this.spin / (Math.PI * 2) + 0.5) * GRID_W;
+      return [((Math.round(turn) % GRID_W) + GRID_W) % GRID_W, GRID_H >> 1];
+    }
+
     /** Terrain colours; rivers mixed into the land beside them, which at this size reads better than bright lines. */
     private paintTexture(world: WorldState): Uint8ClampedArray {
       const tex = new Uint8ClampedArray(TILE_COUNT * 4);

@@ -225,6 +225,13 @@ namespace SE {
      * landscape's Schmitt triggers. Derived, not saved.
      */
     readonly landscapeZone = new Uint16Array(TILE_COUNT).fill(ZONE_NONE);
+    /**
+     * 1 on ground the player's terraforming brush has shaped: its summits
+     * carry snow whatever the climate (SUMMIT_SNOW_ELEVATION), its low coasts
+     * are sand (terraformSand). Natural relief never sets it. Rides the
+     * plates; saved as the optional `terraformed` field.
+     */
+    readonly terraformed = new Uint8Array(TILE_COUNT);
     /** Tick at which succession last advanced; it advances once per tick. */
     successionTick = -1;
     /** Plate shifts so far (bookkeeping): tells caches keyed by tile that the crust moved. */
@@ -405,6 +412,7 @@ namespace SE {
       this.substrate.fill(0);
       this.soil.fill(0);
       this.landscapeZone.fill(ZONE_NONE);
+      this.terraformed.fill(0);
       this.successionTick = -1;
       this.driftShifts = 0;
       this.evo.reset();
@@ -469,6 +477,7 @@ namespace SE {
       this.substrate.set(o.substrate);
       this.soil.set(o.soil);
       this.landscapeZone.set(o.landscapeZone);
+      this.terraformed.set(o.terraformed);
       this.successionTick = o.successionTick;
       this.driftShifts = o.driftShifts;
       this.lifeDensity.set(o.lifeDensity);

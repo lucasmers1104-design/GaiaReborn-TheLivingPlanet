@@ -32,6 +32,10 @@ namespace SE {
    * frames, so a first zoom-out (90+ chunks) never freezes the game.
    */
   const COMPOSE_BUDGET_MS = 60;
+  /** A chunk recomposed this long after a brush last changed tiles near it dissolves into its new picture (landfade.ts). */
+  const FADE_WINDOW_MS = 1500;
+  /** Tiles around the brushed box whose pictures a brush changes: ridge lines and cones (refreshBox) plus SIGNATURE_REACH. */
+  const FADE_REACH = 11;
 
   interface Chunk {
     readonly canvas: HTMLCanvasElement; readonly ctx: CanvasRenderingContext2D; sig: number;
@@ -39,6 +43,8 @@ namespace SE {
     small: HTMLCanvasElement | null; smallT: number; smallSig: number;
     /** What moves on the picture, from the same composition. */
     motion: LandMotion;
+    /** While it dissolves into a new picture after a brush. */
+    fade: LandFade | null;
   }
 
   /** Where the map is looking: tiles at the top left, CSS pixels per tile, device pixel ratio. */
@@ -68,6 +74,11 @@ namespace SE {
     pending = false;
     private deadline = Infinity;
     private flat: HTMLCanvasElement | null = null;
+    /** Tiles the brush changed lately (x may run past the wrap), and when it last did. */
+    private brushBox: [number, number, number, number] | null = null;
+    private brushAt = -Infinity;
+    /** Chunk number → chunk, while it dissolves. */
+    private readonly fading = new Map<number, Chunk>();
 
     get ready(): boolean {
       return this.state === 'ready';
@@ -98,7 +109,7 @@ namespace SE {
 
     /** Read the world into the field when it changed; `oceans` false draws water as flat elevation colours. */
     refresh(world: WorldState, oceans: boolean): void {
-      const key = `${world.seed}|${world.ticks}|${world.revision}|${+oceans}`;
+      const key = PixelTerrain.keyOf(world, oceans);
       if (key === this.fieldKey && world === this.fieldWorld) return;
       this.fieldKey = key;
       this.fieldWorld = world;
@@ -116,6 +127,42 @@ namespace SE {
         }
         this.seaColor = sea;
       }
+    }
+
+    /** The field describes `world` as it is now: drawing will not re-read it. */
+    current(world: WorldState, oceans: boolean): boolean {
+      return world === this.fieldWorld && PixelTerrain.keyOf(world, oceans) === this.fieldKey;
+    }
+
+    private static keyOf(world: WorldState, oceans: boolean): string {
+      return `${world.seed}|${world.ticks}|${world.revision}|${+oceans}`;
+    }
+
+    /**
+     * A brush changed the height of tiles [x0, x1] × [y0, y1]: re-read only
+     * those (TerrainField.refreshBox) and count the field as current, so
+     * ticks during the stroke don't force full re-reads; the edit's
+     * refreshDerived at the stroke's end brings in everything else. True
+     * when that took long (a full read, or the ridges rebuilt).
+     */
+    refreshBox(world: WorldState, oceans: boolean, x0: number, y0: number, x1: number, y1: number): boolean {
+      if (world !== this.fieldWorld || !oceans) {
+        this.fieldKey = '';
+        this.refresh(world, oceans);
+        return true;
+      }
+      const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
+      const now = performance.now();
+      const b = this.brushBox;
+      if (b && now - this.brushAt < FADE_WINDOW_MS) {
+        const s = Math.round((b[0] - x0) / GRID_W) * GRID_W;
+        this.brushBox = [Math.min(b[0], x0 + s), Math.min(b[1], y0), Math.max(b[2], x1 + s), Math.max(b[3], y1)];
+      } else {
+        this.brushBox = [x0, y0, x1, y1];
+      }
+      this.brushAt = now;
+      this.fieldKey = PixelTerrain.keyOf(world, oceans);
+      return slow;
     }
 
     /** Read the world into the field if it describes another planet (the map keeps it current). */
@@ -136,7 +183,7 @@ namespace SE {
         canvas.height = side;
         const ctx = canvas.getContext('2d');
         if (!ctx) return null;
-        c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: NO_LAND_MOTION };
+        c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: NO_LAND_MOTION, fade: null };
         this.chunks.set(n, c);
       }
       const sig = this.field.signature(cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0);
@@ -146,14 +193,73 @@ namespace SE {
           return c.sig === -1 ? null : c;
         }
         if (!this.image) this.image = c.ctx.createImageData(side, side);
-        composer.compose(this.field, cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, MARGIN,
-          new Uint32Array(this.image.data.buffer), this.seaColor);
-        c.ctx.putImageData(this.image, 0, 0);
+        const words = new Uint32Array(this.image.data.buffer);
+        composer.compose(this.field, cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, MARGIN, words, this.seaColor);
+        const now = performance.now();
+        if (c.sig !== -1 && this.brushNear(cx, cy, now)) {
+          c.fade ??= new LandFade(c.ctx.getImageData(0, 0, side, side), side, cx * LAND_CHUNK * 16 - MARGIN, cy * LAND_CHUNK * 16 - MARGIN);
+          c.fade.retarget(words, now);
+          c.fade.step(now);
+          c.ctx.putImageData(c.fade.image, 0, 0);
+          if (!c.fade.settled) this.fading.set(n, c);
+        } else {
+          c.fade = null;
+          this.fading.delete(n);
+          c.ctx.putImageData(this.image, 0, 0);
+        }
         c.motion = composer.motion;
         c.sig = sig;
         this.composed++;
+      } else if (c.fade) {
+        const now = performance.now();
+        if (c.fade.step(now)) {
+          c.ctx.putImageData(c.fade.image, 0, 0);
+          c.smallSig = -1;
+        }
+        if (c.fade.settled) {
+          this.fading.delete(n);
+          if (now - this.brushAt > FADE_WINDOW_MS) c.fade = null;
+        }
       }
       return c;
+    }
+
+    /** Chunk (cx, cy) lies near tiles a brush changed within FADE_WINDOW_MS. */
+    private brushNear(cx: number, cy: number, now: number): boolean {
+      const b = this.brushBox;
+      if (!b || now - this.brushAt > FADE_WINDOW_MS) return false;
+      const y0 = cy * LAND_CHUNK;
+      if (y0 > b[3] + FADE_REACH || y0 + LAND_CHUNK <= b[1] - FADE_REACH) return false;
+      for (let s = -GRID_W; s <= GRID_W; s += GRID_W) {
+        const x0 = cx * LAND_CHUNK + s;
+        if (x0 <= b[2] + FADE_REACH && x0 + LAND_CHUNK > b[0] - FADE_REACH) return true;
+      }
+      return false;
+    }
+
+    /**
+     * Tiles still dissolving into their new picture, x0, y0, x1, y1 (x may run
+     * past the wrap), or null: the map redraws them every frame until done.
+     */
+    fadeBox(): [number, number, number, number] | null {
+      let box: [number, number, number, number] | null = null;
+      for (const [n, c] of this.fading) {
+        const f = c.fade;
+        if (!f || f.settled) { this.fading.delete(n); continue; }
+        const cx = (n % CHUNKS_X) * LAND_CHUNK;
+        const cy = Math.floor(n / CHUNKS_X) * LAND_CHUNK;
+        const tile = (p: number): number => Math.floor((p - MARGIN) / 16);
+        let x0 = cx + tile(f.x0);
+        let x1 = cx + tile(f.x1 - 1);
+        const y0 = Math.max(0, cy + tile(f.y0));
+        const y1 = Math.min(GRID_H - 1, cy + tile(f.y1 - 1));
+        if (!box) { box = [x0, y0, x1, y1]; continue; }
+        const s = Math.round((box[0] - x0) / GRID_W) * GRID_W;
+        x0 += s;
+        x1 += s;
+        box = [Math.min(box[0], x0), Math.min(box[1], y0), Math.max(box[2], x1), Math.max(box[3], y1)];
+      }
+      return box;
     }
 
     /** Surf and river water of chunk (cx, cy) as it is drawn now; null before it was composed. */

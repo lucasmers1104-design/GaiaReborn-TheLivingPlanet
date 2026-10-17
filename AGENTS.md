@@ -2,7 +2,7 @@
 - Genre: nature and evolution sandbox, a modern successor to SimEarth: The Living Planet (Maxis, 1990)
  
 - Stack: TypeScript 5.9 (`strict`, target ES2020), no runtime dependencies, no framework, no bundler; Canvas 2D for the pixel map (landscape: a generated 16×16 pixel-art PNG atlas), hand-written SVG for assets and films; tests with `node:test` on Node 22. Use only APIs of these versions.
-- Target: desktop and mobile browsers. `index.html` must keep running straight from disk over `file://`, with no server. Input: mouse and touch. Only headless Chrome has been verified so far.
+- Target: desktop browsers only. This is not a phone game: no phone layouts, phone screenshots or phone tests (decided by the developer, 2026-10-17). `index.html` must keep running straight from disk over `file://`, with no server. Input: mouse and keyboard. Only headless Chrome has been verified so far.
 
 ## Commands
 - Build: `npm run build` (tsc → `simulation.js`, then `tools/stamp-version.js` writes the `package.json` version into it; `npm version` rebuilds) · `npm run watch` while working (version shows as `dev`)
@@ -20,7 +20,7 @@
 - Earth map: `node tools/earth-map.js [etopo.asc] [--fetch] [--png <file>] [--write]` averages NOAA ETOPO1 onto the grid and regenerates `src/earthmap.ts` (the epoch "Heute").
 - Civilization: `node tools/civ-probe.js [civTicks] [seed …] [--epoch=<id>]` plays a planet to sentience and checks spacing, sites, settlers, peoples, epidemics, conflicts, land share and CO₂ against `docs/zivilisation-spec.md` §6 (standard set: `2500 12345 2024 99` and `2500 12345 --epoch=today`). City art: `node tools/civ-atlas.js [--check] [--sheet [dir]] [--part blocks,cities] [--era <id>] [--write]` builds city blocks, yards, bridges and banners from `tools/civ/`; `--write` (one writer at a time) regenerates `assets/civ/` and `src/civatlas.ts`, which `tests/civart.test.js` checks.
 - Species art: `node tools/species-sheet.js <id> [--file <draft.ts>] [--out <png>]` renders a class's or plant group's icons at map size on real ground colours (headless Chrome, serialized by a lock) and prints every `PROBLEM` the art test would report.
-- Screenshots: `_preview.html` closes the title screen, fast-forwards a planet with a greedy evolution tree and sets `document.title = 'ready'`. Capture it with headless Chrome over the DevTools protocol. Window width is clamped to ≥ 500 px, so phone views (390 × 844) need CDP device emulation. Run browser checks one at a time.
+- Screenshots: `_preview.html` closes the title screen, fast-forwards a planet with a greedy evolution tree and sets `document.title = 'ready'`. Capture it with headless Chrome over the DevTools protocol. Run browser checks one at a time.
 
 ## Layout
 - `src/` holds all TypeScript. Every file is one `namespace SE { … }`. `tsc` concatenates the files into one classic script, `simulation.js`, in the order of `files` in `tsconfig.json`. There are no ES modules: cross-file references go through `SE`, and a file may only use at load time what earlier files define.
