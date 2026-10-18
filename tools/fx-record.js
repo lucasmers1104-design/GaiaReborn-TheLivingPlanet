@@ -25,6 +25,10 @@
  *               layer's time per frame and the frame interval
  *     --whales  no disaster: put great whales (Cetacean stages 4/5/7) on the
  *               open sea around the tile (site 'sea'); use with --speed 0
+ *     --stages  with --whales, the Cetacean stages to put there (default
+ *               4,5,7; 6 for dolphins, which leap only on warm seas)
+ *     --setup   JavaScript run in the page once the view is placed, e.g. to
+ *               put the world into a state; with --count 0 no disaster
  * ========================================================================== */
 'use strict';
 
@@ -51,7 +55,7 @@ function fail(msg) {
 }
 
 function parseArgs(argv) {
-  const a = { kind: 'volcano', x: null, y: null, seed: null, epoch: null, ticks: 1500, zoom: 32, speed: 3, frames: 90, every: 100, w: 640, h: 400, reduce: false, bundle: null, out: null, count: 1, perf: 0, site: 'inland', whales: false };
+  const a = { kind: 'volcano', x: null, y: null, seed: null, epoch: null, ticks: 1500, zoom: 32, speed: 3, frames: 90, every: 100, w: 640, h: 400, reduce: false, bundle: null, out: null, count: 1, perf: 0, site: 'inland', whales: false, stages: [4, 5, 7] };
   for (let k = 0; k < argv.length; k++) {
     const v = argv[k];
     const next = () => argv[++k];
@@ -71,6 +75,8 @@ function parseArgs(argv) {
     else if (v === '--site') { a.site = next(); a.siteGiven = true; }
     else if (v === '--perf') a.perf = Number(next());
     else if (v === '--whales') a.whales = true;
+    else if (v === '--stages') a.stages = next().split(',').map(Number);
+    else if (v === '--setup') a.setup = next();
     else if (v === '--bundle') a.bundle = next();
     else if (v === '--out') a.out = next();
     else fail(`unknown argument ${v}`);
@@ -363,14 +369,18 @@ async function main() {
     const ticks0 = await cdp.eval('SE.app.world.ticks');
     if (a.whales) {
       // Cetaceans on the water within 6 tiles, stages mixed; the herd layer re-selects 300 ms after an edit.
-      await cdp.eval(`(() => { const w = SE.app.world, stages = [4, 5, 7];
+      await cdp.eval(`(() => { const w = SE.app.world, stages = ${JSON.stringify(a.stages)};
         for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
           const y = ${tile[1]} + dy, i = SE.idx(SE.wrapX(${tile[0]} + dx), y);
           if (y < 0 || y >= SE.GRID_H || !w.isWater(i) || dx * dx + dy * dy > 36) continue;
           w.lifeDensity[i * SE.LIFE_COUNT + SE.Life.Cetacean] = 0.6;
-          w.lifeStage[i * SE.LIFE_COUNT + SE.Life.Cetacean] = stages[(dx + 7 * dy + 99) % 3];
+          w.lifeStage[i * SE.LIFE_COUNT + SE.Life.Cetacean] = stages[(dx + 7 * dy + 99) % stages.length];
         }
         w.revision++; SE.app.editView.markDirty(); })()`);
+      await sleep(600);
+    }
+    if (a.setup) {
+      await cdp.eval(a.setup);
       await sleep(600);
     }
     for (let n = 0; n < (a.whales ? 0 : a.count); n++) {

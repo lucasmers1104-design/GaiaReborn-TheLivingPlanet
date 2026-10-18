@@ -2,9 +2,9 @@
  * SimEarth 2.0 — tidal wave and hurricane art
  * -----------------------------------------------------------------------------
  * The hurricane's spiral cloud with its eye (one set per hemisphere), the
- * small forming storm, the tornado, fallen trees and driftwood, and two
- * ground textures: flood water and wet ground. The directed wave crests and
- * the breaking wave live in water-waves.js.
+ * small forming storm, the tornado, fallen trees and driftwood, and the
+ * ground textures: flood water by depth, its muddy backwash and wet ground.
+ * The breaking wave lives in water-waves.js.
  * Light from the upper left. The spiral is a height field of cloud — arms on
  * a logarithmic spiral round a dense core — lit by its slope, so its bands
  * get a light edge on their upper-left flank and the eyewall's far side
@@ -247,16 +247,27 @@ function tornado(f) {
 /* ---------------------------------------------------------- textures -- */
 
 /**
- * Shallow flood water: patches of depth, short ripples lit on their crest
+ * Flood water by depth, deep near the coast to silty in the shallows, and
+ * the muddy backwash: patches of depth, short ripples lit on their crest
  * with a darker trough under them, and a few foam streaks; ripples and foam
  * drift with the frames. Placed per cell by hash, so nothing repeats in rows.
+ * The backwash has rivulets of water running through its mud.
  */
-function floodWater(f) {
+const FLOOD_LOOKS = {
+  deep: { bands: [[0.45, 'water3'], [0.65, 'water4'], [1, 'water5']], crest: 'water6', trough: 'water2', foam: ['ice3', 'white0'] },
+  water: { bands: [[0.45, 'water4'], [0.6, 'water5'], [1, 'water6']], crest: 'water7', trough: 'water3', foam: ['white0'] },
+  shallow: { bands: [[0.62, 'water5'], [0.7, 'water6'], [1, 'sand0']], crest: 'water7', trough: 'water4', foam: ['ice3'] },
+  mud: { bands: [[0.4, 'sand1'], [0.65, 'sand0'], [1, 'soil3']], crest: 'sand2', trough: 'soil2', foam: ['ice3', 'white0'], rivulets: true },
+};
+
+function floodWater(f, look = FLOOD_LOOKS.water) {
   const t = new k.Tex(64, 64, true);
   const depth = k.fbm(64, 4, 3, 81);
+  const runs = k.fbm(64, 4, 3, 82);
   t.each((x, y) => {
+    if (look.rivulets && Math.abs(runs(x, y) - 0.5) < 0.04) return P.c(depth(x, y) < 0.5 ? 'water5' : 'water6');
     const d = depth(x, y);
-    return P.c(d < 0.45 ? 'water4' : d < 0.6 ? 'water5' : 'water6');
+    return P.c(look.bands.find(([top]) => d < top)[1]);
   });
   for (let by = 0; by < 64; by += 4) {
     for (let bx = 0; bx < 64; bx += 8) {
@@ -264,8 +275,8 @@ function floodWater(f) {
       const x = bx + Math.floor(k.hash(bx, by, 85) * 6) + f * 2;
       const y = by + Math.floor(k.hash(bx, by, 86) * 3);
       const len = 2 + Math.floor(k.hash(bx, by, 87) * 2);
-      for (let d = 0; d < len; d++) t.set(x + d, y, P.c('water7'));
-      t.set(x + 1, y + 1, P.c('water3'));
+      for (let d = 0; d < len; d++) t.set(x + d, y, P.c(look.crest));
+      t.set(x + 1, y + 1, P.c(look.trough));
     }
   }
   for (let by = 0; by < 64; by += 16) {
@@ -274,9 +285,11 @@ function floodWater(f) {
       const x = bx + Math.floor(k.hash(bx, by, 89) * 22) + f * 3;
       const y = by + Math.floor(k.hash(bx, by, 90) * 13);
       const len = 5 + Math.floor(k.hash(bx, by, 91) * 5);
+      // With two foam colours, every other streak takes the second.
+      const foam = look.foam[k.hash(bx, by, 92) < 0.5 ? 0 : look.foam.length - 1];
       for (let d = 0; d < len; d++) {
         const end = d === 0 || d === len - 1;
-        t.set(x + d, y + (d > len * 0.6 ? 1 : 0), P.c(end ? 'water7' : 'white0'));
+        t.set(x + d, y + (d > len * 0.6 ? 1 : 0), P.c(end ? look.crest : foam));
       }
     }
   }
@@ -317,8 +330,6 @@ function wetGround() {
 
 module.exports = {
   sprites: {
-    wave_deep: waves.waveDeep,
-    wave_coast: waves.waveCoast,
     wave_break: waves.waveBreak,
     hurricane,
     hurricane_south: hurricaneSouth,
@@ -328,5 +339,11 @@ module.exports = {
     fallen_tree: fallenTree,
     driftwood,
   },
-  textures: { flood_water: floodWater, wet_ground: wetGround },
+  textures: {
+    flood_deep: (f) => floodWater(f, FLOOD_LOOKS.deep),
+    flood_water: (f) => floodWater(f, FLOOD_LOOKS.water),
+    flood_shallow: (f) => floodWater(f, FLOOD_LOOKS.shallow),
+    flood_mud: (f) => floodWater(f, FLOOD_LOOKS.mud),
+    wet_ground: wetGround,
+  },
 };

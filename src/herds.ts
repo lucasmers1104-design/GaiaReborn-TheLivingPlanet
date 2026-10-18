@@ -65,6 +65,8 @@ namespace SE {
     since: number;
     /** Stable 0..1, for thinning a crowded view. */
     readonly rank: number;
+    /** Stands for its sub-species: kept while that lives, never thinned out, never changes stage. */
+    pinned: boolean;
   }
 
   function isMicrobe(c: number): boolean {
@@ -151,6 +153,12 @@ namespace SE {
       }
     }
 
+    /** The marker standing on tile i, if any. */
+    markerOn(i: number): HerdMarker | null {
+      const a = this.at[i];
+      return a === 0 ? null : this.markers[a - 1];
+    }
+
     /** One tick of wandering: some markers step to a neighbouring tile of their class, some turn round. */
     step(world: WorldState, now: number, rand: () => number = Math.random): void {
       const slow = this.still ? STILL_FACTOR : 1;
@@ -191,7 +199,7 @@ namespace SE {
         ys[k] = ry;
         gx[k] = sx;
         gy[k] = sy;
-        order[k] = this.rare[m.c] ? m.rank - 1 : m.rank;
+        order[k] = m.pinned ? m.rank - 2 : this.rare[m.c] ? m.rank - 1 : m.rank;
         ids[n++] = k;
       }
       // Rare classes first, then by rank, each a gap away from those already in. The gap
@@ -208,9 +216,9 @@ namespace SE {
         const k = shown[v];
         const cx = Math.floor(gx[k] / cell) + 4;
         const cy = Math.floor(gy[k] / cell) + 4;
-        if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || this.crowded(k, cx, cy, gw, gap)) continue;
-        grid[cy * gw + cx] = k + 1;
         const m = ms[k];
+        if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || (!m.pinned && this.crowded(k, cx, cy, gw, gap))) continue;
+        grid[cy * gw + cx] = k + 1;
         const pic = tiles.life(m.c, m.stage, animalSpecialist(regions, world, m.tile, m.c, m.stage), m.flip);
         const py = Math.round(ys[k] * size);
         for (let x = xs[k]; x < cols; x += GRID_W) ctx.drawImage(pic, Math.round(x * size), py, big, big);
@@ -244,8 +252,10 @@ namespace SE {
       for (let k = ms.length - 1; k >= 0; k--) {
         const m = ms[k];
         const at = m.tile * LIFE_COUNT + m.c;
-        if (world.lifeDensity[at] < HERD_KEEP_DENSITY || nearCity(world, m.tile) ||
-          world.isWater(m.tile) !== (this.sea[m.c] === 1)) {
+        const gone = m.pinned
+          ? world.lifeDensity[at] <= 0 || world.lifeStage[at] !== m.stage
+          : world.lifeDensity[at] < HERD_KEEP_DENSITY || nearCity(world, m.tile);
+        if (gone || world.isWater(m.tile) !== (this.sea[m.c] === 1)) {
           this.remove(k);
         } else {
           m.stage = world.lifeStage[at];
@@ -263,10 +273,10 @@ namespace SE {
       }
     }
 
-    private add(world: WorldState, c: Life, tile: number, rand: () => number): void {
+    private add(world: WorldState, c: Life, tile: number, rand: () => number, pinned = false): void {
       this.markers.push({
         c, tile, stage: world.lifeStage[tile * LIFE_COUNT + c], flip: rand() < 0.5,
-        dx: 0, dy: 0, since: -Infinity, rank: rand(),
+        dx: 0, dy: 0, since: -Infinity, rank: rand(), pinned,
       });
       this.at[tile] = this.markers.length;
     }
@@ -284,6 +294,7 @@ namespace SE {
           if (dx === 0 && dy === 0) continue;
           const j = idx(wrapX(x + dx), y + dy);
           if (!this.fits(world, m.c, j, self)) continue;
+          if (m.pinned && world.lifeStage[j * LIFE_COUNT + m.c] !== m.stage) continue;
           seen++;
           if (rand() * seen < 1) {
             pick = j;
@@ -385,7 +396,7 @@ namespace SE {
         const m = ms[k];
         const c = m.c;
         const crowded = isMicrobe(c) && have[c] > QUOTA_MARKERS && this.nearAnimal(m.tile % GRID_W, (m.tile / GRID_W) | 0);
-        if (crowded || (drop[c] > 0 && rand() * left[c] < drop[c])) {
+        if (!m.pinned && (crowded || (drop[c] > 0 && rand() * left[c] < drop[c]))) {
           if (drop[c] > 0) drop[c]--;
           have[c]--;
           this.remove(k);
@@ -402,7 +413,46 @@ namespace SE {
         // The promised few go in even beside animals, pushing a common class's marker aside.
         if (have[c] < QUOTA_MARKERS && counts[c] >= QUOTA_MIN_TILES) this.place(world, c as Life, QUOTA_MARKERS, false, rand);
       }
+      // Every living sub-species keeps one creature of its own on the map.
+      for (let c = 1; c < LIFE_COUNT; c++) {
+        for (let s = 0; s < SUBSPECIES_PER_CLASS; s++) {
+          if (world.lifeStageCounts[c * SUBSPECIES_PER_CLASS + s] > 0) this.pin(world, c as Life, s, rand);
+        }
+      }
       for (let c = 1; c < LIFE_COUNT; c++) this.rare[c] = have[c] <= RARE_MARKERS ? 1 : 0;
+    }
+
+    /**
+     * The creature standing for sub-species (c, stage): an existing one, or a
+     * new one on its densest tile, preferring tiles away from cities and other
+     * creatures. Returns its tile, -1 if the sub-species doesn't live.
+     */
+    pin(world: WorldState, c: Life, stage: number, rand: () => number = Math.random): number {
+      const ms = this.markers;
+      const own = ms.find((m) => m.c === c && m.stage === stage && m.pinned) ?? ms.find((m) => m.c === c && m.stage === stage);
+      if (own) {
+        own.pinned = true;
+        return own.tile;
+      }
+      let best = -1;
+      let bestScore = 0;
+      for (let i = 0; i < TILE_COUNT; i++) {
+        const li = i * LIFE_COUNT + c;
+        const d = world.lifeDensity[li];
+        if (d <= 0 || world.lifeStage[li] !== stage || world.isWater(i) !== (this.sea[c] === 1)) continue;
+        const a = this.at[i];
+        if (a !== 0 && ms[a - 1].pinned) continue;
+        const far = !nearCity(world, i);
+        const score = d + (far ? 2 : 0) + (far && this.free(i % GRID_W, (i / GRID_W) | 0, 0) ? 2 : 0);
+        if (score > bestScore) {
+          best = i;
+          bestScore = score;
+        }
+      }
+      if (best < 0) return -1;
+      if (this.at[best] !== 0) this.remove(this.at[best] - 1);
+      this.add(world, c, best, rand, true);
+      return best;
     }
 
     /**
@@ -437,7 +487,7 @@ namespace SE {
             const a = this.at[idx(wrapX(x + dx), y + dy)];
             if (a === 0) continue;
             const c = this.markers[a - 1].c;
-            if (pass === 0 && this.have[c] <= QUOTA_MARKERS + 1) return false;
+            if (pass === 0 && (this.markers[a - 1].pinned || this.have[c] <= QUOTA_MARKERS + 1)) return false;
             if (pass === 1) {
               this.have[c]--;
               this.remove(a - 1);

@@ -9,7 +9,7 @@ Ab 16 px pro Kachel tauchen auf dem offenen Meer Wale als Pixel-Sprites auf: Sie
 
 ## Wie es funktioniert
 
-- Die Wale reiten auf den Herdenmarkern der Wale (`Life.Cetacean`), nur auf den Stufen 4 (Bartenwal), 5 (Pottwal) und 7 (Großwal) und nie bei Biom-Spezialisten (Narwal). Delfine und frühe Stufen behalten ihr Symbol.
+- Die Wale reiten auf den Herdenmarkern der Wale (`Life.Cetacean`), nur auf den Stufen 4 (Bartenwal), 5 (Pottwal) und 7 (Großwal) und nie bei Biom-Spezialisten (Narwal). Frühe Stufen behalten ihr Symbol; Delfine (Stufe 6) springen auf warmem Meer als Schulen (`src/dolphinlayer.ts`, siehe `docs/ereignisse-2026-10/stil.md`, Abschnitt „Delfine“).
 - Ein Wal erscheint nur, wenn seine Kachel und die Nachbarkacheln im Osten und Westen Wasser sind. So liegt der bis zu 1,5 Kacheln breite Sprite nie auf Land oder Küste.
 - Jeder Wal hat einen eigenen Zyklus von 14 bis 24 s: 0,5 s Auftauchen, 5 s Schwimmen (driftet 3 Art-Pixel/s in Blickrichtung), Blas nach 0,8 s und in der Hälfte der Zyklen ein zweiter nach 3 s, 0,8 s Abtauchen mit Fluke, danach unter Wasser. Neue Wale beginnen unter Wasser, damit sie auftauchen statt aufzuploppen.
 - Kachel und Blickrichtung übernimmt der Wal nur, während er unter Wasser ist. Die Schritte der Herde passieren also unsichtbar, und ein Wal dreht sich nie an der Oberfläche um.

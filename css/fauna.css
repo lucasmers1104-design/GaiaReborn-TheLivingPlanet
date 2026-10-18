@@ -70,6 +70,19 @@
 .fauna-toast-sub { font-size: 12.5px; color: var(--ink-2); }
 .fauna-toast .toast-timer { background: var(--animal); }
 .fauna-toast.is-held { visibility: hidden; }
+/* In the centre of the screen (#discoveries): picture on top, a bigger card. */
+.discoveries .fauna-toast { animation: discovery-in 320ms var(--ease); }
+.discoveries .fauna-toast.leaving { animation: discovery-out 240ms var(--ease) forwards; }
+@keyframes discovery-in { from { opacity: 0; transform: scale(0.92); } }
+@keyframes discovery-out { to { opacity: 0; transform: scale(0.96); } }
+.discoveries .fauna-toast-main { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 14px; padding: 26px 44px 24px; text-align: center; }
+.discoveries .fauna-toast-text { align-items: center; gap: 4px; }
+.discoveries .fauna-toast-pic { width: 112px; height: 112px; padding: 8px; }
+.discoveries .fauna-toast-art.is-stack .fauna-toast-pic { width: 88px; height: 88px; }
+.discoveries .fauna-toast-art.is-stack .fauna-toast-pic + .fauna-toast-pic { margin-left: -32px; }
+.discoveries .fauna-toast-kicker { font-size: 12px; }
+.discoveries .fauna-toast-title { font-size: 22px; }
+.discoveries .fauna-toast-sub { font-size: 13.5px; }
 
 /* ---- lexicon ---- */
 .fauna-lex { display: flex; flex-direction: column; gap: 16px; }

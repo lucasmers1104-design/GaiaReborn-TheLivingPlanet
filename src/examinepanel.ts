@@ -7,6 +7,8 @@ namespace SE {
     private hero: HTMLElement | null = null;
     onShowInTree: ((id: string) => void) | null = null;
     onShowSpecies: ((c: Life, stage: number) => void) | null = null;
+    /** The creature the map shows on a tile (render.ts `creatureOn`). */
+    creatureOn: ((world: WorldState, i: number) => { key: string; draw: () => HTMLCanvasElement } | null) | null = null;
 
     constructor(private readonly host: HTMLElement) {}
 
@@ -19,9 +21,10 @@ namespace SE {
       for (let g = 1; g < FLORA_COUNT; g++) if (world.flora[i] & floraBit(g as Flora)) plants.push(g as Flora);
       plants.sort((a, b) => Number(b === world.floraTop[i]) - Number(a === world.floraTop[i]) || a - b);
       const state = LifeSystem.biomeStatusLabel(world, i);
+      const creature = this.creatureOn?.(world, i) ?? null;
       const tileSig = [i, world.biome[i], world.landscape[i], world.landscapeZone[i], world.substrate[i], world.landscapeDensity[i],
         state, Math.round(world.temperature[i]), Math.round(world.rainfallCm(i)), world.altitudeMeters(i),
-        Math.round(world.magma[i] * 30), landDigest(world, x, y)].join('|');
+        Math.round(world.magma[i] * 30), landDigest(world, x, y), creature?.key ?? ''].join('|');
       const city = world.tech[i] === Tech.None ? '' : ExaminePanel.cityText(world, i);
       const river = world.riverLevel[i] > 0 ? `Fluss · ${fmt.int(RiverSystem.discharge(world, i))} m³/s` : '';
       const event = world.eventTtl[i] > 0 ? `Ereignis: ${EVENT_NAMES[world.eventKind[i]]}` : '';
@@ -42,7 +45,7 @@ namespace SE {
       const scrollTop = sameTile ? scroller?.scrollTop ?? 0 : 0;
       this.tile = i;
       if (!this.hero || tileSig !== this.tileSignature) {
-        this.hero = this.tileHead(world, i, x, y, state);
+        this.hero = this.tileHead(world, i, x, y, state, creature?.draw() ?? null);
         this.tileSignature = tileSig;
       }
       const actions: ExamineActions = {
@@ -85,10 +88,10 @@ namespace SE {
       return sec;
     }
 
-    private tileHead(world: WorldState, i: number, x: number, y: number, state: string): HTMLElement {
+    private tileHead(world: WorldState, i: number, x: number, y: number, state: string, creature: HTMLCanvasElement | null): HTMLElement {
       const el = make('div', 'ex-tile');
       const picture = make('div', 'ex-picture');
-      const canvas = examineTilePicture(world, x, y);
+      const canvas = examineTilePicture(world, x, y, creature);
       if (canvas) picture.append(canvas);
       else picture.append(img(habitatAsset(BIOME_ICONS[world.biome[i]]), 'ex-picture-fallback'));
       const meta = make('div', 'ex-meta');

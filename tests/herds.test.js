@@ -75,9 +75,11 @@ test('markers stand only where their class lives, one tile apart at least', () =
     assert.ok(w.lifeDensity[m.tile * SE.LIFE_COUNT + m.c] > 0, `${SE.LIFE[m.c].id} marker on a tile without it`);
     assert.equal(w.isWater(m.tile), SE.isSeaLife(m.c), `${SE.LIFE[m.c].id} marker in the wrong realm`);
     assert.equal(m.stage, w.lifeStage[m.tile * SE.LIFE_COUNT + m.c]);
-    taken.set(m.tile, m);
+    if (!m.pinned) taken.set(m.tile, m);
   }
+  // A sub-species' own creature may stand wherever that sub-species lives.
   for (const m of herds.markers) {
+    if (m.pinned) continue;
     const x = m.tile % SE.GRID_W;
     const y = Math.floor(m.tile / SE.GRID_W);
     for (let dy = -1; dy <= 1; dy++) {
@@ -93,7 +95,7 @@ test('markers keep a tile away from cities, and leave when a city is founded bes
   const { s, herds, rand } = planet();
   const w = s.world;
   assert.ok(herds.markers.length > 0, 'the test planet has creatures');
-  const m = herds.markers.find((k) => !w.isWater(k.tile)) ?? herds.markers[0];
+  const m = herds.markers.find((k) => !k.pinned && !w.isWater(k.tile)) ?? herds.markers.find((k) => !k.pinned);
   const x = m.tile % SE.GRID_W;
   const y = Math.floor(m.tile / SE.GRID_W);
   const beside = SE.idx(SE.wrapX(x + 1), y);
@@ -104,7 +106,7 @@ test('markers keep a tile away from cities, and leave when a city is founded bes
   try {
     herds.update(w, 1e9, rand);
     assert.ok(!herds.markers.includes(m), 'the marker beside the new city is gone');
-    for (const k of herds.markers) assert.ok(!SE.nearCity(w, k.tile), 'no marker on or next to a city');
+    for (const k of herds.markers) assert.ok(k.pinned || !SE.nearCity(w, k.tile), 'no marker on or next to a city');
   } finally {
     w.tech[beside] = before.tech;
     w.cityPop[beside] = before.pop;
@@ -141,6 +143,23 @@ test('markers wander one tile at a time over their own class’s tiles and face 
   console.log(`${moves} steps in 12 ticks, ${west} of them west`);
   assert.ok(moves > herds.markers.length * 0.2, `only ${moves} steps for ${herds.markers.length} markers`);
   assert.ok(west > 0);
+});
+
+test('every living sub-species keeps a creature of its own, and the jump finds it', () => {
+  const { s, herds, advance } = planet();
+  const w = s.world;
+  const n = SE.SUBSPECIES_PER_CLASS;
+  advance();
+  for (let c = 1; c < SE.LIFE_COUNT; c++) {
+    for (let st = 0; st < n; st++) {
+      if (w.lifeStageCounts[c * n + st] === 0) continue;
+      const own = herds.markers.find((m) => m.c === c && m.stage === st && m.pinned);
+      assert.ok(own, `${SE.LIFE[c].id} stage ${st} lives but has no creature`);
+      assert.equal(herds.pin(w, c, st), own.tile);
+    }
+  }
+  const dead = w.lifeStageCounts.findIndex((k, i) => k === 0 && i >= n);
+  assert.equal(herds.pin(w, Math.floor(dead / n), dead % n), -1, 'a sub-species that doesn’t live gets no creature');
 });
 
 test('a new planet or an older save starts the herds afresh', () => {

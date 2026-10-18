@@ -1100,21 +1100,32 @@ var SE;
     SE.ATOMIC_FALLOUT_TICKS = 20;
     SE.ATOMIC_DUST = 0.15;
     /* Tidal wave and hurricane (hazardwater.ts). */
-    /** Ticks a tidal wave takes to cross a tile of deep sea (below COAST_DEPTH), shelf and shallows (above WAVE_SHALLOW). */
+    /** Ticks a tidal wave takes to cross a tile of deep sea (below COAST_DEPTH); above it × √(COAST_DEPTH / e), at most WAVE_TICKS_SHALLOW. */
     SE.WAVE_TICKS_DEEP = 0.33;
-    SE.WAVE_TICKS_SHELF = 0.5;
     SE.WAVE_TICKS_SHALLOW = 1;
-    SE.WAVE_SHALLOW = -0.05;
-    /** Longest path over the water, in tiles; the wave keeps WAVE_DECAY of its energy per tile. */
+    /** Longest path over the water, in tiles; the wave keeps WAVE_DECAY of its energy per tile. A weaker wave ends at the same energy, but after WAVE_PATH_MIN at least. */
     SE.WAVE_PATH_MAX = 32;
+    SE.WAVE_PATH_MIN = 8;
     SE.WAVE_DECAY = 0.93;
+    /** Radius around the origin, in tiles, where the arrival field starts as an exact circle (removes the source's corner bias). */
+    SE.WAVE_FMM_INIT = 3;
+    /** Ticks the hazard lasts past the last arrival, while the foam behind the front fades on screen. */
+    SE.WAVE_TRAIL_TICKS = 1.5;
     /** Wave height at the coast at full energy (≈ 400 m game height, approved). */
     SE.WAVE_HEIGHT = 0.09;
     /** Height a wave or surge loses per land step, and the most land steps it runs. */
     SE.FLOOD_RUNUP_LOSS = 0.012;
     SE.FLOOD_RUNUP_STEPS = 6;
-    /** Ticks the water stands once it stops climbing; then it recedes, inland first. */
-    SE.FLOOD_HOLD_TICKS = 2;
+    /** Ticks the water takes to run up one land tile (diagonals √2 as long). */
+    SE.FLOOD_RUNUP_TICKS = 1;
+    /**
+     * Ticks the water stands once it stops climbing; then its edge runs back to the sea, inland first, FLOOD_RECEDE_TICKS a tile.
+     * At least 3: the mud is laid a tick before a tile dries, after the screen has shown the water reach all of it.
+     */
+    SE.FLOOD_HOLD_TICKS = 3;
+    SE.FLOOD_RECEDE_TICKS = 0.75;
+    /** Ticks a run stays after its last tile dried on screen, for the backwash and wet sheen. */
+    SE.FLOOD_TRAIL_TICKS = 2;
     /** Water this deep does the full damage; shallower water from FLOOD_LIFE_SHALLOW and FLOOD_CITY_LOSS up. */
     SE.FLOOD_DEPTH_FULL = 0.04;
     SE.FLOOD_LIFE_LOSS = 0.8;
@@ -18996,10 +19007,18 @@ var SE;
         }
         /** Turn discharge into a drawable river and the moisture floor it holds. */
         static classify(world) {
-            const { elevation, riverFlow, riverLevel, riparian } = world;
+            const { elevation, riverFlow, riverLevel, riparian, landscape, landscapeNext, temperature } = world;
             riverLevel.fill(0);
             for (let i = 0; i < SE.TILE_COUNT; i++) {
                 if (elevation[i] < 0 || riverFlow[i] < SE.RIVER_THRESHOLD)
+                    continue;
+                // Frozen under ice or snow: the water still drains through (meltwater
+                // leaves at the ice edge), but no channel shows until the tile thaws.
+                // Before succession has laid a landscape down, the climate decides.
+                const ls = landscape[i];
+                if (landscapeNext[i] !== SE.LANDSCAPE_UNSET
+                    ? ls === SE.Landscape.Ice || ls === SE.Landscape.Snow
+                    : temperature[i] < SE.FROZEN_TEMP)
                     continue;
                 // Logarithmic: a river carrying ten times the water is not ten times
                 // the river, and without the compression the trunk would saturate
@@ -26032,9 +26051,10 @@ var SE;
         /**
          * Start a hazard on one tile now. With HAZARD_MAX_ACTIVE running, a
          * natural or chained one is dropped and a player's makes the oldest jump
-         * to its aftermath. Null where the hazard cannot start.
+         * to its aftermath. Null where the hazard cannot start. `strength` (1 for
+         * a full one) is set before the impact, so the rule's start sees it.
          */
-        start(world, kind, x, y, cause) {
+        start(world, kind, x, y, cause, strength) {
             const rule = SE.HAZARD_RULES[kind];
             if (!rule || this.refusal(world, kind, x, y) !== '')
                 return null;
@@ -26049,6 +26069,8 @@ var SE;
             const h = {
                 id: hz.nextId++, kind, x: SE.wrapX(x), y, cause, startTick: world.ticks, age: 0, done: false, chainUsed: false,
             };
+            if (strength !== undefined)
+                h.strength = strength;
             hz.list.push(h);
             rule.start(world, h);
             hz.revision++;
@@ -26078,12 +26100,8 @@ var SE;
             if (h.cause === 'chain' || h.chainUsed)
                 return;
             const next = SE.HAZARD_CHAINS[h.kind]?.(world, h);
-            const c = next ? this.start(world, next.kind, next.x, next.y, 'chain') : null;
-            if (!c)
-                return;
-            h.chainUsed = true;
-            if (next?.strength !== undefined)
-                c.strength = next.strength;
+            if (next && this.start(world, next.kind, next.x, next.y, 'chain', next.strength))
+                h.chainUsed = true;
         }
     }
     SE.HazardSystem = HazardSystem;
@@ -26852,11 +26870,15 @@ var SE;
 /* =============================================================================
  * SimEarth 2.0 — floods: water running up the land, standing, receding
  * -----------------------------------------------------------------------------
- * docs/ereignisse-spec.md §3.4. Where a tidal wave or a storm surge touches
- * the coast, the water runs up: a breadth-first search only through the
- * tiles it has just flooded, one land step a tick, losing FLOOD_RUNUP_LOSS
- * of height a step from the second land tile on. The water stands, recedes
- * inland first and leaves mud (hazardwater.ts starts the runs).
+ * docs/ereignisse-spec.md §3.4, §3.5. Where a tidal wave or a storm surge
+ * touches the coast, the water runs up. The whole run is planned when it
+ * starts: a shortest-time search over land from the coast water (diagonals
+ * √2, FLOOD_RUNUP_TICKS a tile, from each coast tile's exact arrival),
+ * losing FLOOD_RUNUP_LOSS of height a land step from the second land tile
+ * on. The water stands, then its edge runs back to the sea, inland first,
+ * and leaves mud. The mud is laid the tick before the screen dries a tile,
+ * so the map underneath has caught up (hazardwater.ts starts the runs,
+ * fxground.ts reveals the plan pixel by pixel).
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -26868,6 +26890,11 @@ var SE;
         return y < 0 || y >= SE.GRID_H ? -1 : SE.idx(SE.wrapX((i % SE.GRID_W) + SE.HAZARD_NX[k]), y);
     }
     SE.hazardNeighbour = hazardNeighbour;
+    /** The tick a tile's mud is laid: the first whose age reaches off − 1, a tick before the screen dries it. */
+    function floodDryTick(off) {
+        return Math.ceil(off - 1);
+    }
+    SE.floodDryTick = floodDryTick;
     /** Water over a land tile `depth` deep: life drowns, soft plants wash away, a city loses people. */
     function flood(world, i, depth) {
         const hz = world.hazards;
@@ -26875,17 +26902,21 @@ var SE;
         SE.hazardKillLife(world, i, SE.FLOOD_LIFE_LOSS * (SE.FLOOD_LIFE_SHALLOW + (1 - SE.FLOOD_LIFE_SHALLOW) * t));
         world.flora[i] &= SE.WOODY_FLORA_MASK;
         world.vegetation[i] *= SE.FLOOD_VEGETATION_KEEP;
-        world.moisture[i] = Math.min(1, world.moisture[i] + SE.FLOOD_MOISTURE);
         SE.hazardHitCity(world, i, SE.FLOOD_CITY_LOSS + (1 - SE.FLOOD_CITY_LOSS) * t);
         hz.tile[i] = SE.HazardTile.Flood;
         hz.level[i] = SE.clamp(Math.round(depth * 1000), 1, 255);
         hz.revision++;
     }
-    /** The water has run off: the tile falls back to raw ground under a layer of mud. */
+    /**
+     * The water has run off: the tile falls back to raw ground under a layer
+     * of mud, wet. Only now, not while the screen still shows the water
+     * running up: wet ground turns the map's ground to mire at once.
+     */
     function recede(world, i) {
         const hz = world.hazards;
         if (hz.tile[i] !== SE.HazardTile.Flood)
             return;
+        world.moisture[i] = Math.min(1, world.moisture[i] + SE.FLOOD_MOISTURE);
         hz.tile[i] = SE.HazardTile.None;
         hz.level[i] = 0;
         // The scar first: it heals once the landscape climbs back to where it stood before the flood.
@@ -26894,76 +26925,112 @@ var SE;
         SE.SuccessionSystem.clear(world, i);
         hz.revision++;
     }
-    /** One land step: every tile flooded last step floods its land neighbours lower than the height left. */
-    function climb(world, run) {
+    /** Land steps of a path `d` tiles long: the first land tile is step 1. */
+    const stepOf = (d) => Math.ceil(d - 1e-9);
+    /**
+     * Plan `run` from its sources (front = coast water, height = the wave's
+     * height there), `coastAt` the arrival on each (default: the start of the
+     * run's tick). Land other runs have planned, or under another hazard, stays dry.
+     */
+    function plan(world, runs, run, coastAt) {
         const e = world.elevation;
         const hz = world.hazards;
-        const reached = new Map();
-        if (run.steps < SE.FLOOD_RUNUP_STEPS) {
-            for (let f = 0; f < run.front.length; f++) {
-                // The first land tile takes the wave at full height.
-                const left = run.height[f] - (run.steps === 0 ? 0 : SE.FLOOD_RUNUP_LOSS);
-                if (left <= 0)
-                    continue;
-                for (let k = 0; k < 8; k++) {
-                    const j = hazardNeighbour(run.front[f], k);
-                    if (j < 0 || e[j] < 0 || e[j] >= left)
-                        continue;
-                    if (hz.tile[j] !== SE.HazardTile.None && hz.tile[j] !== SE.HazardTile.Wet)
-                        continue;
-                    if ((reached.get(j) ?? 0) < left)
-                        reached.set(j, left);
-                }
-            }
+        const taken = new Set();
+        // Water still standing from earlier runs is theirs; where it has run off, the land may flood again.
+        for (const r of runs) {
+            r.tiles.forEach((i, m) => {
+                if (floodDryTick(r.off[m]) >= run.born)
+                    taken.add(i);
+            });
         }
-        run.steps++;
+        const best = new Map();
+        const time = (r) => r.t0 + (r.d - 1) * SE.FLOOD_RUNUP_TICKS;
+        const open = [];
+        const relax = (from, t0, d0, h) => {
+            for (let k = 0; k < 8; k++) {
+                const j = hazardNeighbour(from, k);
+                if (j < 0 || e[j] < 0 || taken.has(j))
+                    continue;
+                if (hz.tile[j] !== SE.HazardTile.None && hz.tile[j] !== SE.HazardTile.Wet)
+                    continue;
+                const d = d0 + (SE.HAZARD_NX[k] !== 0 && SE.HAZARD_NY[k] !== 0 ? Math.SQRT2 : 1);
+                const step = stepOf(d);
+                if (step > SE.FLOOD_RUNUP_STEPS || e[j] >= h - SE.FLOOD_RUNUP_LOSS * (step - 1))
+                    continue;
+                const r = { t0, d, h };
+                const was = best.get(j);
+                if (was && time(was) <= time(r))
+                    continue;
+                if (!was)
+                    open.push(j);
+                best.set(j, r);
+            }
+        };
+        run.front.forEach((c, f) => relax(c, coastAt?.[f] ?? run.born - 1, 0, run.height[f]));
+        const dist = [];
+        // ponytail: open list scanned linearly; a run plans a few hundred tiles at most, a heap if that ever grows.
+        while (open.length > 0) {
+            let m = 0;
+            for (let q = 1; q < open.length; q++)
+                if (time(best.get(open[q])) < time(best.get(open[m])))
+                    m = q;
+            const j = open[m];
+            open[m] = open[open.length - 1];
+            open.pop();
+            taken.add(j);
+            const r = best.get(j);
+            const step = stepOf(r.d);
+            run.tiles.push(j);
+            run.reach.push(step);
+            run.at.push(time(r));
+            run.depth.push(r.h - SE.FLOOD_RUNUP_LOSS * (step - 1) - e[j]);
+            dist.push(r.d);
+            relax(j, r.t0, r.d, r.h);
+        }
+        // The water stands, then its edge runs back to the sea: the farthest tile first.
+        const stop = Math.max(...run.at);
+        const far = Math.max(...dist);
+        for (const d of dist)
+            run.off.push(stop + SE.FLOOD_HOLD_TICKS + (far - d) * SE.FLOOD_RECEDE_TICKS);
         run.front = [];
         run.height = [];
-        for (const [j, left] of reached) {
-            flood(world, j, left - e[j]);
-            run.tiles.push(j);
-            run.reach.push(run.steps);
-            run.front.push(j);
-            run.height.push(left);
-        }
     }
-    /** Climb, stand, or recede inland first (the far half, then the rest); false once the run is over. */
+    /** One tick of a run: flood what the water reaches in it, lay the mud where it runs off; false once all is dry. */
     function stepRun(world, run) {
-        if (run.front.length > 0) {
-            climb(world, run);
-            return run.front.length > 0 || run.tiles.length > 0;
-        }
-        if (run.hold > 0) {
-            run.hold--;
-            return true;
-        }
-        let far = 0;
-        for (const k of run.reach)
-            far = Math.max(far, k);
-        const all = run.hold < 0;
-        let n = 0;
+        const age = run.born + run.steps++;
+        run.front = [];
+        run.height = [];
+        let wet = false;
         for (let m = 0; m < run.tiles.length; m++) {
-            if (all || run.reach[m] > far / 2) {
-                recede(world, run.tiles[m]);
+            const i = run.tiles[m];
+            if (run.at[m] < age && run.at[m] >= age - 1) {
+                flood(world, i, run.depth[m]);
+                run.front.push(i);
+                run.height.push(world.elevation[i] + run.depth[m]);
             }
-            else {
-                run.tiles[n] = run.tiles[m];
-                run.reach[n++] = run.reach[m];
-            }
+            const dry = floodDryTick(run.off[m]);
+            if (dry === age)
+                recede(world, i);
+            else if (dry > age)
+                wet = true;
         }
-        run.tiles.length = n;
-        run.reach.length = n;
-        run.hold = -1;
-        return n > 0;
+        // Stay listed until the screen has shown the last tile dry and its backwash.
+        return wet || age - 1 < Math.max(...run.off) + SE.FLOOD_TRAIL_TICKS;
     }
     /**
      * Start water running up the land from the coast water tiles `coast`,
-     * each bringing the wave height in `height`. It takes its first land step
-     * at the next hazardStepFloods. Used by the tidal wave and the storm surge.
+     * each bringing the wave height in `height` and reached at hazard age
+     * `coastAt` (default: the start of this tick, as for a storm surge). Its
+     * first land tiles flood at the next hazardStepFloods, in this tick.
      */
-    function hazardRunUp(runs, coast, height) {
-        if (coast.length > 0)
-            runs.push({ front: coast, height, steps: 0, tiles: [], reach: [], hold: SE.FLOOD_HOLD_TICKS });
+    function hazardRunUp(world, h, coast, height, coastAt) {
+        const runs = h.wave?.runs ?? h.storm?.runs;
+        if (!runs || coast.length === 0)
+            return;
+        const run = { front: coast, height, steps: 0, born: h.age, tiles: [], reach: [], at: [], off: [], depth: [] };
+        plan(world, runs, run, coastAt);
+        if (run.tiles.length > 0)
+            runs.push(run);
     }
     SE.hazardRunUp = hazardRunUp;
     /** One tick of every run; finished runs drop out. */
@@ -26977,9 +27044,13 @@ var SE;
     SE.hazardStepFloods = hazardStepFloods;
     /** All the water off the land at once: the aftermath straight away. */
     function hazardDrainFloods(world, runs) {
-        for (const run of runs)
-            for (const i of run.tiles)
-                recede(world, i);
+        for (const run of runs) {
+            const age = run.born + run.steps - 1;
+            run.tiles.forEach((i, m) => {
+                if (run.at[m] < age && floodDryTick(run.off[m]) > age)
+                    recede(world, i);
+            });
+        }
         runs.length = 0;
     }
     SE.hazardDrainFloods = hazardDrainFloods;
@@ -26990,10 +27061,13 @@ var SE;
  * docs/ereignisse-spec.md §3.4, §3.5.
  *
  * Tidal wave: at its start an arrival field spreads over the water from the
- * origin (Dijkstra, diagonals √2; fast in deep sea, slow in the shallows) for
- * at most WAVE_PATH_MAX tiles of path, the energy falling by WAVE_DECAY a
- * tile. Each tick the front is the water whose arrival falls into it; where
- * the front touches land, the wave runs up the coast (hazardflood.ts).
+ * origin (fast marching on tile centres, axis + diagonal stencil; speed after
+ * the shallow-water law, so fronts stay round, bend towards the coast and
+ * wrap round islands), in a WAVE_BOX square around it, for at most
+ * WAVE_PATH_MAX tiles of path (less for a weaker wave), the energy falling by
+ * WAVE_DECAY a tile. Each tick the front is the water whose arrival falls
+ * into it; where the front touches land, the wave runs up the coast
+ * (hazardflood.ts).
  *
  * Hurricane: the eye moves one tile a tick — west with the trade winds and a
  * poleward drift, east beyond HURRICANE_RECURVE_LAT — gaining strength over
@@ -27004,11 +27078,20 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    /** Ticks a tidal wave takes to cross one water tile of elevation `e`. */
+    /** Side of the square box around the origin that holds a tidal wave's field, in tiles. */
+    SE.WAVE_BOX = 2 * SE.WAVE_PATH_MAX + 1;
+    /** Ticks a tidal wave takes to cross one water tile of elevation `e`: speed grows with √depth, clamped. */
     function waveTicks(e) {
-        return e < SE.COAST_DEPTH ? SE.WAVE_TICKS_DEEP : e > SE.WAVE_SHALLOW ? SE.WAVE_TICKS_SHALLOW : SE.WAVE_TICKS_SHELF;
+        return SE.clamp(SE.WAVE_TICKS_DEEP * Math.sqrt(SE.COAST_DEPTH / e), SE.WAVE_TICKS_DEEP, SE.WAVE_TICKS_SHALLOW);
     }
     SE.waveTicks = waveTicks;
+    /** Box cell of tile (x, y) in this wave's field, or -1 outside the box. x may be unwrapped. */
+    function waveCell(w, x, y) {
+        const bx = (((x - w.x0) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
+        const by = y - w.y0;
+        return bx >= SE.WAVE_BOX || by < 0 || by >= SE.WAVE_BOX ? -1 : by * SE.WAVE_BOX + bx;
+    }
+    SE.waveCell = waveCell;
     function touchesLand(world, i) {
         for (let k = 0; k < 8; k++) {
             const j = SE.hazardNeighbour(i, k);
@@ -27018,11 +27101,26 @@ var SE;
         return false;
     }
     /* ------------------------------------------------------- arrival field -- */
-    // Doubles: a float32 copy of an arrival rounds below its heap key and would read as stale.
-    const best = new Float64Array(SE.TILE_COUNT).fill(Infinity);
-    const walked = new Float64Array(SE.TILE_COUNT);
-    const heading = new Uint8Array(SE.TILE_COUNT);
-    const settled = new Uint8Array(SE.TILE_COUNT);
+    // Module-local copies: reading SE.* inside the marching loop costs a namespace property lookup each time.
+    const BOX = SE.WAVE_BOX;
+    const NX = SE.HAZARD_NX;
+    const NY = SE.HAZARD_NY;
+    const GW = SE.GRID_W;
+    const GH = SE.GRID_H;
+    // Box-local scratch, doubles: a float32 copy of an arrival rounds below its heap key and would read as stale.
+    const CELLS = BOX * BOX;
+    const fT = new Float64Array(CELLS);
+    const fL = new Float64Array(CELLS);
+    /** Ticks per tile; 0 = wall (land, past a pole). */
+    const fSlow = new Float64Array(CELLS);
+    /** 0 far, 1 trial, 2 done. */
+    const fState = new Uint8Array(CELLS);
+    /** Tile of each cell; -1 past a pole. */
+    const fTile = new Int32Array(CELLS);
+    const nT = new Float64Array(8);
+    const nB = new Int32Array(8);
+    /** Octant of the travel angle (0 = +x, 1 = +x+y, …) → HAZARD_NX / HAZARD_NY index. */
+    const OCTANT_DIR = [4, 7, 6, 5, 3, 0, 1, 2];
     function heapPush(keys, vals, key, val) {
         let n = keys.length;
         keys.push(key);
@@ -27060,50 +27158,166 @@ var SE;
         keys[n] = key;
         vals[n] = val;
     }
-    /** When the wave reaches each water tile within WAVE_PATH_MAX of path, in order of arrival. */
-    function arrivalField(world, origin) {
+    let solvedT = 0;
+    let solvedL = 0;
+    /** One stencil pair of done neighbours (ta, la), (tb, lb) at spacing h onto a cell of slowness s: sets solvedT/L. */
+    function solvePair(ta, la, tb, lb, s, h) {
+        if (ta > tb) {
+            const t = ta;
+            ta = tb;
+            tb = t;
+            const l = la;
+            la = lb;
+            lb = l;
+        }
+        const sh = s * h;
+        if (ta === Infinity) {
+            solvedT = Infinity;
+            return;
+        }
+        if (tb === Infinity || tb - ta >= sh) {
+            solvedT = ta + sh;
+            solvedL = la + h;
+            return;
+        }
+        const t = (ta + tb + Math.sqrt(2 * sh * sh - (tb - ta) * (tb - ta))) / 2;
+        const ga = t - ta;
+        const gb = t - tb;
+        solvedT = t;
+        // The path rides along the ray between the two neighbours.
+        solvedL = (ga * la + gb * lb + h * Math.sqrt(ga * ga + gb * gb)) / (ga + gb);
+    }
+    /** Travel time of a done box cell, Infinity outside the box or where not (yet) reached. */
+    function doneT(bx, by) {
+        if (bx < 0 || by < 0 || bx >= BOX || by >= BOX)
+            return Infinity;
+        const b = by * BOX + bx;
+        return fState[b] === 2 ? fT[b] : Infinity;
+    }
+    /** A box cell not on the box rim with a land neighbour. */
+    function besideLand(b) {
+        for (let k = 0; k < 8; k++) {
+            const j = b + NY[k] * BOX + NX[k];
+            if (fTile[j] >= 0 && fSlow[j] === 0)
+                return true;
+        }
+        return false;
+    }
+    /** One-sided or central difference of the arrival along one axis. */
+    function slope(t, before, after) {
+        if (before < Infinity && after < Infinity)
+            return (after - before) / 2;
+        if (after < Infinity)
+            return after - t;
+        return before < Infinity ? t - before : 0;
+    }
+    /**
+     * The arrival field of a wave of `strength` from tile (ox, oy): fast marching
+     * over the water of the box, first order, on axis and diagonal stencils;
+     * cells within WAVE_FMM_INIT of the origin start exactly on a circle.
+     */
+    function arrivalField(world, ox, oy, strength) {
+        const R = SE.WAVE_PATH_MAX;
+        const S = BOX;
+        const x0 = ox - R;
+        const y0 = oy - R;
         const e = world.elevation;
-        const wave = { tiles: [], arrival: [], path: [], heading: [], runs: [] };
-        const touched = [origin];
+        const power = Math.min(1, strength);
+        const pathMax = Math.max(SE.WAVE_PATH_MIN, SE.WAVE_PATH_MAX + Math.log(power) / -Math.log(SE.WAVE_DECAY));
+        for (let b = 0; b < CELLS; b++) {
+            const y = y0 + ((b / S) | 0);
+            fT[b] = Infinity;
+            fState[b] = 0;
+            fTile[b] = y < 0 || y >= GH ? -1 : y * GW + ((((x0 + (b % S)) % GW) + GW) % GW);
+            const v = fTile[b] < 0 ? 0 : e[fTile[b]];
+            fSlow[b] = v < 0 ? waveTicks(v) : 0;
+        }
         const keys = [];
         const vals = [];
-        best[origin] = 0;
-        walked[origin] = 0;
-        heading[origin] = 0;
-        heapPush(keys, vals, 0, origin);
+        const o = R * S + R;
+        for (let dy = -SE.WAVE_FMM_INIT; dy <= SE.WAVE_FMM_INIT; dy++) {
+            for (let dx = -SE.WAVE_FMM_INIT; dx <= SE.WAVE_FMM_INIT; dx++) {
+                const d = Math.hypot(dx, dy);
+                const b = o + dy * S + dx;
+                if (d > SE.WAVE_FMM_INIT || fSlow[b] === 0)
+                    continue;
+                fT[b] = d * fSlow[o];
+                fL[b] = d;
+                fState[b] = 1;
+                heapPush(keys, vals, fT[b], b);
+            }
+        }
+        const order = [];
         while (keys.length > 0) {
             const t = keys[0];
             const i = vals[0];
             heapPop(keys, vals);
-            if (settled[i] || t > best[i])
+            if (fState[i] === 2 || t > fT[i])
                 continue;
-            settled[i] = 1;
-            wave.tiles.push(i);
-            wave.arrival.push(Math.round(t * 100) / 100);
-            wave.path.push(Math.round(walked[i] * 10) / 10);
-            wave.heading.push(heading[i]);
+            fState[i] = 2;
+            order.push(i);
+            const ix = i % S;
+            const iy = (i / S) | 0;
             for (let k = 0; k < 8; k++) {
-                const j = SE.hazardNeighbour(i, k);
-                if (j < 0 || e[j] >= 0 || settled[j])
+                const jx = ix + NX[k];
+                const jy = iy + NY[k];
+                if (jx < 0 || jy < 0 || jx >= S || jy >= S)
                     continue;
-                const step = SE.HAZARD_NX[k] !== 0 && SE.HAZARD_NY[k] !== 0 ? Math.SQRT2 : 1;
-                const w = walked[i] + step;
-                if (w > SE.WAVE_PATH_MAX)
+                const j = jy * S + jx;
+                if (fSlow[j] === 0 || fState[j] === 2)
                     continue;
-                const at = t + waveTicks(e[j]) * step;
-                if (at >= best[j])
+                for (let n = 0; n < 8; n++) {
+                    nT[n] = doneT(jx + NX[n], jy + NY[n]);
+                    nB[n] = (jy + NY[n]) * S + jx + NX[n];
+                }
+                // Axis pair W/E with N/S, diagonal pair NW/SE with NE/SW (NX / NY order).
+                const w = nT[3] <= nT[4] ? 3 : 4;
+                const ns = nT[1] <= nT[6] ? 1 : 6;
+                const nw = nT[0] <= nT[7] ? 0 : 7;
+                const ne = nT[2] <= nT[5] ? 2 : 5;
+                solvePair(nT[w], fL[nB[w]], nT[ns], fL[nB[ns]], fSlow[j], 1);
+                let bt = solvedT;
+                let bl = solvedL;
+                solvePair(nT[nw], fL[nB[nw]], nT[ne], fL[nB[ne]], fSlow[j], Math.SQRT2);
+                if (solvedT < bt) {
+                    bt = solvedT;
+                    bl = solvedL;
+                }
+                if (bl > pathMax || bt >= fT[j])
                     continue;
-                if (best[j] === Infinity)
-                    touched.push(j);
-                best[j] = at;
-                walked[j] = w;
-                heading[j] = k;
-                heapPush(keys, vals, at, j);
+                fT[j] = bt;
+                fL[j] = bl;
+                fState[j] = 1;
+                heapPush(keys, vals, bt, j);
             }
         }
-        for (const i of touched) {
-            best[i] = Infinity;
-            settled[i] = 0;
+        const wave = {
+            tiles: [], arrival: [], path: [], heading: [], runs: [], x0, y0,
+            at: new Float32Array(CELLS).fill(Infinity), energy: new Float32Array(CELLS), angle: new Float32Array(CELLS).fill(NaN),
+            coast: { tiles: [], at: [], energy: [] }, last: order.length > 0 ? fT[order[order.length - 1]] : 0,
+        };
+        for (const b of order) {
+            const bx = b % S;
+            const by = (b / S) | 0;
+            const t = fT[b];
+            const gx = slope(t, doneT(bx - 1, by), doneT(bx + 1, by));
+            const gy = slope(t, doneT(bx, by - 1), doneT(bx, by + 1));
+            const angle = gx === 0 && gy === 0 ? 0 : Math.atan2(gy, gx);
+            const energy = power * Math.pow(SE.WAVE_DECAY, fL[b]);
+            const i = fTile[b];
+            wave.at[b] = t;
+            wave.energy[b] = energy;
+            wave.angle[b] = angle;
+            wave.tiles.push(i);
+            wave.arrival.push(t);
+            wave.path.push(fL[b]);
+            wave.heading.push(OCTANT_DIR[((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8]);
+            const rim = bx === 0 || by === 0 || bx === S - 1 || by === S - 1;
+            if (rim ? !touchesLand(world, i) : !besideLand(b))
+                continue;
+            wave.coast.tiles.push(i);
+            wave.coast.at.push(t);
+            wave.coast.energy.push(energy);
         }
         return wave;
     }
@@ -27111,7 +27325,7 @@ var SE;
     SE.HAZARD_RULES[SE.EventKind.TidalWave] = {
         refuse: (world, x, y) => (world.elevation[SE.idx(x, y)] < 0 ? '' : 'Eine Flutwelle beginnt im Meer.'),
         start(world, h) {
-            h.wave = arrivalField(world, SE.idx(h.x, h.y));
+            h.wave = arrivalField(world, h.x, h.y, h.strength ?? 1);
         },
         step(world, h) {
             const wave = h.wave;
@@ -27125,18 +27339,22 @@ var SE;
             if (gone > 0)
                 for (const list of [wave.tiles, wave.arrival, wave.path, wave.heading])
                     list.splice(0, gone);
+            // Tick a commits the coast the wave reaches in [a-1, a); the screen plays that window one tick behind.
+            const c = wave.coast;
             const coast = [];
             const height = [];
-            for (let k = 0; k < wave.arrival.length && wave.arrival[k] < a; k++) {
-                if (wave.arrival[k] < a - 1 || !touchesLand(world, wave.tiles[k]))
+            const at = [];
+            for (let k = 0; k < c.at.length && c.at[k] < a; k++) {
+                if (c.at[k] < a - 1)
                     continue;
-                coast.push(wave.tiles[k]);
-                height.push(SE.WAVE_HEIGHT * (h.strength ?? 1) * Math.pow(SE.WAVE_DECAY, wave.path[k]));
+                coast.push(c.tiles[k]);
+                height.push(SE.WAVE_HEIGHT * c.energy[k]);
+                at.push(c.at[k]);
             }
-            SE.hazardRunUp(wave.runs, coast, height);
+            SE.hazardRunUp(world, h, coast, height, at);
             SE.hazardStepFloods(world, wave.runs);
-            const last = wave.arrival.length > 0 ? wave.arrival[wave.arrival.length - 1] : -1;
-            return last >= a || wave.runs.length > 0;
+            // The foam trail behind the last front fades for WAVE_TRAIL_TICKS on screen.
+            return a - 1 <= wave.last + SE.WAVE_TRAIL_TICKS || wave.runs.length > 0;
         },
         finish(world, h) {
             const wave = h.wave;
@@ -27229,7 +27447,7 @@ var SE;
         st.path.push(to);
         const sea = world.elevation[to] < 0;
         if (world.elevation[from] < 0 && !sea && st.strength >= SE.HURRICANE_SURGE_MIN)
-            surge(world, st, to);
+            surge(world, h, st, to);
         if (world.elevation[from] < 0 && !sea && st.strength >= SE.TORNADO_MIN_STRENGTH)
             SE.hazardSpawnTornadoes(world, h, st.tornadoes, from, to);
         const warm = world.temperature[to] >= SE.HURRICANE_WARM_SEA;
@@ -27244,7 +27462,7 @@ var SE;
             st.moving = false;
     }
     /** Landfall: the sea around the eye runs up the coast HURRICANE_SURGE × strength high. */
-    function surge(world, st, eye) {
+    function surge(world, h, st, eye) {
         const coast = [];
         const height = [];
         const ex = eye % SE.GRID_W;
@@ -27261,7 +27479,7 @@ var SE;
                 height.push(SE.HURRICANE_SURGE * st.strength);
             }
         }
-        SE.hazardRunUp(st.runs, coast, height);
+        SE.hazardRunUp(world, h, coast, height);
     }
     SE.HAZARD_RULES[SE.EventKind.Hurricane] = {
         refuse: () => '',
@@ -33073,8 +33291,8 @@ var SE;
  * -----------------------------------------------------------------------------
  * When the compositor has finished a rectangle of tiles, it hands the index
  * buffer here once. Two things are read off it:
- *   - surf: the baked foam line off every coast (ring 1) and the two water
- *     rows beyond it (rings 2 and 3), each pixel with the colour it takes
+ *   - surf: the baked foam line off every coast (ring 1) and the four water
+ *     rows beyond it (rings 2 to 5; the ambient swell uses 1–3), each pixel with the colour it takes
  *     when the swell reaches it, its phase on a smooth field along the coast
  *     and a hash threshold. Coasts of ice and snow — sea ice, glaciers —
  *     have no surf.
@@ -33091,7 +33309,7 @@ var SE;
     const PHASE_SPREAD = 1.6;
     /** Phase units per cycle in the packed surf word. */
     SE.SURF_PHASE_STEPS = 128;
-    SE.NO_LAND_MOTION = { w: 0, surfAt: new Uint32Array(0), surf: new Uint32Array(0), river: null };
+    SE.NO_LAND_MOTION = { w: 0, surfAt: new Uint32Array(0), surf: new Uint32Array(0), river: null, sea: null };
     let rings = new Uint8Array(0);
     let atOut = new Uint32Array(0);
     let infoOut = new Uint32Array(0);
@@ -33152,11 +33370,11 @@ var SE;
             iced(o - 2) || iced(o + 2) || iced(o - 2 * w) || iced(o + 2 * w) ||
             iced(o - w - 1) || iced(o - w + 1) || iced(o + w - 1) || iced(o + w + 1);
         const front = [];
-        // Ring 1 two pixels around the tiles too, so rings 2 and 3 reach their edge.
-        const x0 = Math.max(1, pad - 2);
-        const x1 = Math.min(w - 1, pad + iw + 2);
-        const y0 = Math.max(1, pad - 2);
-        const y1 = Math.min(h - 1, pad + ih + 2);
+        // Ring 1 four pixels around the tiles too, so the outer rings reach their edge.
+        const x0 = Math.max(1, pad - 4);
+        const x1 = Math.min(w - 1, pad + iw + 4);
+        const y0 = Math.max(1, pad - 4);
+        const y1 = Math.min(h - 1, pad + ih + 4);
         for (const base of shores) {
             // The shore pass reaches two pixels past its cell.
             const cx = base % w;
@@ -33172,6 +33390,15 @@ var SE;
                     rings[o] = 1;
                     front.push(o);
                 }
+            }
+        }
+        let sea = null;
+        for (let y = 0; y < ih; y++) {
+            for (let x = 0, o = (pad + y) * w + pad; x < iw; x++, o++) {
+                if (water[o] !== 1)
+                    continue;
+                sea = sea ?? new Uint8Array(iw * ih);
+                sea[y * iw + x] = px[o];
             }
         }
         let river = null;
@@ -33200,7 +33427,7 @@ var SE;
                 }
             }
         }
-        // Rings 2 and 3: open water next to the ring before, inside the buffer's one-pixel frame.
+        // Rings 2 to 5: open water next to the ring before, inside the buffer's one-pixel frame.
         const grow = (n, ring) => {
             const nx = n % w;
             if (nx < 1 || nx >= w - 1 || n < w || n >= w * (h - 1))
@@ -33210,7 +33437,7 @@ var SE;
             rings[n] = ring;
             front.push(n);
         };
-        for (let ring = 2, from = 0; ring <= 3; ring++) {
+        for (let ring = 2, from = 0; ring <= 5; ring++) {
             const to = front.length;
             for (let k = from; k < to; k++) {
                 const o = front[k];
@@ -33246,7 +33473,7 @@ var SE;
             atOut[n] = x | (y << 16);
             infoOut[n++] = color | (ring << 8) | (phase << 16) | (threshold << 24);
         }
-        return { w: iw, surfAt: atOut.slice(0, n), surf: infoOut.slice(0, n), river };
+        return { w: iw, surfAt: atOut.slice(0, n), surf: infoOut.slice(0, n), river, sea };
     }
     SE.collectLandMotion = collectLandMotion;
 })(SE || (SE = {}));
@@ -33921,7 +34148,9 @@ var SE;
             /** The last draw ran out of time: some chunks are stale or missing, draw again. */
             this.pending = false;
             this.deadline = Infinity;
+            /** One flat colour per tile of the whole planet (overview()), rebuilt after the field changed. */
             this.flat = null;
+            this.flatFresh = false;
             /** Tiles the brush changed lately (x may run past the wrap), and when it last did. */
             this.brushBox = null;
             this.brushAt = -Infinity;
@@ -33969,6 +34198,7 @@ var SE;
             this.fieldKey = key;
             this.fieldWorld = world;
             this.field.refresh(world);
+            this.flatFresh = false;
             if (oceans) {
                 this.seaColor = null;
             }
@@ -34008,6 +34238,7 @@ var SE;
                 return true;
             }
             const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
+            this.flatFresh = false;
             const now = performance.now();
             const b = this.brushBox;
             if (b && now - this.brushAt < FADE_WINDOW_MS) {
@@ -34200,30 +34431,42 @@ var SE;
         }
         /** A chunk not composed yet: one flat colour per tile, from its ground or water depth. */
         drawFlat(ctx, cu, cy, cam) {
+            const flat = this.overview();
+            if (!flat)
+                return;
+            const T = cam.tilePx * cam.dpr;
+            const sx = (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X) * SE.LAND_CHUNK;
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(flat, sx, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, (cu * SE.LAND_CHUNK - cam.scrollX) * T, (cy * SE.LAND_CHUNK - cam.scrollY) * T, SE.LAND_CHUNK * T, SE.LAND_CHUNK * T);
+        }
+        /**
+         * The whole planet at one pixel per tile, one flat colour each from its
+         * ground or water depth: what shows where no chunk has been composed yet.
+         */
+        overview() {
             const art = this.art;
             if (!art)
-                return;
+                return null;
+            if (this.flat && this.flatFresh)
+                return this.flat;
             const flat = this.flat ?? (this.flat = document.createElement('canvas'));
-            flat.width = flat.height = SE.LAND_CHUNK;
+            flat.width = SE.GRID_W;
+            flat.height = SE.GRID_H;
             const fctx = flat.getContext('2d');
             if (!fctx)
-                return;
-            const image = fctx.createImageData(SE.LAND_CHUNK, SE.LAND_CHUNK);
+                return null;
+            const image = fctx.createImageData(SE.GRID_W, SE.GRID_H);
             const words = new Uint32Array(image.data.buffer);
             const f = this.field;
-            for (let y = 0; y < SE.LAND_CHUNK; y++) {
-                for (let x = 0; x < SE.LAND_CHUNK; x++) {
-                    const i = (cy * SE.LAND_CHUNK + y) * SE.GRID_W + SE.wrapX(cu * SE.LAND_CHUNK + x);
-                    const key = f.key[i];
-                    words[y * SE.LAND_CHUNK + x] = art.rgba[key === 0
-                        ? art.water[Math.min(SE.LAND_SHALLOW, Math.round(f.depth[i]))]
-                        : art.ground[SE.landKeyRank(key)][SE.landKeyDensity(key)].px[0]];
-                }
+            for (let i = 0; i < SE.TILE_COUNT; i++) {
+                const key = f.key[i];
+                words[i] = art.rgba[key === 0
+                    ? art.water[Math.min(SE.LAND_SHALLOW, Math.round(f.depth[i]))]
+                    : art.ground[SE.landKeyRank(key)][SE.landKeyDensity(key)].px[0]];
             }
             fctx.putImageData(image, 0, 0);
-            const T = cam.tilePx * cam.dpr;
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(flat, (cu * SE.LAND_CHUNK - cam.scrollX) * T, (cy * SE.LAND_CHUNK - cam.scrollY) * T, SE.LAND_CHUNK * T, SE.LAND_CHUNK * T);
+            this.flatFresh = true;
+            return flat;
         }
         /** One chunk region, art pixels (sx, sy, sw, sh) from the chunk corner, to device pixels. */
         blit(ctx, src, mode, k, sx, sy, sw, sh, dx, dy, dw, dh) {
@@ -34335,21 +34578,28 @@ var SE;
         return { width, height, left, top, pixels };
     }
     SE.composeExaminedTile = composeExaminedTile;
-    function examineTilePicture(world, x, y) {
+    /** `creature`: the animal standing here, a 32 px sprite; the ground is then doubled so it shows as on the map at 32 px per tile. */
+    function examineTilePicture(world, x, y, creature = null) {
         const land = SE.PixelTerrain.shared();
         if (SE.TERRAIN_STYLE !== 'pixel' || !land.ready || !land.art)
             return null;
         land.ensure(world);
         const tile = composeExaminedTile(land.art, land.field, x, y);
+        const k = creature ? 2 : 1;
         const canvas = document.createElement('canvas');
-        canvas.width = tile.width;
-        canvas.height = tile.height;
+        canvas.width = tile.width * k;
+        canvas.height = tile.height * k;
         const ctx = canvas.getContext('2d');
         if (!ctx)
             return null;
         const image = ctx.createImageData(tile.width, tile.height);
         new Uint32Array(image.data.buffer).set(tile.pixels);
         ctx.putImageData(image, 0, 0);
+        if (creature) {
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(canvas, 0, 0, tile.width, tile.height, 0, 0, canvas.width, canvas.height);
+            ctx.drawImage(creature, -tile.left * k, -tile.top * k);
+        }
         const scale = Math.max(1, Math.min(8, Math.floor(136 / tile.width), Math.floor(152 / tile.height)));
         canvas.style.width = `${tile.width * scale}px`;
         canvas.style.height = `${tile.height * scale}px`;
@@ -35414,6 +35664,7 @@ var SE;
             return 0;
         return FLAT + (1 - FLAT) * SE.clamp((high - CLIFF_LOW) / (CLIFF_HIGH - CLIFF_LOW), 0, 1);
     }
+    SE.sprayStrength = sprayStrength;
     /** Chance that a big wave throws spray at a site of this strength. */
     function sprayChance(strength) {
         return CHANCE_FLAT + (CHANCE_CLIFF - CHANCE_FLAT) * strength;
@@ -35633,6 +35884,9 @@ var SE;
                             continue;
                         const info = m.surf[k];
                         const ring = (info >>> 8) & 255;
+                        // Rings 4–5 are the tidal wave's (fxshore.ts), as is all surf where one works the coast.
+                        if (ring > 3 || SE.shoreBusy[ty * SE.GRID_W + SE.wrapX(tx)])
+                            continue;
                         const color = surfColor(ring, swell[(ring === 3 ? 256 : 0) + ((info >>> 16) & 255)], (info >>> 24) / 256, info & 255, this.ice);
                         if (color < 0 || WaterMotion.city(world, tx, ty))
                             continue;
@@ -35645,6 +35899,8 @@ var SE;
                         const x = cu * CHUNK_PX + (at & 0xffff);
                         const y = cy * CHUNK_PX + (at >>> 16);
                         if (x >> 4 < tx0 || x >> 4 >= tx1 || y >> 4 < ty0 || y >> 4 >= ty1 || WaterMotion.city(world, x >> 4, y >> 4))
+                            continue;
+                        if (SE.shoreBusy[(y >> 4) * SE.GRID_W + SE.wrapX(x >> 4)])
                             continue;
                         // Spray rides the crests of the main swell, on big waves only: when the second swell is high too.
                         const f = ((m.surf[k] >>> 16) & 255) / SE.SURF_PHASE_STEPS;
@@ -35863,6 +36119,11 @@ var SE;
                 this.edited = false;
             }
         }
+        /** The marker standing on tile i, if any. */
+        markerOn(i) {
+            const a = this.at[i];
+            return a === 0 ? null : this.markers[a - 1];
+        }
         /** One tick of wandering: some markers step to a neighbouring tile of their class, some turn round. */
         step(world, now, rand = Math.random) {
             const slow = this.still ? STILL_FACTOR : 1;
@@ -35903,7 +36164,7 @@ var SE;
                 ys[k] = ry;
                 gx[k] = sx;
                 gy[k] = sy;
-                order[k] = this.rare[m.c] ? m.rank - 1 : m.rank;
+                order[k] = m.pinned ? m.rank - 2 : this.rare[m.c] ? m.rank - 1 : m.rank;
                 ids[n++] = k;
             }
             // Rare classes first, then by rank, each a gap away from those already in. The gap
@@ -35921,10 +36182,10 @@ var SE;
                 const k = shown[v];
                 const cx = Math.floor(gx[k] / cell) + 4;
                 const cy = Math.floor(gy[k] / cell) + 4;
-                if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || this.crowded(k, cx, cy, gw, gap))
+                const m = ms[k];
+                if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || (!m.pinned && this.crowded(k, cx, cy, gw, gap)))
                     continue;
                 grid[cy * gw + cx] = k + 1;
-                const m = ms[k];
                 const pic = tiles.life(m.c, m.stage, SE.animalSpecialist(regions, world, m.tile, m.c, m.stage), m.flip);
                 const py = Math.round(ys[k] * size);
                 for (let x = xs[k]; x < cols; x += SE.GRID_W)
@@ -35957,8 +36218,10 @@ var SE;
             for (let k = ms.length - 1; k >= 0; k--) {
                 const m = ms[k];
                 const at = m.tile * SE.LIFE_COUNT + m.c;
-                if (world.lifeDensity[at] < HERD_KEEP_DENSITY || nearCity(world, m.tile) ||
-                    world.isWater(m.tile) !== (this.sea[m.c] === 1)) {
+                const gone = m.pinned
+                    ? world.lifeDensity[at] <= 0 || world.lifeStage[at] !== m.stage
+                    : world.lifeDensity[at] < HERD_KEEP_DENSITY || nearCity(world, m.tile);
+                if (gone || world.isWater(m.tile) !== (this.sea[m.c] === 1)) {
                     this.remove(k);
                 }
                 else {
@@ -35975,10 +36238,10 @@ var SE;
                 this.at[last.tile] = k + 1;
             }
         }
-        add(world, c, tile, rand) {
+        add(world, c, tile, rand, pinned = false) {
             this.markers.push({
                 c, tile, stage: world.lifeStage[tile * SE.LIFE_COUNT + c], flip: rand() < 0.5,
-                dx: 0, dy: 0, since: -Infinity, rank: rand(),
+                dx: 0, dy: 0, since: -Infinity, rank: rand(), pinned,
             });
             this.at[tile] = this.markers.length;
         }
@@ -35997,6 +36260,8 @@ var SE;
                         continue;
                     const j = SE.idx(SE.wrapX(x + dx), y + dy);
                     if (!this.fits(world, m.c, j, self))
+                        continue;
+                    if (m.pinned && world.lifeStage[j * SE.LIFE_COUNT + m.c] !== m.stage)
                         continue;
                     seen++;
                     if (rand() * seen < 1) {
@@ -36106,7 +36371,7 @@ var SE;
                 const m = ms[k];
                 const c = m.c;
                 const crowded = isMicrobe(c) && have[c] > QUOTA_MARKERS && this.nearAnimal(m.tile % SE.GRID_W, (m.tile / SE.GRID_W) | 0);
-                if (crowded || (drop[c] > 0 && rand() * left[c] < drop[c])) {
+                if (!m.pinned && (crowded || (drop[c] > 0 && rand() * left[c] < drop[c]))) {
                     if (drop[c] > 0)
                         drop[c]--;
                     have[c]--;
@@ -36127,8 +36392,51 @@ var SE;
                 if (have[c] < QUOTA_MARKERS && counts[c] >= QUOTA_MIN_TILES)
                     this.place(world, c, QUOTA_MARKERS, false, rand);
             }
+            // Every living sub-species keeps one creature of its own on the map.
+            for (let c = 1; c < SE.LIFE_COUNT; c++) {
+                for (let s = 0; s < SE.SUBSPECIES_PER_CLASS; s++) {
+                    if (world.lifeStageCounts[c * SE.SUBSPECIES_PER_CLASS + s] > 0)
+                        this.pin(world, c, s, rand);
+                }
+            }
             for (let c = 1; c < SE.LIFE_COUNT; c++)
                 this.rare[c] = have[c] <= RARE_MARKERS ? 1 : 0;
+        }
+        /**
+         * The creature standing for sub-species (c, stage): an existing one, or a
+         * new one on its densest tile, preferring tiles away from cities and other
+         * creatures. Returns its tile, -1 if the sub-species doesn't live.
+         */
+        pin(world, c, stage, rand = Math.random) {
+            const ms = this.markers;
+            const own = ms.find((m) => m.c === c && m.stage === stage && m.pinned) ?? ms.find((m) => m.c === c && m.stage === stage);
+            if (own) {
+                own.pinned = true;
+                return own.tile;
+            }
+            let best = -1;
+            let bestScore = 0;
+            for (let i = 0; i < SE.TILE_COUNT; i++) {
+                const li = i * SE.LIFE_COUNT + c;
+                const d = world.lifeDensity[li];
+                if (d <= 0 || world.lifeStage[li] !== stage || world.isWater(i) !== (this.sea[c] === 1))
+                    continue;
+                const a = this.at[i];
+                if (a !== 0 && ms[a - 1].pinned)
+                    continue;
+                const far = !nearCity(world, i);
+                const score = d + (far ? 2 : 0) + (far && this.free(i % SE.GRID_W, (i / SE.GRID_W) | 0, 0) ? 2 : 0);
+                if (score > bestScore) {
+                    best = i;
+                    bestScore = score;
+                }
+            }
+            if (best < 0)
+                return -1;
+            if (this.at[best] !== 0)
+                this.remove(this.at[best] - 1);
+            this.add(world, c, best, rand, true);
+            return best;
         }
         /**
          * Add markers of class `c` on random tiles it lives on until it has `target`.
@@ -36164,7 +36472,7 @@ var SE;
                         if (a === 0)
                             continue;
                         const c = this.markers[a - 1].c;
-                        if (pass === 0 && this.have[c] <= QUOTA_MARKERS + 1)
+                        if (pass === 0 && (this.markers[a - 1].pinned || this.have[c] <= QUOTA_MARKERS + 1))
                             return false;
                         if (pass === 1) {
                             this.have[c]--;
@@ -37554,8 +37862,8 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    SE.FX_MANIFEST = { "version": 1, "width": 768, "height": 512, "sprites": { "smoke_puff": { "name": "Rauchwölkchen", "w": 8, "h": 8, "fps": 8, "loop": 4, "layer": "top", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 616, "y": 492, "w": 8, "h": 8 }, { "x": 624, "y": 492, "w": 8, "h": 8 }, { "x": 632, "y": 492, "w": 8, "h": 8 }, { "x": 640, "y": 492, "w": 8, "h": 8 }] }, "steam_puff": { "name": "Dampfwolke", "w": 16, "h": 16, "fps": 8, "loop": 4, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 624, "y": 476, "w": 16, "h": 16 }, { "x": 640, "y": 476, "w": 16, "h": 16 }, { "x": 656, "y": 476, "w": 16, "h": 16 }, { "x": 672, "y": 476, "w": 16, "h": 16 }] }, "volcano_column": { "name": "Ausbruchssäule mit Lavafontäne", "w": 32, "h": 48, "fps": 10, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 224, "w": 32, "h": 48 }, { "x": 32, "y": 224, "w": 32, "h": 48 }, { "x": 64, "y": 224, "w": 32, "h": 48 }, { "x": 96, "y": 224, "w": 32, "h": 48 }, { "x": 128, "y": 224, "w": 32, "h": 48 }, { "x": 160, "y": 224, "w": 32, "h": 48 }, { "x": 192, "y": 224, "w": 32, "h": 48 }, { "x": 224, "y": 224, "w": 32, "h": 48 }] }, "ash_cloud": { "name": "Aschewolke", "w": 48, "h": 32, "fps": 6, "loop": 4, "layer": "top", "ax": 24, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 256, "y": 224, "w": 48, "h": 32 }, { "x": 304, "y": 224, "w": 48, "h": 32 }, { "x": 352, "y": 224, "w": 48, "h": 32 }, { "x": 400, "y": 224, "w": 48, "h": 32 }, { "x": 448, "y": 224, "w": 48, "h": 32 }, { "x": 496, "y": 224, "w": 48, "h": 32 }, { "x": 544, "y": 224, "w": 48, "h": 32 }] }, "crater_glow": { "name": "Glühender Lavasee im Krater", "w": 16, "h": 16, "fps": 6, "loop": 4, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 560, "y": 476, "w": 16, "h": 16 }, { "x": 576, "y": 476, "w": 16, "h": 16 }, { "x": 592, "y": 476, "w": 16, "h": 16 }, { "x": 608, "y": 476, "w": 16, "h": 16 }] }, "lava_splash": { "name": "Lavaspritzer", "w": 8, "h": 8, "fps": 10, "loop": 4, "layer": "object", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 584, "y": 492, "w": 8, "h": 8 }, { "x": 592, "y": 492, "w": 8, "h": 8 }, { "x": 600, "y": 492, "w": 8, "h": 8 }, { "x": 608, "y": 492, "w": 8, "h": 8 }] }, "flame_small": { "name": "Flamme, klein", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 456, "w": 16, "h": 20 }, { "x": 16, "y": 456, "w": 16, "h": 20 }, { "x": 32, "y": 456, "w": 16, "h": 20 }, { "x": 48, "y": 456, "w": 16, "h": 20 }, { "x": 64, "y": 456, "w": 16, "h": 20 }, { "x": 80, "y": 456, "w": 16, "h": 20 }] }, "flame_medium": { "name": "Flamme, mittel", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 672, "y": 432, "w": 16, "h": 20 }, { "x": 688, "y": 432, "w": 16, "h": 20 }, { "x": 704, "y": 432, "w": 16, "h": 20 }, { "x": 720, "y": 432, "w": 16, "h": 20 }, { "x": 736, "y": 432, "w": 16, "h": 20 }, { "x": 752, "y": 432, "w": 16, "h": 20 }] }, "flame_large": { "name": "Flamme, groß", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 576, "y": 432, "w": 16, "h": 20 }, { "x": 592, "y": 432, "w": 16, "h": 20 }, { "x": 608, "y": 432, "w": 16, "h": 20 }, { "x": 624, "y": 432, "w": 16, "h": 20 }, { "x": 640, "y": 432, "w": 16, "h": 20 }, { "x": 656, "y": 432, "w": 16, "h": 20 }] }, "smoke_plume": { "name": "Rauchfahne, aufrecht", "w": 16, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 368, "y": 272, "w": 16, "h": 32 }, { "x": 384, "y": 272, "w": 16, "h": 32 }, { "x": 400, "y": 272, "w": 16, "h": 32 }, { "x": 416, "y": 272, "w": 16, "h": 32 }, { "x": 432, "y": 272, "w": 16, "h": 32 }, { "x": 448, "y": 272, "w": 16, "h": 32 }] }, "smoke_plume_east": { "name": "Rauchfahne, nach Osten geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 592, "y": 224, "w": 24, "h": 32 }, { "x": 616, "y": 224, "w": 24, "h": 32 }, { "x": 640, "y": 224, "w": 24, "h": 32 }, { "x": 664, "y": 224, "w": 24, "h": 32 }, { "x": 688, "y": 224, "w": 24, "h": 32 }, { "x": 712, "y": 224, "w": 24, "h": 32 }] }, "smoke_plume_west": { "name": "Rauchfahne, nach Westen geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 272, "w": 24, "h": 32 }, { "x": 24, "y": 272, "w": 24, "h": 32 }, { "x": 48, "y": 272, "w": 24, "h": 32 }, { "x": 72, "y": 272, "w": 24, "h": 32 }, { "x": 96, "y": 272, "w": 24, "h": 32 }, { "x": 120, "y": 272, "w": 24, "h": 32 }] }, "charred_trunk": { "name": "Verkohlter Stamm", "w": 8, "h": 16, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 492, "w": 8, "h": 16 }, { "x": 8, "y": 492, "w": 8, "h": 16 }, { "x": 16, "y": 492, "w": 8, "h": 16 }] }, "meteor_streak": { "name": "Feuerschweif", "w": 32, "h": 32, "fps": 12, "loop": 4, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 144, "y": 272, "w": 32, "h": 32 }, { "x": 176, "y": 272, "w": 32, "h": 32 }, { "x": 208, "y": 272, "w": 32, "h": 32 }, { "x": 240, "y": 272, "w": 32, "h": 32 }] }, "flash": { "name": "Örtlicher Blitz (Frames 0, 1) und Feuerball ohne Weiß (2)", "w": 32, "h": 32, "fps": 12, "loop": 3, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 272, "y": 272, "w": 32, "h": 32 }, { "x": 304, "y": 272, "w": 32, "h": 32 }, { "x": 336, "y": 272, "w": 32, "h": 32 }] }, "dust_cloud": { "name": "Staubwolke", "w": 48, "h": 48, "fps": 6, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 128, "w": 48, "h": 48 }, { "x": 48, "y": 128, "w": 48, "h": 48 }, { "x": 96, "y": 128, "w": 48, "h": 48 }, { "x": 144, "y": 128, "w": 48, "h": 48 }, { "x": 192, "y": 128, "w": 48, "h": 48 }, { "x": 240, "y": 128, "w": 48, "h": 48 }, { "x": 288, "y": 128, "w": 48, "h": 48 }, { "x": 336, "y": 128, "w": 48, "h": 48 }] }, "mushroom": { "name": "Pilzwolke", "w": 32, "h": 48, "fps": 6, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 384, "y": 176, "w": 32, "h": 48 }, { "x": 416, "y": 176, "w": 32, "h": 48 }, { "x": 448, "y": 176, "w": 32, "h": 48 }, { "x": 480, "y": 176, "w": 32, "h": 48 }, { "x": 512, "y": 176, "w": 32, "h": 48 }, { "x": 544, "y": 176, "w": 32, "h": 48 }, { "x": 576, "y": 176, "w": 32, "h": 48 }, { "x": 608, "y": 176, "w": 32, "h": 48 }] }, "water_fountain": { "name": "Wasserfontäne", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 560, "y": 272, "w": 16, "h": 32 }, { "x": 576, "y": 272, "w": 16, "h": 32 }, { "x": 592, "y": 272, "w": 16, "h": 32 }, { "x": 608, "y": 272, "w": 16, "h": 32 }, { "x": 624, "y": 272, "w": 16, "h": 32 }, { "x": 640, "y": 272, "w": 16, "h": 32 }] }, "crater_rim": { "name": "Kraterrand (frisch, verwittert)", "w": 24, "h": 16, "fps": 0, "loop": 2, "layer": "object", "ax": 12, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 688, "y": 476, "w": 24, "h": 16 }, { "x": 712, "y": 476, "w": 24, "h": 16 }] }, "stump": { "name": "Versengter Stumpf", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 672, "y": 492, "w": 8, "h": 8 }, { "x": 680, "y": 492, "w": 8, "h": 8 }, { "x": 688, "y": 492, "w": 8, "h": 8 }] }, "wave_deep": { "name": "Wellenkamm, tief: 8 Richtungen × 4 Frames", "w": 16, "h": 8, "fps": 8, "loop": 32, "layer": "object", "ax": 8, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 24, "y": 492, "w": 16, "h": 8 }, { "x": 40, "y": 492, "w": 16, "h": 8 }, { "x": 56, "y": 492, "w": 16, "h": 8 }, { "x": 72, "y": 492, "w": 16, "h": 8 }, { "x": 88, "y": 492, "w": 16, "h": 8 }, { "x": 104, "y": 492, "w": 16, "h": 8 }, { "x": 120, "y": 492, "w": 16, "h": 8 }, { "x": 136, "y": 492, "w": 16, "h": 8 }, { "x": 152, "y": 492, "w": 16, "h": 8 }, { "x": 168, "y": 492, "w": 16, "h": 8 }, { "x": 184, "y": 492, "w": 16, "h": 8 }, { "x": 200, "y": 492, "w": 16, "h": 8 }, { "x": 216, "y": 492, "w": 16, "h": 8 }, { "x": 232, "y": 492, "w": 16, "h": 8 }, { "x": 248, "y": 492, "w": 16, "h": 8 }, { "x": 264, "y": 492, "w": 16, "h": 8 }, { "x": 280, "y": 492, "w": 16, "h": 8 }, { "x": 296, "y": 492, "w": 16, "h": 8 }, { "x": 312, "y": 492, "w": 16, "h": 8 }, { "x": 328, "y": 492, "w": 16, "h": 8 }, { "x": 344, "y": 492, "w": 16, "h": 8 }, { "x": 360, "y": 492, "w": 16, "h": 8 }, { "x": 376, "y": 492, "w": 16, "h": 8 }, { "x": 392, "y": 492, "w": 16, "h": 8 }, { "x": 408, "y": 492, "w": 16, "h": 8 }, { "x": 424, "y": 492, "w": 16, "h": 8 }, { "x": 440, "y": 492, "w": 16, "h": 8 }, { "x": 456, "y": 492, "w": 16, "h": 8 }, { "x": 472, "y": 492, "w": 16, "h": 8 }, { "x": 488, "y": 492, "w": 16, "h": 8 }, { "x": 504, "y": 492, "w": 16, "h": 8 }, { "x": 520, "y": 492, "w": 16, "h": 8 }] }, "wave_coast": { "name": "Wellenkamm, küstennah: 8 Richtungen × 4 Frames", "w": 16, "h": 16, "fps": 8, "loop": 32, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 144, "y": 456, "w": 16, "h": 16 }, { "x": 160, "y": 456, "w": 16, "h": 16 }, { "x": 176, "y": 456, "w": 16, "h": 16 }, { "x": 192, "y": 456, "w": 16, "h": 16 }, { "x": 208, "y": 456, "w": 16, "h": 16 }, { "x": 224, "y": 456, "w": 16, "h": 16 }, { "x": 240, "y": 456, "w": 16, "h": 16 }, { "x": 256, "y": 456, "w": 16, "h": 16 }, { "x": 272, "y": 456, "w": 16, "h": 16 }, { "x": 288, "y": 456, "w": 16, "h": 16 }, { "x": 304, "y": 456, "w": 16, "h": 16 }, { "x": 320, "y": 456, "w": 16, "h": 16 }, { "x": 336, "y": 456, "w": 16, "h": 16 }, { "x": 352, "y": 456, "w": 16, "h": 16 }, { "x": 368, "y": 456, "w": 16, "h": 16 }, { "x": 384, "y": 456, "w": 16, "h": 16 }, { "x": 400, "y": 456, "w": 16, "h": 16 }, { "x": 416, "y": 456, "w": 16, "h": 16 }, { "x": 432, "y": 456, "w": 16, "h": 16 }, { "x": 448, "y": 456, "w": 16, "h": 16 }, { "x": 464, "y": 456, "w": 16, "h": 16 }, { "x": 480, "y": 456, "w": 16, "h": 16 }, { "x": 496, "y": 456, "w": 16, "h": 16 }, { "x": 512, "y": 456, "w": 16, "h": 16 }, { "x": 528, "y": 456, "w": 16, "h": 16 }, { "x": 544, "y": 456, "w": 16, "h": 16 }, { "x": 560, "y": 456, "w": 16, "h": 16 }, { "x": 576, "y": 456, "w": 16, "h": 16 }, { "x": 592, "y": 456, "w": 16, "h": 16 }, { "x": 608, "y": 456, "w": 16, "h": 16 }, { "x": 624, "y": 456, "w": 16, "h": 16 }, { "x": 640, "y": 456, "w": 16, "h": 16 }] }, "wave_break": { "name": "Brechende Welle: 8 Richtungen × 6 Frames", "w": 16, "h": 24, "fps": 10, "loop": 48, "layer": "object", "ax": 8, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 336, "w": 16, "h": 24 }, { "x": 16, "y": 336, "w": 16, "h": 24 }, { "x": 32, "y": 336, "w": 16, "h": 24 }, { "x": 48, "y": 336, "w": 16, "h": 24 }, { "x": 64, "y": 336, "w": 16, "h": 24 }, { "x": 80, "y": 336, "w": 16, "h": 24 }, { "x": 96, "y": 336, "w": 16, "h": 24 }, { "x": 112, "y": 336, "w": 16, "h": 24 }, { "x": 128, "y": 336, "w": 16, "h": 24 }, { "x": 144, "y": 336, "w": 16, "h": 24 }, { "x": 160, "y": 336, "w": 16, "h": 24 }, { "x": 176, "y": 336, "w": 16, "h": 24 }, { "x": 192, "y": 336, "w": 16, "h": 24 }, { "x": 208, "y": 336, "w": 16, "h": 24 }, { "x": 224, "y": 336, "w": 16, "h": 24 }, { "x": 240, "y": 336, "w": 16, "h": 24 }, { "x": 256, "y": 336, "w": 16, "h": 24 }, { "x": 272, "y": 336, "w": 16, "h": 24 }, { "x": 288, "y": 336, "w": 16, "h": 24 }, { "x": 304, "y": 336, "w": 16, "h": 24 }, { "x": 320, "y": 336, "w": 16, "h": 24 }, { "x": 336, "y": 336, "w": 16, "h": 24 }, { "x": 352, "y": 336, "w": 16, "h": 24 }, { "x": 368, "y": 336, "w": 16, "h": 24 }, { "x": 384, "y": 336, "w": 16, "h": 24 }, { "x": 400, "y": 336, "w": 16, "h": 24 }, { "x": 416, "y": 336, "w": 16, "h": 24 }, { "x": 432, "y": 336, "w": 16, "h": 24 }, { "x": 448, "y": 336, "w": 16, "h": 24 }, { "x": 464, "y": 336, "w": 16, "h": 24 }, { "x": 480, "y": 336, "w": 16, "h": 24 }, { "x": 496, "y": 336, "w": 16, "h": 24 }, { "x": 512, "y": 336, "w": 16, "h": 24 }, { "x": 528, "y": 336, "w": 16, "h": 24 }, { "x": 544, "y": 336, "w": 16, "h": 24 }, { "x": 560, "y": 336, "w": 16, "h": 24 }, { "x": 576, "y": 336, "w": 16, "h": 24 }, { "x": 592, "y": 336, "w": 16, "h": 24 }, { "x": 608, "y": 336, "w": 16, "h": 24 }, { "x": 624, "y": 336, "w": 16, "h": 24 }, { "x": 640, "y": 336, "w": 16, "h": 24 }, { "x": 656, "y": 336, "w": 16, "h": 24 }, { "x": 672, "y": 336, "w": 16, "h": 24 }, { "x": 688, "y": 336, "w": 16, "h": 24 }, { "x": 704, "y": 336, "w": 16, "h": 24 }, { "x": 720, "y": 336, "w": 16, "h": 24 }, { "x": 736, "y": 336, "w": 16, "h": 24 }, { "x": 752, "y": 336, "w": 16, "h": 24 }] }, "hurricane": { "name": "Wirbelsturm, Nordhalbkugel", "w": 48, "h": 48, "fps": 8, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 384, "y": 128, "w": 48, "h": 48 }, { "x": 432, "y": 128, "w": 48, "h": 48 }, { "x": 480, "y": 128, "w": 48, "h": 48 }, { "x": 528, "y": 128, "w": 48, "h": 48 }, { "x": 576, "y": 128, "w": 48, "h": 48 }, { "x": 624, "y": 128, "w": 48, "h": 48 }, { "x": 672, "y": 128, "w": 48, "h": 48 }, { "x": 720, "y": 128, "w": 48, "h": 48 }] }, "hurricane_south": { "name": "Wirbelsturm, Südhalbkugel", "w": 48, "h": 48, "fps": 8, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 176, "w": 48, "h": 48 }, { "x": 48, "y": 176, "w": 48, "h": 48 }, { "x": 96, "y": 176, "w": 48, "h": 48 }, { "x": 144, "y": 176, "w": 48, "h": 48 }, { "x": 192, "y": 176, "w": 48, "h": 48 }, { "x": 240, "y": 176, "w": 48, "h": 48 }, { "x": 288, "y": 176, "w": 48, "h": 48 }, { "x": 336, "y": 176, "w": 48, "h": 48 }] }, "tornado": { "name": "Tornado-Trichter", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 464, "y": 272, "w": 16, "h": 32 }, { "x": 480, "y": 272, "w": 16, "h": 32 }, { "x": 496, "y": 272, "w": 16, "h": 32 }, { "x": 512, "y": 272, "w": 16, "h": 32 }, { "x": 528, "y": 272, "w": 16, "h": 32 }, { "x": 544, "y": 272, "w": 16, "h": 32 }] }, "storm_small": { "name": "Sich formender Sturm, Nordhalbkugel", "w": 32, "h": 32, "fps": 4, "loop": 2, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 656, "y": 272, "w": 32, "h": 32 }, { "x": 688, "y": 272, "w": 32, "h": 32 }] }, "storm_small_south": { "name": "Sich formender Sturm, Südhalbkugel", "w": 32, "h": 32, "fps": 4, "loop": 2, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 304, "w": 32, "h": 32 }, { "x": 32, "y": 304, "w": 32, "h": 32 }] }, "fallen_tree": { "name": "Umgestürzter Baum", "w": 16, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 536, "y": 492, "w": 16, "h": 8 }, { "x": 552, "y": 492, "w": 16, "h": 8 }, { "x": 568, "y": 492, "w": 16, "h": 8 }] }, "driftwood": { "name": "Treibgut", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 648, "y": 492, "w": 8, "h": 8 }, { "x": 656, "y": 492, "w": 8, "h": 8 }, { "x": 664, "y": 492, "w": 8, "h": 8 }] }, "dust_puff": { "name": "Staubwölkchen", "w": 16, "h": 16, "fps": 10, "loop": 5, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 480, "y": 476, "w": 16, "h": 16 }, { "x": 496, "y": 476, "w": 16, "h": 16 }, { "x": 512, "y": 476, "w": 16, "h": 16 }, { "x": 528, "y": 476, "w": 16, "h": 16 }, { "x": 544, "y": 476, "w": 16, "h": 16 }] }, "rubble": { "name": "Trümmer über einer Stadt", "w": 16, "h": 16, "fps": 4, "loop": 2, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 736, "y": 476, "w": 16, "h": 16 }, { "x": 752, "y": 476, "w": 16, "h": 16 }] }, "fissure": { "name": "Erdriss, flach: 4 Richtungen (−, |, /, \\) × Mitte, Ende, Abzweigung", "w": 16, "h": 16, "fps": 0, "loop": 12, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 288, "y": 476, "w": 16, "h": 16 }, { "x": 304, "y": 476, "w": 16, "h": 16 }, { "x": 320, "y": 476, "w": 16, "h": 16 }, { "x": 336, "y": 476, "w": 16, "h": 16 }, { "x": 352, "y": 476, "w": 16, "h": 16 }, { "x": 368, "y": 476, "w": 16, "h": 16 }, { "x": 384, "y": 476, "w": 16, "h": 16 }, { "x": 400, "y": 476, "w": 16, "h": 16 }, { "x": 416, "y": 476, "w": 16, "h": 16 }, { "x": 432, "y": 476, "w": 16, "h": 16 }, { "x": 448, "y": 476, "w": 16, "h": 16 }, { "x": 464, "y": 476, "w": 16, "h": 16 }] }, "ruin": { "name": "Ruine", "w": 16, "h": 20, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 96, "y": 456, "w": 16, "h": 20 }, { "x": 112, "y": 456, "w": 16, "h": 20 }, { "x": 128, "y": 456, "w": 16, "h": 20 }] }, "whale_great": { "name": "Blauwal: 2 Richtungen × 8 Frames", "w": 48, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 24, "ay": 12, "anchor": "center", "mouth": [40, 12, 45, 13, 8, 13], "frames": [{ "x": 0, "y": 360, "w": 48, "h": 24 }, { "x": 48, "y": 360, "w": 48, "h": 24 }, { "x": 96, "y": 360, "w": 48, "h": 24 }, { "x": 144, "y": 360, "w": 48, "h": 24 }, { "x": 192, "y": 360, "w": 48, "h": 24 }, { "x": 240, "y": 360, "w": 48, "h": 24 }, { "x": 288, "y": 360, "w": 48, "h": 24 }, { "x": 336, "y": 360, "w": 48, "h": 24 }, { "x": 384, "y": 360, "w": 48, "h": 24 }, { "x": 432, "y": 360, "w": 48, "h": 24 }, { "x": 480, "y": 360, "w": 48, "h": 24 }, { "x": 528, "y": 360, "w": 48, "h": 24 }, { "x": 576, "y": 360, "w": 48, "h": 24 }, { "x": 624, "y": 360, "w": 48, "h": 24 }, { "x": 672, "y": 360, "w": 48, "h": 24 }, { "x": 720, "y": 360, "w": 48, "h": 24 }] }, "whale_baleen": { "name": "Buckelwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [30, 10, 35, 11, 8, 11], "frames": [{ "x": 0, "y": 384, "w": 40, "h": 24 }, { "x": 40, "y": 384, "w": 40, "h": 24 }, { "x": 80, "y": 384, "w": 40, "h": 24 }, { "x": 120, "y": 384, "w": 40, "h": 24 }, { "x": 160, "y": 384, "w": 40, "h": 24 }, { "x": 200, "y": 384, "w": 40, "h": 24 }, { "x": 240, "y": 384, "w": 40, "h": 24 }, { "x": 280, "y": 384, "w": 40, "h": 24 }, { "x": 320, "y": 384, "w": 40, "h": 24 }, { "x": 360, "y": 384, "w": 40, "h": 24 }, { "x": 400, "y": 384, "w": 40, "h": 24 }, { "x": 440, "y": 384, "w": 40, "h": 24 }, { "x": 480, "y": 384, "w": 40, "h": 24 }, { "x": 520, "y": 384, "w": 40, "h": 24 }, { "x": 560, "y": 384, "w": 40, "h": 24 }, { "x": 600, "y": 384, "w": 40, "h": 24 }] }, "whale_sperm": { "name": "Pottwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [37, 8, 37, 12, 8, 12], "frames": [{ "x": 0, "y": 408, "w": 40, "h": 24 }, { "x": 40, "y": 408, "w": 40, "h": 24 }, { "x": 80, "y": 408, "w": 40, "h": 24 }, { "x": 120, "y": 408, "w": 40, "h": 24 }, { "x": 160, "y": 408, "w": 40, "h": 24 }, { "x": 200, "y": 408, "w": 40, "h": 24 }, { "x": 240, "y": 408, "w": 40, "h": 24 }, { "x": 280, "y": 408, "w": 40, "h": 24 }, { "x": 320, "y": 408, "w": 40, "h": 24 }, { "x": 360, "y": 408, "w": 40, "h": 24 }, { "x": 400, "y": 408, "w": 40, "h": 24 }, { "x": 440, "y": 408, "w": 40, "h": 24 }, { "x": 480, "y": 408, "w": 40, "h": 24 }, { "x": 520, "y": 408, "w": 40, "h": 24 }, { "x": 560, "y": 408, "w": 40, "h": 24 }, { "x": 600, "y": 408, "w": 40, "h": 24 }] }, "whale_blow": { "name": "Blas eines Wals", "w": 24, "h": 24, "fps": 10, "loop": 8, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 384, "y": 432, "w": 24, "h": 24 }, { "x": 408, "y": 432, "w": 24, "h": 24 }, { "x": 432, "y": 432, "w": 24, "h": 24 }, { "x": 456, "y": 432, "w": 24, "h": 24 }, { "x": 480, "y": 432, "w": 24, "h": 24 }, { "x": 504, "y": 432, "w": 24, "h": 24 }, { "x": 528, "y": 432, "w": 24, "h": 24 }, { "x": 552, "y": 432, "w": 24, "h": 24 }] }, "whale_blow_sperm": { "name": "Blas des Pottwals, schräg nach vorn: 2 Richtungen × 8 Frames", "w": 24, "h": 24, "fps": 10, "loop": 16, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 432, "w": 24, "h": 24 }, { "x": 24, "y": 432, "w": 24, "h": 24 }, { "x": 48, "y": 432, "w": 24, "h": 24 }, { "x": 72, "y": 432, "w": 24, "h": 24 }, { "x": 96, "y": 432, "w": 24, "h": 24 }, { "x": 120, "y": 432, "w": 24, "h": 24 }, { "x": 144, "y": 432, "w": 24, "h": 24 }, { "x": 168, "y": 432, "w": 24, "h": 24 }, { "x": 192, "y": 432, "w": 24, "h": 24 }, { "x": 216, "y": 432, "w": 24, "h": 24 }, { "x": 240, "y": 432, "w": 24, "h": 24 }, { "x": 264, "y": 432, "w": 24, "h": 24 }, { "x": 288, "y": 432, "w": 24, "h": 24 }, { "x": 312, "y": 432, "w": 24, "h": 24 }, { "x": 336, "y": 432, "w": 24, "h": 24 }, { "x": 360, "y": 432, "w": 24, "h": 24 }] }, "whale_wake": { "name": "Bugwelle (Osten, Westen) und Fußabdruck-Ring", "w": 24, "h": 16, "fps": 8, "loop": 4, "layer": "object", "ax": 12, "ay": 8, "anchor": "center", "mouth": [18, 7], "frames": [{ "x": 0, "y": 476, "w": 24, "h": 16 }, { "x": 24, "y": 476, "w": 24, "h": 16 }, { "x": 48, "y": 476, "w": 24, "h": 16 }, { "x": 72, "y": 476, "w": 24, "h": 16 }, { "x": 96, "y": 476, "w": 24, "h": 16 }, { "x": 120, "y": 476, "w": 24, "h": 16 }, { "x": 144, "y": 476, "w": 24, "h": 16 }, { "x": 168, "y": 476, "w": 24, "h": 16 }, { "x": 192, "y": 476, "w": 24, "h": 16 }, { "x": 216, "y": 476, "w": 24, "h": 16 }, { "x": 240, "y": 476, "w": 24, "h": 16 }, { "x": 264, "y": 476, "w": 24, "h": 16 }] } }, "textures": { "lava_hot": { "name": "Lava, glühend", "size": 64, "fps": 8, "rim": [142, 47, 51], "frames": [{ "x": 256, "y": 0, "w": 64, "h": 64 }, { "x": 320, "y": 0, "w": 64, "h": 64 }, { "x": 384, "y": 0, "w": 64, "h": 64 }, { "x": 448, "y": 0, "w": 64, "h": 64 }] }, "lava_dim": { "name": "Lava, dunkelrot", "size": 64, "fps": 6, "rim": [63, 44, 39], "frames": [{ "x": 0, "y": 0, "w": 64, "h": 64 }, { "x": 64, "y": 0, "w": 64, "h": 64 }, { "x": 128, "y": 0, "w": 64, "h": 64 }, { "x": 192, "y": 0, "w": 64, "h": 64 }] }, "lava_crust": { "name": "Lavakruste mit Glutrissen", "size": 64, "fps": 3, "rim": [61, 59, 69], "frames": [{ "x": 0, "y": 64, "w": 64, "h": 64 }, { "x": 64, "y": 64, "w": 64, "h": 64 }] }, "embers": { "name": "Glut unter den Flammen", "size": 64, "fps": 4, "rim": [63, 44, 39], "frames": [{ "x": 512, "y": 0, "w": 64, "h": 64 }, { "x": 576, "y": 0, "w": 64, "h": 64 }] }, "ground_burnt": { "name": "Verbrannte Erde", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 256, "y": 64, "w": 64, "h": 64 }] }, "ground_crater": { "name": "Kraterboden", "size": 64, "fps": 0, "rim": [61, 59, 69], "frames": [{ "x": 320, "y": 64, "w": 64, "h": 64 }] }, "ground_scorched": { "name": "Versengter Boden", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 384, "y": 64, "w": 64, "h": 64 }] }, "ground_ash": { "name": "Asche", "size": 64, "fps": 0, "rim": [93, 90, 98], "frames": [{ "x": 192, "y": 64, "w": 64, "h": 64 }] }, "fallout_film": { "name": "Fahler Schleier (Fallout)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 128, "y": 64, "w": 64, "h": 64 }] }, "flood_water": { "name": "Flutwasser", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 640, "y": 0, "w": 64, "h": 64 }, { "x": 704, "y": 0, "w": 64, "h": 64 }] }, "wet_ground": { "name": "Nasser Boden (Pfützen)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 448, "y": 64, "w": 64, "h": 64 }] } } };
-    SE.FX_ATLAS_PNG = 'data:image/png;base64,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';
+    SE.FX_MANIFEST = { "version": 1, "width": 1024, "height": 408, "sprites": { "smoke_puff": { "name": "Rauchwölkchen", "w": 8, "h": 8, "fps": 8, "loop": 4, "layer": "top", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 872, "y": 392, "w": 8, "h": 8 }, { "x": 880, "y": 392, "w": 8, "h": 8 }, { "x": 888, "y": 392, "w": 8, "h": 8 }, { "x": 896, "y": 392, "w": 8, "h": 8 }] }, "steam_puff": { "name": "Dampfwolke", "w": 16, "h": 16, "fps": 8, "loop": 4, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 624, "y": 392, "w": 16, "h": 16 }, { "x": 640, "y": 392, "w": 16, "h": 16 }, { "x": 656, "y": 392, "w": 16, "h": 16 }, { "x": 672, "y": 392, "w": 16, "h": 16 }] }, "volcano_column": { "name": "Ausbruchssäule mit Lavafontäne", "w": 32, "h": 48, "fps": 10, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 176, "w": 32, "h": 48 }, { "x": 32, "y": 176, "w": 32, "h": 48 }, { "x": 64, "y": 176, "w": 32, "h": 48 }, { "x": 96, "y": 176, "w": 32, "h": 48 }, { "x": 128, "y": 176, "w": 32, "h": 48 }, { "x": 160, "y": 176, "w": 32, "h": 48 }, { "x": 192, "y": 176, "w": 32, "h": 48 }, { "x": 224, "y": 176, "w": 32, "h": 48 }] }, "ash_cloud": { "name": "Aschewolke", "w": 48, "h": 32, "fps": 6, "loop": 4, "layer": "top", "ax": 24, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 256, "y": 176, "w": 48, "h": 32 }, { "x": 304, "y": 176, "w": 48, "h": 32 }, { "x": 352, "y": 176, "w": 48, "h": 32 }, { "x": 400, "y": 176, "w": 48, "h": 32 }, { "x": 448, "y": 176, "w": 48, "h": 32 }, { "x": 496, "y": 176, "w": 48, "h": 32 }, { "x": 544, "y": 176, "w": 48, "h": 32 }] }, "crater_glow": { "name": "Glühender Lavasee im Krater", "w": 16, "h": 16, "fps": 6, "loop": 4, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 560, "y": 392, "w": 16, "h": 16 }, { "x": 576, "y": 392, "w": 16, "h": 16 }, { "x": 592, "y": 392, "w": 16, "h": 16 }, { "x": 608, "y": 392, "w": 16, "h": 16 }] }, "lava_splash": { "name": "Lavaspritzer", "w": 8, "h": 8, "fps": 10, "loop": 4, "layer": "object", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 840, "y": 392, "w": 8, "h": 8 }, { "x": 848, "y": 392, "w": 8, "h": 8 }, { "x": 856, "y": 392, "w": 8, "h": 8 }, { "x": 864, "y": 392, "w": 8, "h": 8 }] }, "flame_small": { "name": "Flamme, klein", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 384, "y": 352, "w": 16, "h": 20 }, { "x": 400, "y": 352, "w": 16, "h": 20 }, { "x": 416, "y": 352, "w": 16, "h": 20 }, { "x": 432, "y": 352, "w": 16, "h": 20 }, { "x": 448, "y": 352, "w": 16, "h": 20 }, { "x": 464, "y": 352, "w": 16, "h": 20 }] }, "flame_medium": { "name": "Flamme, mittel", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 288, "y": 352, "w": 16, "h": 20 }, { "x": 304, "y": 352, "w": 16, "h": 20 }, { "x": 320, "y": 352, "w": 16, "h": 20 }, { "x": 336, "y": 352, "w": 16, "h": 20 }, { "x": 352, "y": 352, "w": 16, "h": 20 }, { "x": 368, "y": 352, "w": 16, "h": 20 }] }, "flame_large": { "name": "Flamme, groß", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 192, "y": 352, "w": 16, "h": 20 }, { "x": 208, "y": 352, "w": 16, "h": 20 }, { "x": 224, "y": 352, "w": 16, "h": 20 }, { "x": 240, "y": 352, "w": 16, "h": 20 }, { "x": 256, "y": 352, "w": 16, "h": 20 }, { "x": 272, "y": 352, "w": 16, "h": 20 }] }, "smoke_plume": { "name": "Rauchfahne, aufrecht", "w": 16, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 96, "y": 224, "w": 16, "h": 32 }, { "x": 112, "y": 224, "w": 16, "h": 32 }, { "x": 128, "y": 224, "w": 16, "h": 32 }, { "x": 144, "y": 224, "w": 16, "h": 32 }, { "x": 160, "y": 224, "w": 16, "h": 32 }, { "x": 176, "y": 224, "w": 16, "h": 32 }] }, "smoke_plume_east": { "name": "Rauchfahne, nach Osten geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 592, "y": 176, "w": 24, "h": 32 }, { "x": 616, "y": 176, "w": 24, "h": 32 }, { "x": 640, "y": 176, "w": 24, "h": 32 }, { "x": 664, "y": 176, "w": 24, "h": 32 }, { "x": 688, "y": 176, "w": 24, "h": 32 }, { "x": 712, "y": 176, "w": 24, "h": 32 }] }, "smoke_plume_west": { "name": "Rauchfahne, nach Westen geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 736, "y": 176, "w": 24, "h": 32 }, { "x": 760, "y": 176, "w": 24, "h": 32 }, { "x": 784, "y": 176, "w": 24, "h": 32 }, { "x": 808, "y": 176, "w": 24, "h": 32 }, { "x": 832, "y": 176, "w": 24, "h": 32 }, { "x": 856, "y": 176, "w": 24, "h": 32 }] }, "charred_trunk": { "name": "Verkohlter Stamm", "w": 8, "h": 16, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 768, "y": 392, "w": 8, "h": 16 }, { "x": 776, "y": 392, "w": 8, "h": 16 }, { "x": 784, "y": 392, "w": 8, "h": 16 }] }, "meteor_streak": { "name": "Feuerschweif", "w": 32, "h": 32, "fps": 12, "loop": 4, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 880, "y": 176, "w": 32, "h": 32 }, { "x": 912, "y": 176, "w": 32, "h": 32 }, { "x": 944, "y": 176, "w": 32, "h": 32 }, { "x": 976, "y": 176, "w": 32, "h": 32 }] }, "flash": { "name": "Örtlicher Blitz (Frames 0, 1) und Feuerball ohne Weiß (2)", "w": 32, "h": 32, "fps": 12, "loop": 3, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 224, "w": 32, "h": 32 }, { "x": 32, "y": 224, "w": 32, "h": 32 }, { "x": 64, "y": 224, "w": 32, "h": 32 }] }, "dust_cloud": { "name": "Staubwolke", "w": 48, "h": 48, "fps": 6, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 640, "y": 64, "w": 48, "h": 48 }, { "x": 688, "y": 64, "w": 48, "h": 48 }, { "x": 736, "y": 64, "w": 48, "h": 48 }, { "x": 784, "y": 64, "w": 48, "h": 48 }, { "x": 832, "y": 64, "w": 48, "h": 48 }, { "x": 880, "y": 64, "w": 48, "h": 48 }, { "x": 928, "y": 64, "w": 48, "h": 48 }, { "x": 976, "y": 64, "w": 48, "h": 48 }] }, "mushroom": { "name": "Pilzwolke", "w": 32, "h": 48, "fps": 6, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 768, "y": 128, "w": 32, "h": 48 }, { "x": 800, "y": 128, "w": 32, "h": 48 }, { "x": 832, "y": 128, "w": 32, "h": 48 }, { "x": 864, "y": 128, "w": 32, "h": 48 }, { "x": 896, "y": 128, "w": 32, "h": 48 }, { "x": 928, "y": 128, "w": 32, "h": 48 }, { "x": 960, "y": 128, "w": 32, "h": 48 }, { "x": 992, "y": 128, "w": 32, "h": 48 }] }, "water_fountain": { "name": "Wasserfontäne", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 288, "y": 224, "w": 16, "h": 32 }, { "x": 304, "y": 224, "w": 16, "h": 32 }, { "x": 320, "y": 224, "w": 16, "h": 32 }, { "x": 336, "y": 224, "w": 16, "h": 32 }, { "x": 352, "y": 224, "w": 16, "h": 32 }, { "x": 368, "y": 224, "w": 16, "h": 32 }] }, "crater_rim": { "name": "Kraterrand (frisch, verwittert)", "w": 24, "h": 16, "fps": 0, "loop": 2, "layer": "object", "ax": 12, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 688, "y": 392, "w": 24, "h": 16 }, { "x": 712, "y": 392, "w": 24, "h": 16 }] }, "stump": { "name": "Versengter Stumpf", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 928, "y": 392, "w": 8, "h": 8 }, { "x": 936, "y": 392, "w": 8, "h": 8 }, { "x": 944, "y": 392, "w": 8, "h": 8 }] }, "wave_break": { "name": "Brechende Welle: 8 Richtungen × 6 Frames", "w": 16, "h": 16, "fps": 10, "loop": 48, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 376, "w": 16, "h": 16 }, { "x": 16, "y": 376, "w": 16, "h": 16 }, { "x": 32, "y": 376, "w": 16, "h": 16 }, { "x": 48, "y": 376, "w": 16, "h": 16 }, { "x": 64, "y": 376, "w": 16, "h": 16 }, { "x": 80, "y": 376, "w": 16, "h": 16 }, { "x": 96, "y": 376, "w": 16, "h": 16 }, { "x": 112, "y": 376, "w": 16, "h": 16 }, { "x": 128, "y": 376, "w": 16, "h": 16 }, { "x": 144, "y": 376, "w": 16, "h": 16 }, { "x": 160, "y": 376, "w": 16, "h": 16 }, { "x": 176, "y": 376, "w": 16, "h": 16 }, { "x": 192, "y": 376, "w": 16, "h": 16 }, { "x": 208, "y": 376, "w": 16, "h": 16 }, { "x": 224, "y": 376, "w": 16, "h": 16 }, { "x": 240, "y": 376, "w": 16, "h": 16 }, { "x": 256, "y": 376, "w": 16, "h": 16 }, { "x": 272, "y": 376, "w": 16, "h": 16 }, { "x": 288, "y": 376, "w": 16, "h": 16 }, { "x": 304, "y": 376, "w": 16, "h": 16 }, { "x": 320, "y": 376, "w": 16, "h": 16 }, { "x": 336, "y": 376, "w": 16, "h": 16 }, { "x": 352, "y": 376, "w": 16, "h": 16 }, { "x": 368, "y": 376, "w": 16, "h": 16 }, { "x": 384, "y": 376, "w": 16, "h": 16 }, { "x": 400, "y": 376, "w": 16, "h": 16 }, { "x": 416, "y": 376, "w": 16, "h": 16 }, { "x": 432, "y": 376, "w": 16, "h": 16 }, { "x": 448, "y": 376, "w": 16, "h": 16 }, { "x": 464, "y": 376, "w": 16, "h": 16 }, { "x": 480, "y": 376, "w": 16, "h": 16 }, { "x": 496, "y": 376, "w": 16, "h": 16 }, { "x": 512, "y": 376, "w": 16, "h": 16 }, { "x": 528, "y": 376, "w": 16, "h": 16 }, { "x": 544, "y": 376, "w": 16, "h": 16 }, { "x": 560, "y": 376, "w": 16, "h": 16 }, { "x": 576, "y": 376, "w": 16, "h": 16 }, { "x": 592, "y": 376, "w": 16, "h": 16 }, { "x": 608, "y": 376, "w": 16, "h": 16 }, { "x": 624, "y": 376, "w": 16, "h": 16 }, { "x": 640, "y": 376, "w": 16, "h": 16 }, { "x": 656, "y": 376, "w": 16, "h": 16 }, { "x": 672, "y": 376, "w": 16, "h": 16 }, { "x": 688, "y": 376, "w": 16, "h": 16 }, { "x": 704, "y": 376, "w": 16, "h": 16 }, { "x": 720, "y": 376, "w": 16, "h": 16 }, { "x": 736, "y": 376, "w": 16, "h": 16 }, { "x": 752, "y": 376, "w": 16, "h": 16 }] }, "hurricane": { "name": "Wirbelsturm, Nordhalbkugel", "w": 48, "h": 48, "fps": 8, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 128, "w": 48, "h": 48 }, { "x": 48, "y": 128, "w": 48, "h": 48 }, { "x": 96, "y": 128, "w": 48, "h": 48 }, { "x": 144, "y": 128, "w": 48, "h": 48 }, { "x": 192, "y": 128, "w": 48, "h": 48 }, { "x": 240, "y": 128, "w": 48, "h": 48 }, { "x": 288, "y": 128, "w": 48, "h": 48 }, { "x": 336, "y": 128, "w": 48, "h": 48 }] }, "hurricane_south": { "name": "Wirbelsturm, Südhalbkugel", "w": 48, "h": 48, "fps": 8, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 384, "y": 128, "w": 48, "h": 48 }, { "x": 432, "y": 128, "w": 48, "h": 48 }, { "x": 480, "y": 128, "w": 48, "h": 48 }, { "x": 528, "y": 128, "w": 48, "h": 48 }, { "x": 576, "y": 128, "w": 48, "h": 48 }, { "x": 624, "y": 128, "w": 48, "h": 48 }, { "x": 672, "y": 128, "w": 48, "h": 48 }, { "x": 720, "y": 128, "w": 48, "h": 48 }] }, "tornado": { "name": "Tornado-Trichter", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 192, "y": 224, "w": 16, "h": 32 }, { "x": 208, "y": 224, "w": 16, "h": 32 }, { "x": 224, "y": 224, "w": 16, "h": 32 }, { "x": 240, "y": 224, "w": 16, "h": 32 }, { "x": 256, "y": 224, "w": 16, "h": 32 }, { "x": 272, "y": 224, "w": 16, "h": 32 }] }, "storm_small": { "name": "Sich formender Sturm, Nordhalbkugel", "w": 32, "h": 32, "fps": 4, "loop": 2, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 384, "y": 224, "w": 32, "h": 32 }, { "x": 416, "y": 224, "w": 32, "h": 32 }] }, "storm_small_south": { "name": "Sich formender Sturm, Südhalbkugel", "w": 32, "h": 32, "fps": 4, "loop": 2, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 448, "y": 224, "w": 32, "h": 32 }, { "x": 480, "y": 224, "w": 32, "h": 32 }] }, "fallen_tree": { "name": "Umgestürzter Baum", "w": 16, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 792, "y": 392, "w": 16, "h": 8 }, { "x": 808, "y": 392, "w": 16, "h": 8 }, { "x": 824, "y": 392, "w": 16, "h": 8 }] }, "driftwood": { "name": "Treibgut", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 904, "y": 392, "w": 8, "h": 8 }, { "x": 912, "y": 392, "w": 8, "h": 8 }, { "x": 920, "y": 392, "w": 8, "h": 8 }] }, "dust_puff": { "name": "Staubwölkchen", "w": 16, "h": 16, "fps": 10, "loop": 5, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 480, "y": 392, "w": 16, "h": 16 }, { "x": 496, "y": 392, "w": 16, "h": 16 }, { "x": 512, "y": 392, "w": 16, "h": 16 }, { "x": 528, "y": 392, "w": 16, "h": 16 }, { "x": 544, "y": 392, "w": 16, "h": 16 }] }, "rubble": { "name": "Trümmer über einer Stadt", "w": 16, "h": 16, "fps": 4, "loop": 2, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 736, "y": 392, "w": 16, "h": 16 }, { "x": 752, "y": 392, "w": 16, "h": 16 }] }, "fissure": { "name": "Erdriss, flach: 4 Richtungen (−, |, /, \\) × Mitte, Ende, Abzweigung", "w": 16, "h": 16, "fps": 0, "loop": 12, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 288, "y": 392, "w": 16, "h": 16 }, { "x": 304, "y": 392, "w": 16, "h": 16 }, { "x": 320, "y": 392, "w": 16, "h": 16 }, { "x": 336, "y": 392, "w": 16, "h": 16 }, { "x": 352, "y": 392, "w": 16, "h": 16 }, { "x": 368, "y": 392, "w": 16, "h": 16 }, { "x": 384, "y": 392, "w": 16, "h": 16 }, { "x": 400, "y": 392, "w": 16, "h": 16 }, { "x": 416, "y": 392, "w": 16, "h": 16 }, { "x": 432, "y": 392, "w": 16, "h": 16 }, { "x": 448, "y": 392, "w": 16, "h": 16 }, { "x": 464, "y": 392, "w": 16, "h": 16 }] }, "ruin": { "name": "Ruine", "w": 16, "h": 20, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 480, "y": 352, "w": 16, "h": 20 }, { "x": 496, "y": 352, "w": 16, "h": 20 }, { "x": 512, "y": 352, "w": 16, "h": 20 }] }, "whale_great": { "name": "Blauwal: 2 Richtungen × 8 Frames", "w": 48, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 24, "ay": 12, "anchor": "center", "mouth": [40, 12, 45, 13, 8, 13], "frames": [{ "x": 0, "y": 280, "w": 48, "h": 24 }, { "x": 48, "y": 280, "w": 48, "h": 24 }, { "x": 96, "y": 280, "w": 48, "h": 24 }, { "x": 144, "y": 280, "w": 48, "h": 24 }, { "x": 192, "y": 280, "w": 48, "h": 24 }, { "x": 240, "y": 280, "w": 48, "h": 24 }, { "x": 288, "y": 280, "w": 48, "h": 24 }, { "x": 336, "y": 280, "w": 48, "h": 24 }, { "x": 384, "y": 280, "w": 48, "h": 24 }, { "x": 432, "y": 280, "w": 48, "h": 24 }, { "x": 480, "y": 280, "w": 48, "h": 24 }, { "x": 528, "y": 280, "w": 48, "h": 24 }, { "x": 576, "y": 280, "w": 48, "h": 24 }, { "x": 624, "y": 280, "w": 48, "h": 24 }, { "x": 672, "y": 280, "w": 48, "h": 24 }, { "x": 720, "y": 280, "w": 48, "h": 24 }] }, "whale_baleen": { "name": "Buckelwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [30, 10, 35, 11, 8, 11], "frames": [{ "x": 0, "y": 304, "w": 40, "h": 24 }, { "x": 40, "y": 304, "w": 40, "h": 24 }, { "x": 80, "y": 304, "w": 40, "h": 24 }, { "x": 120, "y": 304, "w": 40, "h": 24 }, { "x": 160, "y": 304, "w": 40, "h": 24 }, { "x": 200, "y": 304, "w": 40, "h": 24 }, { "x": 240, "y": 304, "w": 40, "h": 24 }, { "x": 280, "y": 304, "w": 40, "h": 24 }, { "x": 320, "y": 304, "w": 40, "h": 24 }, { "x": 360, "y": 304, "w": 40, "h": 24 }, { "x": 400, "y": 304, "w": 40, "h": 24 }, { "x": 440, "y": 304, "w": 40, "h": 24 }, { "x": 480, "y": 304, "w": 40, "h": 24 }, { "x": 520, "y": 304, "w": 40, "h": 24 }, { "x": 560, "y": 304, "w": 40, "h": 24 }, { "x": 600, "y": 304, "w": 40, "h": 24 }] }, "whale_sperm": { "name": "Pottwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [37, 8, 37, 12, 8, 12], "frames": [{ "x": 0, "y": 328, "w": 40, "h": 24 }, { "x": 40, "y": 328, "w": 40, "h": 24 }, { "x": 80, "y": 328, "w": 40, "h": 24 }, { "x": 120, "y": 328, "w": 40, "h": 24 }, { "x": 160, "y": 328, "w": 40, "h": 24 }, { "x": 200, "y": 328, "w": 40, "h": 24 }, { "x": 240, "y": 328, "w": 40, "h": 24 }, { "x": 280, "y": 328, "w": 40, "h": 24 }, { "x": 320, "y": 328, "w": 40, "h": 24 }, { "x": 360, "y": 328, "w": 40, "h": 24 }, { "x": 400, "y": 328, "w": 40, "h": 24 }, { "x": 440, "y": 328, "w": 40, "h": 24 }, { "x": 480, "y": 328, "w": 40, "h": 24 }, { "x": 520, "y": 328, "w": 40, "h": 24 }, { "x": 560, "y": 328, "w": 40, "h": 24 }, { "x": 600, "y": 328, "w": 40, "h": 24 }] }, "whale_blow": { "name": "Blas eines Wals", "w": 24, "h": 24, "fps": 10, "loop": 8, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 352, "w": 24, "h": 24 }, { "x": 24, "y": 352, "w": 24, "h": 24 }, { "x": 48, "y": 352, "w": 24, "h": 24 }, { "x": 72, "y": 352, "w": 24, "h": 24 }, { "x": 96, "y": 352, "w": 24, "h": 24 }, { "x": 120, "y": 352, "w": 24, "h": 24 }, { "x": 144, "y": 352, "w": 24, "h": 24 }, { "x": 168, "y": 352, "w": 24, "h": 24 }] }, "whale_blow_sperm": { "name": "Blas des Pottwals, schräg nach vorn: 2 Richtungen × 8 Frames", "w": 24, "h": 24, "fps": 10, "loop": 16, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 640, "y": 328, "w": 24, "h": 24 }, { "x": 664, "y": 328, "w": 24, "h": 24 }, { "x": 688, "y": 328, "w": 24, "h": 24 }, { "x": 712, "y": 328, "w": 24, "h": 24 }, { "x": 736, "y": 328, "w": 24, "h": 24 }, { "x": 760, "y": 328, "w": 24, "h": 24 }, { "x": 784, "y": 328, "w": 24, "h": 24 }, { "x": 808, "y": 328, "w": 24, "h": 24 }, { "x": 832, "y": 328, "w": 24, "h": 24 }, { "x": 856, "y": 328, "w": 24, "h": 24 }, { "x": 880, "y": 328, "w": 24, "h": 24 }, { "x": 904, "y": 328, "w": 24, "h": 24 }, { "x": 928, "y": 328, "w": 24, "h": 24 }, { "x": 952, "y": 328, "w": 24, "h": 24 }, { "x": 976, "y": 328, "w": 24, "h": 24 }, { "x": 1000, "y": 328, "w": 24, "h": 24 }] }, "whale_wake": { "name": "Bugwelle (Osten, Westen) und Fußabdruck-Ring", "w": 24, "h": 16, "fps": 8, "loop": 4, "layer": "object", "ax": 12, "ay": 8, "anchor": "center", "mouth": [18, 7], "frames": [{ "x": 0, "y": 392, "w": 24, "h": 16 }, { "x": 24, "y": 392, "w": 24, "h": 16 }, { "x": 48, "y": 392, "w": 24, "h": 16 }, { "x": 72, "y": 392, "w": 24, "h": 16 }, { "x": 96, "y": 392, "w": 24, "h": 16 }, { "x": 120, "y": 392, "w": 24, "h": 16 }, { "x": 144, "y": 392, "w": 24, "h": 16 }, { "x": 168, "y": 392, "w": 24, "h": 16 }, { "x": 192, "y": 392, "w": 24, "h": 16 }, { "x": 216, "y": 392, "w": 24, "h": 16 }, { "x": 240, "y": 392, "w": 24, "h": 16 }, { "x": 264, "y": 392, "w": 24, "h": 16 }] }, "dolphin_leap": { "name": "Delfinsprung: 2 Richtungen × 16 Frames", "w": 32, "h": 24, "fps": 12, "loop": 32, "layer": "object", "ax": 16, "ay": 12, "anchor": "center", "mouth": [6, 18], "frames": [{ "x": 0, "y": 256, "w": 32, "h": 24 }, { "x": 32, "y": 256, "w": 32, "h": 24 }, { "x": 64, "y": 256, "w": 32, "h": 24 }, { "x": 96, "y": 256, "w": 32, "h": 24 }, { "x": 128, "y": 256, "w": 32, "h": 24 }, { "x": 160, "y": 256, "w": 32, "h": 24 }, { "x": 192, "y": 256, "w": 32, "h": 24 }, { "x": 224, "y": 256, "w": 32, "h": 24 }, { "x": 256, "y": 256, "w": 32, "h": 24 }, { "x": 288, "y": 256, "w": 32, "h": 24 }, { "x": 320, "y": 256, "w": 32, "h": 24 }, { "x": 352, "y": 256, "w": 32, "h": 24 }, { "x": 384, "y": 256, "w": 32, "h": 24 }, { "x": 416, "y": 256, "w": 32, "h": 24 }, { "x": 448, "y": 256, "w": 32, "h": 24 }, { "x": 480, "y": 256, "w": 32, "h": 24 }, { "x": 512, "y": 256, "w": 32, "h": 24 }, { "x": 544, "y": 256, "w": 32, "h": 24 }, { "x": 576, "y": 256, "w": 32, "h": 24 }, { "x": 608, "y": 256, "w": 32, "h": 24 }, { "x": 640, "y": 256, "w": 32, "h": 24 }, { "x": 672, "y": 256, "w": 32, "h": 24 }, { "x": 704, "y": 256, "w": 32, "h": 24 }, { "x": 736, "y": 256, "w": 32, "h": 24 }, { "x": 768, "y": 256, "w": 32, "h": 24 }, { "x": 800, "y": 256, "w": 32, "h": 24 }, { "x": 832, "y": 256, "w": 32, "h": 24 }, { "x": 864, "y": 256, "w": 32, "h": 24 }, { "x": 896, "y": 256, "w": 32, "h": 24 }, { "x": 928, "y": 256, "w": 32, "h": 24 }, { "x": 960, "y": 256, "w": 32, "h": 24 }, { "x": 992, "y": 256, "w": 32, "h": 24 }] } }, "textures": { "lava_hot": { "name": "Lava, glühend", "size": 64, "fps": 8, "rim": [142, 47, 51], "frames": [{ "x": 256, "y": 0, "w": 64, "h": 64 }, { "x": 320, "y": 0, "w": 64, "h": 64 }, { "x": 384, "y": 0, "w": 64, "h": 64 }, { "x": 448, "y": 0, "w": 64, "h": 64 }] }, "lava_dim": { "name": "Lava, dunkelrot", "size": 64, "fps": 6, "rim": [63, 44, 39], "frames": [{ "x": 0, "y": 0, "w": 64, "h": 64 }, { "x": 64, "y": 0, "w": 64, "h": 64 }, { "x": 128, "y": 0, "w": 64, "h": 64 }, { "x": 192, "y": 0, "w": 64, "h": 64 }] }, "lava_crust": { "name": "Lavakruste mit Glutrissen", "size": 64, "fps": 3, "rim": [61, 59, 69], "frames": [{ "x": 128, "y": 64, "w": 64, "h": 64 }, { "x": 192, "y": 64, "w": 64, "h": 64 }] }, "embers": { "name": "Glut unter den Flammen", "size": 64, "fps": 4, "rim": [63, 44, 39], "frames": [{ "x": 512, "y": 0, "w": 64, "h": 64 }, { "x": 576, "y": 0, "w": 64, "h": 64 }] }, "ground_burnt": { "name": "Verbrannte Erde", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 384, "y": 64, "w": 64, "h": 64 }] }, "ground_crater": { "name": "Kraterboden", "size": 64, "fps": 0, "rim": [61, 59, 69], "frames": [{ "x": 448, "y": 64, "w": 64, "h": 64 }] }, "ground_scorched": { "name": "Versengter Boden", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 512, "y": 64, "w": 64, "h": 64 }] }, "ground_ash": { "name": "Asche", "size": 64, "fps": 0, "rim": [93, 90, 98], "frames": [{ "x": 320, "y": 64, "w": 64, "h": 64 }] }, "fallout_film": { "name": "Fahler Schleier (Fallout)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 256, "y": 64, "w": 64, "h": 64 }] }, "flood_mud": { "name": "Rückströmung, schlammig", "size": 64, "fps": 4, "rim": [125, 93, 67], "frames": [{ "x": 768, "y": 0, "w": 64, "h": 64 }, { "x": 832, "y": 0, "w": 64, "h": 64 }] }, "flood_shallow": { "name": "Flutwasser, flach und trüb", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 896, "y": 0, "w": 64, "h": 64 }, { "x": 960, "y": 0, "w": 64, "h": 64 }] }, "flood_water": { "name": "Flutwasser", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 0, "y": 64, "w": 64, "h": 64 }, { "x": 64, "y": 64, "w": 64, "h": 64 }] }, "flood_deep": { "name": "Flutwasser, tief", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 640, "y": 0, "w": 64, "h": 64 }, { "x": 704, "y": 0, "w": 64, "h": 64 }] }, "wet_ground": { "name": "Nasser Boden (Pfützen)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 576, "y": 64, "w": 64, "h": 64 }] } } };
+    SE.FX_ATLAS_PNG = 'data:image/png;base64,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';
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — the effect atlas on screen
@@ -37928,6 +38236,13 @@ var SE;
  * Composed per chunk of LAND_CHUNK × LAND_CHUNK tiles and per texture frame,
  * only again when the chunk's ground or objects change, and a chunk with no
  * moving layer only once.
+ *
+ * Flood water is composed for a run's whole plan when the run starts
+ * (hazardflood.ts), by depth: deep near the coast, shallow and silty inland,
+ * dissolving into muddy backwash the tick before it runs off. A copy of the picture then
+ * shows only what the water has reached: the flood and dry times of the
+ * tile centres, bilinear per art pixel with an ordered-dither fringe, a foam
+ * rim riding the moving edge and brown foam as the water falls back.
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -37939,6 +38254,9 @@ var SE;
      * its crust until the base has caught up; before, it would show the ground from before the flow.
      */
     let baseTick = -1;
+    /** Flood look per tile, from the runs' plans whenever the hazards change. */
+    const floodLook = new Uint8Array(SE.TILE_COUNT);
+    const floodIs = (look) => (_w, i) => floodLook[i] === look;
     const crustFlowing = lavaAt(2);
     const crustAt = (w, i) => {
         if (crustFlowing(w, i))
@@ -37962,7 +38280,9 @@ var SE;
         { tex: 'ground_burnt', has: scarGround(SE.ScarKind.Burnt) },
         { tex: 'ground_crater', has: scarGround(SE.ScarKind.Crater) },
         { tex: 'wet_ground', has: tileIs(SE.HazardTile.Wet) },
-        { tex: 'flood_water', has: tileIs(SE.HazardTile.Flood) },
+        { tex: 'flood_shallow', has: floodIs(1 /* FloodLook.Shallow */) },
+        { tex: 'flood_water', has: floodIs(2 /* FloodLook.Water */) },
+        { tex: 'flood_deep', has: floodIs(3 /* FloodLook.Deep */) },
         { tex: 'embers', has: tileIs(SE.HazardTile.Burning) },
         { tex: 'lava_crust', has: crustAt },
         { tex: 'lava_dim', has: lavaAt(1) },
@@ -37982,6 +38302,24 @@ var SE;
     const GRID = SE.LAND_CHUNK + 2;
     const CHUNKS_X = SE.GRID_W / SE.LAND_CHUNK;
     const LITTLE_ENDIAN = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+    /** Flood depth (hazard level, elevation × 1000) from which the water looks normal, and deep. */
+    const FLOOD_WATER_LEVEL = 12;
+    const FLOOD_DEEP_LEVEL = 30;
+    /** Ticks a tile stays composed after it dried: the map's base redraws at most every 250 ms. */
+    const FLOOD_KEEP = 3;
+    /** Fringe, foam rim, backwash and wet sheen, in ticks (the water runs up a tile a tick). */
+    const FRINGE = 0.12;
+    const FOAM_WHITE = 0.1;
+    const FOAM = 0.22;
+    const BACKWASH = 0.12;
+    const SHEEN = 0.35;
+    /** Ticks before it runs off in which the water dissolves into muddy backwash, and the dithered width of its dry edge. */
+    const MUD_TICKS = 1;
+    const DRY_AMP = 0.4;
+    /** A revealed picture is rebuilt at most this often, like the ambient surf (12 fps). */
+    const REVEAL_MS = 83;
+    /** Revealed pictures rebuilt per screen frame at most, besides ones shown for the first time. */
+    const REVEALS_PER_FRAME = 2;
     function word(rgb) {
         const [r, g, b] = rgb;
         return LITTLE_ENDIAN ? ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0 : ((r << 24) | (g << 16) | (b << 8) | 255) >>> 0;
@@ -38004,11 +38342,19 @@ var SE;
             this.present = null;
             this.activeSet = new Set();
             this.activeKey = '';
+            /** Per tile, relative to its hazard's age: when the water reaches it and when it has run off; NaN away from floods. */
+            this.floodAt = new Float32Array(SE.TILE_COUNT).fill(NaN);
+            this.dryAt = new Float32Array(SE.TILE_COUNT).fill(NaN);
+            /** World tick from which the map's base shows a flooded tile's mud. */
+            this.mudTick = new Float64Array(SE.TILE_COUNT);
+            this.floodTiles = [];
+            this.reveals = 0;
+            this.colors = null;
         }
         /** The ground layer key of a tile (1 + its index in GROUND_LAYERS), 0 for none. */
         keyOf(world, i) {
             const hz = world.hazards;
-            if (hz.tile[i] === 0 && hz.scar[i] === 0)
+            if (hz.tile[i] === 0 && hz.scar[i] === 0 && floodLook[i] === 0)
                 return 0;
             const present = this.present;
             for (let k = GROUND_LAYERS.length - 1; k >= 0; k--) {
@@ -38019,10 +38365,12 @@ var SE;
         }
         /** Chunks any hazard ground reaches into, as cy · CHUNKS_X + cx; found again when the hazards change. */
         active(world) {
-            const key = `${world.ticks}|${world.hazards.revision}|${world.hazards.generation}|${world.revision}`;
+            const ages = world.hazards.list.reduce((n, h) => n + h.age, 0);
+            const key = `${world.ticks}|${world.hazards.revision}|${world.hazards.generation}|${world.revision}|${ages}`;
             if (key === this.activeKey)
                 return this.activeSet;
             this.activeKey = key;
+            this.plans(world);
             const out = new Set();
             for (let i = 0; i < SE.TILE_COUNT; i++) {
                 if (this.keyOf(world, i) === 0)
@@ -38040,11 +38388,66 @@ var SE;
             return out;
         }
         /**
+         * Flood looks and times from every run's plan. Next to a plan the water
+         * comes from the sea half a tick earlier, reaches land that stays dry a
+         * tick later, and runs off the land first and the sea last.
+         */
+        plans(world) {
+            const { floodAt, dryAt, mudTick } = this;
+            for (const i of this.floodTiles) {
+                floodLook[i] = 0 /* FloodLook.None */;
+                floodAt[i] = dryAt[i] = NaN;
+                for (let k = 0; k < 8; k++) {
+                    const j = SE.hazardNeighbour(i, k);
+                    if (j >= 0)
+                        floodAt[j] = dryAt[j] = NaN;
+                }
+            }
+            const tiles = [];
+            for (const h of world.hazards.list) {
+                for (const run of h.wave?.runs ?? h.storm?.runs ?? []) {
+                    run.tiles.forEach((i, m) => {
+                        const off = run.off[m] - h.age;
+                        if (off <= -FLOOD_KEEP)
+                            return;
+                        const level = run.depth[m] * 1000;
+                        floodLook[i] = level < FLOOD_WATER_LEVEL ? 1 /* FloodLook.Shallow */ : level < FLOOD_DEEP_LEVEL ? 2 /* FloodLook.Water */ : 3 /* FloodLook.Deep */;
+                        floodAt[i] = run.at[m] - h.age;
+                        dryAt[i] = off;
+                        mudTick[i] = world.ticks - h.age + SE.floodDryTick(run.off[m]);
+                        tiles.push(i);
+                    });
+                }
+            }
+            const e = world.elevation;
+            for (const i of tiles) {
+                for (let k = 0; k < 8; k++) {
+                    const j = SE.hazardNeighbour(i, k);
+                    if (j < 0 || floodLook[j] !== 0 /* FloodLook.None */)
+                        continue;
+                    const sea = e[j] < 0;
+                    const f = floodAt[i] + (sea ? -0.5 : 1);
+                    const r = dryAt[i] + (sea ? 1 : -0.5);
+                    if (Number.isNaN(floodAt[j])) {
+                        floodAt[j] = f;
+                        dryAt[j] = r;
+                    }
+                    else {
+                        floodAt[j] = sea ? Math.min(floodAt[j], f) : Math.max(floodAt[j], f);
+                        dryAt[j] = sea ? Math.max(dryAt[j], r) : Math.min(dryAt[j], r);
+                    }
+                }
+            }
+            this.floodTiles = tiles;
+        }
+        /**
          * Draw the hazard ground in view (identity transform). `cities(x0, y0,
          * x1, y1)` redraws the cities over a device rectangle, since a city
-         * beside the flow stands in front of it too.
+         * beside the flow stands in front of it too. `phase` is how far the
+         * screen is from the last tick to the next (0..1); 1 shows each tick's
+         * flood whole.
          */
-        draw(ctx, cam, world, land, now, cities, base) {
+        draw(ctx, cam, world, land, now, cities, base, phase = 1) {
             baseTick = base;
             const art = SE.FxArt.shared();
             if (!art.ready || !land.art)
@@ -38061,6 +38464,9 @@ var SE;
             const s = T / 16;
             const g = Math.floor(now / FRAME_MS) % FRAMES;
             this.budget = COMPOSES_PER_FRAME;
+            this.reveals = REVEALS_PER_FRAME;
+            const muds = art.texture('flood_mud');
+            const mud = muds.length > 0 ? muds[Math.floor((g * muds.length) / FRAMES) % muds.length] : null;
             const cuA = Math.floor(cam.scrollX / SE.LAND_CHUNK);
             const cuB = Math.floor((cam.scrollX + ctx.canvas.width / T) / SE.LAND_CHUNK);
             const cyA = Math.max(0, Math.floor(cam.scrollY / SE.LAND_CHUNK));
@@ -38071,7 +38477,8 @@ var SE;
                     const n = cy * CHUNKS_X + cx;
                     if (!active.has(n))
                         continue;
-                    const canvas = this.chunk(world, land, art, cx, cy, g);
+                    const pic = this.chunk(world, land, art, cx, cy, g);
+                    const canvas = pic && (pic.flood ? this.reveal(pic, cx, cy, phase - 1, cam.tilePx >= 16, now, mud) : pic.canvas);
                     if (!canvas)
                         continue;
                     const wx = cu * SE.LAND_CHUNK * 16 - 8;
@@ -38119,10 +38526,10 @@ var SE;
             if (this.budget <= 0)
                 return c.frames.find((f) => f !== null) ?? c.stale;
             this.budget--;
-            const canvas = this.compose(land, art, tx0, ty0, g);
-            c.frames[g] = canvas;
-            c.stale = canvas;
-            return canvas;
+            const pic = this.compose(land, art, tx0, ty0, g);
+            c.frames[g] = pic;
+            c.stale = pic;
+            return pic;
         }
         compose(land, art, tx0, ty0, g) {
             const landArt = land.art;
@@ -38199,7 +38606,145 @@ var SE;
             if (!ctx)
                 return null;
             ctx.putImageData(this.image, 0, 0);
-            return canvas;
+            const first = GROUND_LAYERS.findIndex((l) => l.tex === 'flood_shallow') + 1;
+            let flood = null;
+            for (let b = 0; b < layer.length; b++) {
+                if (layer[b] < first || layer[b] > first + 2)
+                    continue;
+                flood ?? (flood = new Uint8Array(SIDE * SIDE));
+                flood[b] = this.objects[b] !== 0 ? 2 : 1;
+            }
+            return { canvas, flood, px: flood ? px.slice() : null, shown: null, shownAt: -Infinity, shownTau: NaN, shownSig: 0 };
+        }
+        /**
+         * The picture with only the water the floods have reached at `tau` (ticks
+         * relative to the hazards' age, -1..0): a dithered fringe and, with
+         * `detail`, the foam rim, the backwash and the wet sheen it leaves. The
+         * water dissolves into `mud` (a flood_mud frame) before it runs off.
+         */
+        reveal(pic, cx, cy, tau, detail, now, mud) {
+            if (pic.shown && (tau === pic.shownTau || now - pic.shownAt < REVEAL_MS || this.reveals <= 0))
+                return pic.shown;
+            const { floodAt, dryAt, mudTick } = this;
+            const flood = pic.flood;
+            const out = this.px;
+            out.set(pic.px);
+            const c = this.colors ?? (this.colors = Object.fromEntries([['white', 0], ['ice', 4], ['ice', 3], ['soil', 3], ['soil', 1]].map(([r, n]) => [r + n, word(SE.TERRAIN_MANIFEST.palette[SE.TERRAIN_MANIFEST.ramps[r][n]])])));
+            const amp = detail ? FRINGE : 0;
+            const tx0 = cx * SE.LAND_CHUNK;
+            const ty0 = cy * SE.LAND_CHUNK;
+            const F = [0, 0, 0, 0];
+            const R = [0, 0, 0, 0];
+            const C = [0, 0, 0, 0];
+            const mudSize = SE.FX_MANIFEST.textures.flood_mud?.size ?? 64;
+            let sig = 0x811c9dc5;
+            let partial = false;
+            for (let l = 0; l <= SE.LAND_CHUNK; l++) {
+                for (let k = 0; k <= SE.LAND_CHUNK; k++) {
+                    let live = false;
+                    let caught = true;
+                    let deep = false;
+                    for (let q = 0; q < 4; q++) {
+                        const i = SE.clampY(ty0 + l - 1 + (q >> 1)) * SE.GRID_W + SE.wrapX(tx0 + k - 1 + (q & 1));
+                        F[q] = floodAt[i];
+                        R[q] = dryAt[i];
+                        C[q] = 1;
+                        if (floodLook[i] === 0 /* FloodLook.None */)
+                            continue;
+                        live = true;
+                        if (baseTick < mudTick[i]) {
+                            caught = false;
+                            C[q] = 0;
+                        }
+                        if (floodLook[i] >= 2 /* FloodLook.Water */)
+                            deep = true;
+                    }
+                    const minF = Math.min(...F);
+                    const minR = Math.min(...R);
+                    // Cell state: 0 calm water, 1 hidden, 2 dried, 3 pixel by pixel.
+                    let state = 3;
+                    if (!live || Number.isNaN(minF + minR) || minF - amp / 2 > tau)
+                        state = 1;
+                    else if (caught && Math.max(...R) + DRY_AMP / 2 + SHEEN <= tau)
+                        state = 2;
+                    else if (Math.max(...F) + amp / 2 + FOAM <= tau && minR - DRY_AMP / 2 - Math.max(MUD_TICKS, BACKWASH) > tau)
+                        state = 0;
+                    sig = Math.imul(sig ^ state, 0x01000193);
+                    if (state === 0)
+                        continue;
+                    if (state === 3)
+                        partial = true;
+                    const wx = (tx0 + k - 1) * 16 + 8;
+                    const wy = (ty0 + l - 1) * 16 + 8;
+                    for (let ly = 0; ly < 16; ly++) {
+                        const fy = (ly + 0.5) / 16;
+                        const row = ((wy + ly) & (mudSize - 1)) * mudSize;
+                        let b = (l * 16 + ly) * SIDE + k * 16;
+                        for (let lx = 0; lx < 16; lx++, b++) {
+                            const kind = flood[b];
+                            if (kind === 0)
+                                continue;
+                            if (state !== 3) {
+                                out[b] = 0;
+                                continue;
+                            }
+                            const fx = (lx + 0.5) / 16;
+                            const w0 = (1 - fx) * (1 - fy);
+                            const w1 = fx * (1 - fy);
+                            const w2 = (1 - fx) * fy;
+                            const w3 = fx * fy;
+                            const bayer = SE.BAYER4[(ly & 3) * 4 + (lx & 3)];
+                            const dither = amp * (bayer - 0.5);
+                            const v = tau - (F[0] * w0 + F[1] * w1 + F[2] * w2 + F[3] * w3 + dither);
+                            if (v < 0) {
+                                out[b] = 0;
+                                continue;
+                            }
+                            const left = R[0] * w0 + R[1] * w1 + R[2] * w2 + R[3] * w3 - tau;
+                            const w = left + DRY_AMP * (bayer - 0.5);
+                            // The map shows the mud under this pixel: blended between the corners, dithered.
+                            const shows = C[0] * w0 + C[1] * w1 + C[2] * w2 + C[3] * w3 >= bayer;
+                            if (w <= 0 && shows) {
+                                // Dried: a wet sheen dissolves into the mud.
+                                out[b] = detail && bayer < 1 + w / SHEEN ? c.soil1 : 0;
+                                continue;
+                            }
+                            if (kind === 2)
+                                continue;
+                            // Before it runs off, the water dissolves into muddy backwash.
+                            if (mud && left < MUD_TICKS && bayer >= left / MUD_TICKS)
+                                out[b] = mud[row + ((wx + lx) & (mudSize - 1))];
+                            if (!detail)
+                                continue;
+                            if (v < FOAM_WHITE)
+                                out[b] = deep ? c.white0 : c.ice4;
+                            else if (v < FOAM && bayer < 0.5)
+                                out[b] = c.ice3;
+                            else if (w > 0 && w < BACKWASH)
+                                out[b] = bayer < 0.4 ? c.ice3 : c.soil3;
+                        }
+                    }
+                }
+            }
+            if (pic.shown && !partial && sig === pic.shownSig) {
+                pic.shownTau = tau;
+                return pic.shown;
+            }
+            if (pic.shown)
+                this.reveals--;
+            if (!this.image)
+                this.image = new ImageData(SIDE, SIDE);
+            new Uint32Array(this.image.data.buffer).set(out);
+            if (!pic.shown) {
+                pic.shown = document.createElement('canvas');
+                pic.shown.width = SIDE;
+                pic.shown.height = SIDE;
+            }
+            pic.shown.getContext('2d')?.putImageData(this.image, 0, 0);
+            pic.shownAt = now;
+            pic.shownTau = tau;
+            pic.shownSig = sig;
+            return pic.shown;
         }
         /** One pixel of each layer's rim where it meets plain ground; films have none. */
         rim() {
@@ -38264,7 +38809,10 @@ var SE;
             this.tops = [];
             this.shakes = [];
             this.rings = [];
+            this.seaMarks = [];
             this.now = 0;
+            /** How far the game is between two ticks, 0..1; the screen plays one tick behind the simulation. */
+            this.phase = 0;
             /** Seconds since the last frame. */
             this.dt = 0;
             /** "Effekte reduzieren": no shaking, no flashes. */
@@ -38336,6 +38884,8 @@ var SE;
             this.known = new Set();
             this.generation = -1;
             this.view = { x0: 0, y0: 0, x1: -1, y1: -1 };
+            /** When the simulation last ticked, to guess the tick phase when none is given. */
+            this.clock = { ticks: -1, at: 0, ms: 400 };
         }
         /**
          * Play the omen of `kind` at (x, y), then call `commit`, which starts the
@@ -38385,8 +38935,8 @@ var SE;
         spawn(t) {
             this.timed.push(t);
         }
-        /** Assemble this frame's scene. */
-        build(world, cam, cols, rows, now, dt, particles) {
+        /** Assemble this frame's scene; without `phase` it is guessed from when the ticks came. */
+        build(world, cam, cols, rows, now, dt, particles, phase) {
             if (world.hazards.generation !== this.generation) {
                 this.generation = world.hazards.generation;
                 this.staged.length = 0;
@@ -38403,6 +38953,7 @@ var SE;
             const s = new FxScene(particles, this);
             s.now = now;
             s.dt = dt;
+            s.phase = phase ?? this.guessPhase(world, now);
             s.reduce = this.reduce;
             s.pixel = (cam.tilePx * cam.dpr) / 16;
             s.zoomedOut = cam.tilePx < 16;
@@ -38453,6 +39004,16 @@ var SE;
             SE.fxMarkers(s, world);
             this.timedSprites(s, now, dt);
             return s;
+        }
+        guessPhase(world, now) {
+            const c = this.clock;
+            if (world.ticks !== c.ticks) {
+                if (world.ticks === c.ticks + 1)
+                    c.ms = SE.clamp(now - c.at, 60, 4000);
+                c.ticks = world.ticks;
+                c.at = now;
+            }
+            return SE.clamp((now - c.at) / c.ms, 0, 0.999);
         }
         timedSprites(s, now, dt) {
             for (let k = this.timed.length - 1; k >= 0; k--) {
@@ -39193,14 +39754,13 @@ var SE;
  * SimEarth 2.0 — tidal wave and hurricane on screen
  * -----------------------------------------------------------------------------
  * docs/ereignisse-spec.md §3.4, §3.5:
- *   tidal wave  omen: the sea draws back to the tile (light rings closing in,
- *               foam left behind); main: the first ring runs out two tiles;
- *               then a crest rides every leading front tile, gliding across
- *               it and drawn for the wave's heading there: low out at sea or
- *               with little energy left, steep over the shelf; where the
- *               front reaches the coast it breaks towards the land. Flood
- *               water and its foam rim are ground (fxground.ts), the
- *               driftwood in the mud a scar object.
+ *   tidal wave  omen: the sea draws back round the tile, foam left behind;
+ *               it fades as the wave sets out, the water heaping up where
+ *               it leaves. A wave set off by a quake starts as a dome of
+ *               water lifting, one from a meteor as a crater in the sea.
+ *               The travelling wave itself is the sea surface (fxseawave.ts),
+ *               its coast the shore (fxshore.ts); flood water is ground
+ *               (fxground.ts), the driftwood in the mud a scar object.
  *   hurricane   omen: a small spiral gathers, the first rain falls; then the
  *               spiral cloud with its eye turns over the eye's tile for as
  *               long as the storm moves, gliding between its tick positions
@@ -39210,38 +39770,14 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    const FOAM = [SE.fxColor('white', 0), SE.fxColor('water', 7), SE.fxColor('water', 6)];
     const RAIN = [SE.fxColor('ice', 4), SE.fxColor('ice', 3), SE.fxColor('ice', 2)];
-    const SEA_LIGHT = SE.fxColor('white', 0);
-    const SEA_FOAM = SE.fxColor('water', 7);
-    const SEA_DARK = SE.fxColor('water', 5);
-    /** Art pixels the first ring of a tidal wave runs out in its main animation: two tiles. */
-    const WAVE_RING = 32;
     /** Below this strength a storm shows as the small spiral. */
     const STORM_BIG = 1.5;
     /** Art pixels round the eye where rain falls, reaching past the cloud's edge, and streaks a second per strength. */
     const RAIN_RADIUS = 26;
     const RAIN_RATE = 30;
     const SPENT_MS = 800;
-    /** Directions a directed sprite holds one after another (tools/fx/catalog.js), in HAZARD_NX / HAZARD_NY order. */
-    const DIRECTIONS = 8;
-    /** Below this share of its energy a wave stays a low crest even over the shelf. */
-    const WAVE_COAST_ENERGY = 0.2;
-    /** Art pixels a breaker stands from its water tile's centre towards the land. */
-    const BREAK_SHIFT = 6;
     const DUST = [SE.fxColor('sand', 1), SE.fxColor('soil', 2), SE.fxColor('soil', 1)];
-    /** When the simulation last ticked, so the screen can move between two ticks in real time. */
-    const clock = { ticks: -1, at: 0, ms: 400 };
-    /** 0 right after a tick, 1 once the next one is due (and while the game is paused). */
-    function tickPhase(s, world) {
-        if (world.ticks !== clock.ticks) {
-            if (world.ticks === clock.ticks + 1)
-                clock.ms = SE.clamp(s.now - clock.at, 60, 4000);
-            clock.ticks = world.ticks;
-            clock.at = s.now;
-        }
-        return SE.clamp((s.now - clock.at) / clock.ms, 0, 1);
-    }
     /** How many of something that happens `rate` times a second fall into this frame. */
     function due(rate, dt) {
         const n = rate * dt;
@@ -39250,21 +39786,6 @@ var SE;
     function frameOf(id, now) {
         const sp = SE.FX_MANIFEST.sprites[id];
         return sp ? Math.floor(now / (1000 / Math.max(1, sp.fps))) % sp.loop : 0;
-    }
-    /** Frame `f` of direction d of a directed sprite. */
-    function directed(id, d, f) {
-        const sp = SE.FX_MANIFEST.sprites[id];
-        if (!sp)
-            return 0;
-        const per = sp.frames.length / DIRECTIONS;
-        return d * per + (f % per);
-    }
-    /** The direction index of a step (dx, dy) of −1, 0 or 1 each; -1 for none. */
-    function directionOf(dx, dy) {
-        for (let k = 0; k < 8; k++)
-            if (SE.HAZARD_NX[k] === dx && SE.HAZARD_NY[k] === dy)
-                return k;
-        return -1;
     }
     /** Rain streaks, two pixels falling together, over a disc round (x, y). */
     function rain(s, x, y, radius, rate) {
@@ -39278,159 +39799,57 @@ var SE;
             s.particles.spawn(px, py + 1, -10, 80, life, 0, RAIN);
         }
     }
-    /** Foam flecks on a ring of radius r round (x, y), drifting at `speed` art pixels a second (inwards when negative). */
-    function foam(s, x, y, r, speed, rate, life) {
-        for (let k = due(rate, s.dt); k > 0; k--) {
-            const a = Math.random() * Math.PI * 2;
-            const c = Math.cos(a);
-            const n = Math.sin(a);
-            s.particles.spawn(x + c * r, y + n * r, c * speed, n * speed, life * (0.7 + Math.random() * 0.6), 0, FOAM);
-        }
+    /** Art px radius of the drawdown round a tidal wave's origin, its omen `p` of the way. */
+    function drawRadius(p) {
+        return 4 + 12 * (1 - (1 - p) * (1 - p));
     }
-    /** Each running wave's arrival by tile, rebuilt when its field has moved on. */
-    const arrivals = new Map();
-    function arrivalsOf(id, wave) {
-        const key = `${wave.arrival.length}|${wave.arrival[0]}`;
-        const hit = arrivals.get(id);
-        if (hit && hit.key === key)
-            return hit.at;
-        const at = new Map();
-        wave.tiles.forEach((i, k) => at.set(i, wave.arrival[k]));
-        arrivals.set(id, { key, at });
-        return at;
-    }
-    const breakers = new Map();
-    /** Start a breaker on coast water tile (x, y): it breaks towards the land around it, or along `heading`. */
-    function breakAt(s, world, h, x, y, heading) {
-        const key = `${h.id}:break:${x},${y}`;
-        // Once per tile: at slow speed the tile stays in the front's window long after its breaker has played.
-        if (!s.once(key))
-            return;
-        let lx = 0;
-        let ly = 0;
-        for (let n = 0; n < 8; n++) {
-            const ny = y + SE.HAZARD_NY[n];
-            if (ny < 0 || ny >= SE.GRID_H || world.elevation[SE.idx(SE.wrapX(x + SE.HAZARD_NX[n]), ny)] < 0)
-                continue;
-            lx += SE.HAZARD_NX[n];
-            ly += SE.HAZARD_NY[n];
-        }
-        const d = directionOf(Math.sign(lx), Math.sign(ly));
-        const sx = Math.sign(lx) * BREAK_SHIFT;
-        const sy = Math.sign(ly) * BREAK_SHIFT;
-        breakers.set(key, { hazard: h.id, x: x * 16 + 8 + sx, y: y * 16 + 15 + sy, d: d < 0 ? heading : d, born: s.now });
-    }
-    /** Every breaker plays its frames once. */
-    function drawBreakers(s) {
-        const sp = SE.FX_MANIFEST.sprites.wave_break;
-        if (!sp)
-            return;
-        const ms = 1000 / Math.max(1, sp.fps);
-        const per = sp.frames.length / DIRECTIONS;
-        for (const [key, b] of breakers) {
-            const f = Math.floor((s.now - b.born) / ms);
-            if (f >= per || f < 0) {
-                breakers.delete(key);
-                continue;
-            }
-            s.add({ id: 'wave_break', frame: directed('wave_break', b.d, f), x: b.x, y: b.y, foot: b.y });
-        }
+    /** Each tidal wave's start: the wave time it was first seen at and the mark it starts from. */
+    const starts = new Map();
+    /** The player's wave draws the sea back; a chained one rises from its quake, or from its meteor's crater. */
+    function startOf(world, h) {
+        if (h.cause !== 'chain')
+            return 'draw';
+        return world.hazards.list.some((o) => o.kind === SE.EventKind.Meteor && o.x === h.x && o.y === h.y) ? 'cavity' : 'dome';
     }
     SE.FX_SCRIPTS[SE.EventKind.TidalWave] = {
         reset() {
-            arrivals.clear();
-            breakers.clear();
+            starts.clear();
         },
         omen(s, x, y, t) {
-            const cx = x * 16 + 8;
-            const cy = y * 16 + 8;
-            const p = t / SE.HAZARD_OMEN_MS[SE.EventKind.TidalWave];
-            for (const r0 of [14, 22]) {
-                const r = Math.round(r0 * (1 - p * 0.75));
-                if (r >= 2)
-                    s.ring(cx, cy, r, SEA_LIGHT, SEA_DARK, true);
-            }
-            foam(s, cx, cy, 6 + Math.random() * 12, -6, 25, 0.6);
+            let p = t / SE.HAZARD_OMEN_MS[SE.EventKind.TidalWave];
+            if (s.reduce)
+                p = Math.ceil(p * 3) / 3;
+            s.seaMarks.push({ x: x * 16 + 8, y: y * 16 + 8, r: drawRadius(p), k: 1, kind: 'draw', p });
         },
-        main(s, st, t) {
-            const cx = st.x * 16 + 8;
-            const cy = st.y * 16 + 8;
-            const p = Math.min(1, t / SE.HAZARD_MAIN_MS[SE.EventKind.TidalWave]);
-            const r = Math.round(WAVE_RING * (1 - (1 - p) * (1 - p)));
-            if (r >= 1)
-                s.ring(cx, cy, r, SEA_LIGHT, SEA_DARK, true);
-            if (r >= 8)
-                s.ring(cx, cy, r - 5, SEA_FOAM, SEA_DARK, true);
-            if (r >= 2)
-                foam(s, cx, cy, r, 10, 40, 0.4);
-        },
+        // The start lives on the wave's own clock (live), so a chained wave gets it too.
+        main() { },
         live(s, world) {
-            const phase = tickPhase(s, world);
-            const deep = frameOf('wave_deep', s.now);
-            const coast = frameOf('wave_coast', s.now);
-            for (const id of [...arrivals.keys()])
+            for (const id of [...starts.keys()])
                 if (!world.hazards.hazard(id))
-                    arrivals.delete(id);
+                    starts.delete(id);
             for (const h of world.hazards.list) {
-                const wave = h.wave;
-                if (!wave || wave.arrival.length === 0)
+                if (!h.wave)
                     continue;
-                // The front of this tick, gliding: arrivals up to T, tiles not yet crossed.
-                const T = h.age - 1 + phase;
-                const arr = wave.arrival;
-                const at = arrivalsOf(h.id, wave);
-                // Only the leading edge: in the shallows a tile stays the front for a whole tick while deep water around it has long been passed.
-                const ahead = (j) => {
-                    const a = at.get(j);
-                    return a === undefined ? world.elevation[j] >= 0 : a > T;
-                };
-                let lo = 0;
-                let hi = arr.length;
-                while (lo < hi) {
-                    const m = (lo + hi) >> 1;
-                    if (arr[m] <= T - SE.WAVE_TICKS_SHALLOW)
-                        lo = m + 1;
-                    else
-                        hi = m;
+                const T = h.age - 1 + s.phase;
+                let st = starts.get(h.id);
+                if (!st)
+                    starts.set(h.id, st = { t0: T, kind: startOf(world, h) });
+                if (T >= 0.4 || !s.sees(h.x, h.y))
+                    continue;
+                // The start mark holds, then dissolves over what is left of the first tick, as the wave sets out.
+                const k = T < 0 ? SE.clamp(T / Math.min(-0.05, st.t0), 0, 1) : 0;
+                const x = h.x * 16 + 8;
+                const y = h.y * 16 + 8;
+                if (st.kind === 'draw') {
+                    if (k > 0)
+                        s.seaMarks.push({ x, y, r: drawRadius(1), k, kind: 'draw', p: 1 });
+                    if (T >= 0)
+                        s.seaMarks.push({ x, y, r: 4, k: 1 - T / 0.4, kind: 'dome', p: 1 });
                 }
-                for (let k = lo; k < arr.length && arr[k] <= T; k++) {
-                    const i = wave.tiles[k];
-                    const e = world.elevation[i];
-                    const into = (T - arr[k]) / SE.waveTicks(e);
-                    const x = i % SE.GRID_W;
-                    const y = (i / SE.GRID_W) | 0;
-                    if (!s.sees(x, y))
-                        continue;
-                    let shore = false;
-                    for (let n = 0; n < 8 && !shore; n++) {
-                        const ny = y + SE.HAZARD_NY[n];
-                        shore = ny >= 0 && ny < SE.GRID_H && world.elevation[SE.idx(SE.wrapX(x + SE.HAZARD_NX[n]), ny)] >= 0;
-                    }
-                    // Where the front reaches the coast the crest breaks, however fast it crossed the tile.
-                    if (shore) {
-                        breakAt(s, world, h, x, y, wave.heading[k]);
-                        continue;
-                    }
-                    if (into >= 1)
-                        continue;
-                    // Leading where the next tile along its heading is still to come: one crest per ray, no stacked rows.
-                    const d = wave.heading[k];
-                    const ny = y + SE.HAZARD_NY[d];
-                    if (ny < 0 || ny >= SE.GRID_H || !ahead(SE.idx(SE.wrapX(x + SE.HAZARD_NX[d]), ny)))
-                        continue;
-                    const px = x * 16 + 8 + Math.round(SE.HAZARD_NX[d] * (into - 0.5) * 16);
-                    const py = y * 16 + 8 + Math.round(SE.HAZARD_NY[d] * (into - 0.5) * 16);
-                    const steep = e >= SE.COAST_DEPTH && Math.pow(SE.WAVE_DECAY, wave.path[k]) >= WAVE_COAST_ENERGY;
-                    if (steep)
-                        s.add({ id: 'wave_coast', frame: directed('wave_coast', d, coast), x: px, y: py, foot: py + 8 });
-                    else
-                        s.add({ id: 'wave_deep', frame: directed('wave_deep', d, deep), x: px, y: py, foot: py + 4 });
+                else if (k > 0) {
+                    s.seaMarks.push({ x, y, r: st.kind === 'dome' ? 6 + 2 * (h.strength ?? 1) : 10, k, kind: st.kind, p: 1 });
                 }
             }
-            for (const [key, b] of breakers)
-                if (!world.hazards.hazard(b.hazard))
-                    breakers.delete(key);
-            drawBreakers(s);
         },
     };
     /** Each storm's eye at the last frame, in art pixels: its main animation rains there. */
@@ -39493,7 +39912,7 @@ var SE;
                 rain(s, at[0], at[1], RAIN_RADIUS, RAIN_RATE * 2);
         },
         live(s, world) {
-            const phase = tickPhase(s, world);
+            const phase = s.phase;
             eyes.clear();
             for (const h of world.hazards.list) {
                 const st = h.storm;
@@ -39544,6 +39963,10 @@ var SE;
     const STONES = [SE.fxColor('rock', 4), SE.fxColor('rock', 3), SE.fxColor('rock', 2), SE.fxColor('rock', 1)];
     const WAVE_ON_DARK = { light: SE.fxColor('sand', 3), dark: SE.fxColor('soil', 0), faintLight: SE.fxColor('sand', 1), faintDark: SE.fxColor('soil', 1), dust: DUST };
     const WAVE_ON_BRIGHT = { light: SE.fxColor('soil', 2), dark: SE.fxColor('soil', 0), faintLight: SE.fxColor('sand', 0), faintDark: SE.fxColor('soil', 1), dust: DUST_ON_BRIGHT };
+    /** Foam flecks instead of dust where the quake shakes the sea. */
+    const FOAM = [SE.fxColor('ice', 3), SE.fxColor('water', 7), SE.fxColor('water', 6), SE.fxColor('water', 6)];
+    /** A seaquake's waves ripple the water: sea tones, no sand over the sea. */
+    const WAVE_AT_SEA = { light: SE.fxColor('water', 7), dark: SE.fxColor('water', 3), faintLight: SE.fxColor('water', 6), faintDark: SE.fxColor('water', 4), dust: FOAM };
     const WAVES = 3;
     /** Art pixels of arc per dash and per gap of a ground wave. */
     const WAVE_DASH = 4;
@@ -39584,11 +40007,14 @@ var SE;
     const playing = new Map();
     /** Every quake seen running, by hazard id: its last landslides come down in the tick it ends. */
     const quakes = new Map();
+    /** The world live() last saw: the omen is not handed it, and its specks are foam over the sea. */
+    let seen = null;
     /** Landscapes whose ground is pale: bare rock, sand, salt and snow. */
     const BRIGHT_GROUND = new Set([SE.Landscape.Ice, SE.Landscape.Snow, SE.Landscape.Rock, SE.Landscape.Desert, SE.Landscape.Semidesert]);
-    /** The wave colours for the ground around (x, y): bright when most land tiles within the waves' reach are pale. */
+    /** The wave colours around (x, y): sea tones when most tiles within the waves' reach are water, bright when most land tiles are pale. */
     function waveTones(world, x, y) {
         let land = 0;
+        let sea = 0;
         let bright = 0;
         const r = WAVE_REACH / 16;
         for (let dy = -r; dy <= r; dy++) {
@@ -39597,14 +40023,18 @@ var SE;
                 continue;
             for (let dx = -r; dx <= r; dx++) {
                 const i = SE.idx(SE.wrapX(x + dx), ty);
-                if (world.elevation[i] < 0)
+                if (world.elevation[i] < 0) {
+                    sea++;
                     continue;
+                }
                 land++;
                 const l = world.landscape[i];
                 if (BRIGHT_GROUND.has(l) || (l === SE.Landscape.Barren && world.substrate[i] === SE.Substrate.Sand))
                     bright++;
             }
         }
+        if (sea > land)
+            return WAVE_AT_SEA;
         return bright * 2 > land ? WAVE_ON_BRIGHT : WAVE_ON_DARK;
     }
     function puff(s, x, y, life) {
@@ -39627,8 +40057,10 @@ var SE;
             }
             if (!s.once(`${st.id}:crack:${i}`))
                 continue;
-            puff(s, x * 16 + 8, y * 16 + 9, PUFF_MS * 0.8);
-            specks(s, x * 16 + 8, y * 16 + 10, 4, 20, tones.dust);
+            const wet = world.elevation[i] < 0;
+            if (!wet)
+                puff(s, x * 16 + 8, y * 16 + 9, PUFF_MS * 0.8);
+            specks(s, x * 16 + 8, y * 16 + 10, 4, 20, wet ? FOAM : tones.dust);
         }
         const hz = world.hazards;
         const shaken = q.steep.slice(0, SHAKEN_SLOPES);
@@ -39719,7 +40151,7 @@ var SE;
             s.shake(x, y, 0, 1);
             const n = Math.floor(t / OMEN_SPECK_MS) - Math.floor((t - s.dt * 1000) / OMEN_SPECK_MS);
             if (n > 0)
-                specks(s, x * 16 + 8, y * 16 + 12, 2 * n, 24);
+                specks(s, x * 16 + 8, y * 16 + 12, 2 * n, 24, seen && seen.elevation[SE.idx(x, y)] < 0 ? FOAM : DUST);
         },
         main(s, st, t, world) {
             let p = playing.get(st.id);
@@ -39758,6 +40190,7 @@ var SE;
             quakes.clear();
         },
         live(s, world) {
+            seen = world;
             slides(s, world);
             for (const [id, p] of playing) {
                 const t = s.now - p.st.born;
@@ -39890,7 +40323,8 @@ var SE;
  * Below 16 px a tile, a disaster's own effects are a few pixels wide, as its
  * local extent asks. So every running hazard also gets two pulsing pixel
  * rings, a beacon the player finds from far out. A hurricane's beacon
- * follows its eye.
+ * follows its eye, a tidal wave's the strongest stretch of its front,
+ * gliding from tick to tick.
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -39900,23 +40334,1067 @@ var SE;
     const R_MAX = 40;
     const LIGHT = SE.fxColor('yellow', 0);
     const DARK = SE.fxColor('red', 1);
+    /** Each tidal wave's beacon: the tick it was found for, the tile it glides from and to (x unwrapped). */
+    const leads = new Map();
+    /** The tile with the most energy on the front at wave time T (±½ tick), or null. */
+    function frontLead(w, T) {
+        let best = -1;
+        let e = 0;
+        for (let b = 0; b < w.at.length; b++) {
+            if (Math.abs(w.at[b] - T) <= 0.5 && w.energy[b] > e) {
+                e = w.energy[b];
+                best = b;
+            }
+        }
+        return best < 0 ? null : [w.x0 + (best % SE.WAVE_BOX), w.y0 + Math.floor(best / SE.WAVE_BOX)];
+    }
+    /** Where a tidal wave's beacon stands, tiles (x unwrapped, fractional): on its front, by the end of this tick. */
+    function waveBeacon(s, h, w) {
+        let l = leads.get(h.id);
+        if (!l || l.age > h.age) {
+            l = { age: -1, from: [h.x, h.y], to: [h.x, h.y] };
+            leads.set(h.id, l);
+        }
+        if (l.age !== h.age) {
+            const next = frontLead(w, h.age);
+            l.from = l.age === h.age - 1 ? l.to : next ?? l.to;
+            if (next) {
+                // The copy of the new tile nearest the old one.
+                next[0] += Math.round((l.from[0] - next[0]) / SE.GRID_W) * SE.GRID_W;
+                l.to = next;
+            }
+            l.age = h.age;
+        }
+        return [l.from[0] + (l.to[0] - l.from[0]) * s.phase, l.from[1] + (l.to[1] - l.from[1]) * s.phase];
+    }
     /** Beacons over every running hazard in view; only while the map is zoomed out past the art. */
     function fxMarkers(s, world) {
         if (!s.zoomedOut)
             return;
+        for (const id of [...leads.keys()])
+            if (!world.hazards.hazard(id))
+                leads.delete(id);
         for (const h of world.hazards.list) {
             const eye = h.storm?.path[h.storm.path.length - 1];
-            const x = eye === undefined ? h.x : eye % SE.GRID_W;
-            const y = eye === undefined ? h.y : Math.floor(eye / SE.GRID_W);
-            if (!s.sees(x, y))
+            const [x, y] = h.wave ? waveBeacon(s, h, h.wave) : eye === undefined ? [h.x, h.y] : [eye % SE.GRID_W, Math.floor(eye / SE.GRID_W)];
+            if (!s.sees(SE.wrapX(Math.round(x)), Math.round(y)))
                 continue;
             for (let k = 0; k < 2; k++) {
                 const p = (s.now / PULSE_MS + k / 2 + SE.hazardRoll(h.id, 0, 0x6d)) % 1;
-                s.ring(x * 16 + 8, y * 16 + 8, R_MIN + (R_MAX - R_MIN) * p, LIGHT, DARK);
+                s.ring(Math.round(x * 16 + 8), Math.round(y * 16 + 8), R_MIN + (R_MAX - R_MIN) * p, LIGHT, DARK);
             }
         }
     }
     SE.fxMarkers = fxMarkers;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — a tidal wave on the open sea
+ * -----------------------------------------------------------------------------
+ * docs/ereignisse-spec.md §3.5. The wave is made of the sea itself: every sea
+ * pixel the composed terrain shows (landsurf.ts `sea`) steps along one colour
+ * ladder, water0 … water7, ice2 … ice4, white0, by how far behind the front
+ * it lies. The front is the line where the wave's arrival field (bilinear
+ * between tile centres) meets the screen's wave time Tvis = age − 1 + phase:
+ *   drawdown  a faint darkening runs ahead of it
+ *   face      the sea brightens towards the crest
+ *   crest     a thin line, brighter and wider the stronger the wave and the
+ *             shallower the water, lit on its edge towards the top left
+ *   back      foam the crest leaves behind dissolves where it lies
+ *   trough    a faint darkening, then a second, weaker crest
+ * The wave fades out with its energy by dissolving (ordered dither in world
+ * pixels), never at a hard edge. Omen and start marks (FxScene.seaMarks) are
+ * painted into the same pixels. One art pixel per buffer pixel, rebuilt when
+ * the front has moved an art pixel; the coast, breakers and run-up are drawn
+ * over it (fxshore.ts, fxground.ts).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Wavelength in deep water, art px, and the share it shortens by in the shallows. */
+    const L_DEEP = 56;
+    const L_SHOAL = 0.5;
+    /** Band widths in wavelengths: drawdown ahead, face, back, trough, and where the second crest rides. */
+    const DRAW = 0.3;
+    const FACE = 0.15;
+    const BACK = 0.45;
+    const TROUGH = 0.25;
+    const CREST2 = 0.95;
+    /** Strength × energy that makes the brightest wave. */
+    const A_REF = 1.4;
+    /** Amplitude over which a dying wave dissolves. */
+    const FADE0 = 0.04;
+    const FADE1 = 0.2;
+    /** Build time (smoothed) above which the faint drawdown and trough bands are left out, ms. */
+    const GUARD_MS = 2;
+    /** "Effekte reduzieren": a new picture at most this often, ms. */
+    const REDUCE_STEP_MS = 100;
+    /** Zoomed out, one sample per this many art px. */
+    const FAR_SAMPLE = 4;
+    /** Below this many px a tile, paint 2×2 art-px blocks (zoom 16 shows art px 1:1, so it stays fine-grained). */
+    const NEAR_TILE = 24;
+    /** Tiles built around the view. */
+    const MARGIN = 2;
+    /** Rebuild when the wave time moved this much, ticks: about an art pixel of deep-sea travel. */
+    const TIME_STEP = 1 / 48;
+    /** The same over GUARD_MS: every other frame at speed 3 (30 pictures a second). */
+    const SLOW_STEP = 4 * TIME_STEP;
+    const CHUNK_PX = SE.LAND_CHUNK * 16;
+    const WORLD_PX = SE.GRID_W * 16;
+    /** Ladder positions above the water ramp. */
+    const P_ICE2 = 8;
+    const P_ICE3 = 9;
+    const P_ICE4 = 10;
+    const P_WHITE = 11;
+    const LIGHT = Math.SQRT1_2;
+    /** The crest's floor on the ladder for crest intensity c. */
+    function crestFloor(c) {
+        return c < 0.2 ? 0 : c < 0.45 ? 5 : c < 0.65 ? 7 : c < 0.85 ? P_ICE3 : P_ICE4;
+    }
+    /** Value noise, size² px wrapping, on a lattice of `cell` px. */
+    function valueNoise(size, cell, seed) {
+        const n = size / cell;
+        const out = new Float32Array(size * size);
+        for (let y = 0; y < size; y++) {
+            const gy = Math.floor(y / cell);
+            const fy = SE.smoothstep((y % cell) / cell);
+            for (let x = 0; x < size; x++) {
+                const gx = Math.floor(x / cell);
+                const fx = SE.smoothstep((x % cell) / cell);
+                const a = SE.landHash(gx, gy, seed);
+                const b = SE.landHash((gx + 1) % n, gy, seed);
+                const c = SE.landHash(gx, (gy + 1) % n, seed);
+                const d = SE.landHash((gx + 1) % n, (gy + 1) % n, seed);
+                out[y * size + x] = SE.lerp(SE.lerp(a, b, fx), SE.lerp(c, d, fx), fy);
+            }
+        }
+        return out;
+    }
+    let wobble = null;
+    let flecks = null;
+    class SeaWave {
+        constructor() {
+            this.canvas = null;
+            this.cctx = null;
+            this.img = null;
+            this.words = new Uint32Array(0);
+            this.rank = new Uint8Array(0);
+            this.w = 0;
+            this.h = 0;
+            /** Origin tile of the buffer, unwrapped. */
+            this.ox = 0;
+            this.oy = 0;
+            /** Pixels written by the last build: x0, y0, x1, y1 (exclusive); empty when x1 ≤ x0. */
+            this.box = [0, 0, 0, 0];
+            this.key = '';
+            this.builtAt = -Infinity;
+            /** Build time, smoothed, ms. */
+            this.cost = 0;
+            /** Ladder position → palette index, and palette index → ladder position (7 off the water ramp). */
+            this.ladder = new Uint8Array(12);
+            this.pos = new Uint8Array(256).fill(7);
+            this.ladderOf = null;
+            /** Per tile centre around the view, for the wave being painted: arrival, slowness, energy, travel direction. */
+            this.cT = new Float32Array(0);
+            this.cS = new Float32Array(0);
+            this.cE = new Float32Array(0);
+            this.cX = new Float32Array(0);
+            this.cY = new Float32Array(0);
+            /** Below NEAR_TILE px a tile: the sea of the tile being painted and the 2×2 block's first pixel in it. */
+            this.blkSea = null;
+            this.blkAt = 0;
+        }
+        draw(ctx, world, cam, land, s, now) {
+            const art = land.art;
+            if (!art || !land.ready)
+                return;
+            let waves = '';
+            for (const h of world.hazards.list)
+                if (h.wave && h.wave.at.length > 0)
+                    waves += `${h.id}:${Math.floor((h.age - 1 + s.phase) / (this.cost > GUARD_MS ? SLOW_STEP : TIME_STEP))},`;
+            if (waves === '' && s.seaMarks.length === 0) {
+                this.key = '';
+                return;
+            }
+            const T = cam.tilePx * cam.dpr;
+            const ox = Math.floor(cam.scrollX) - MARGIN;
+            const oy = Math.floor(cam.scrollY) - MARGIN;
+            const tw = Math.ceil(ctx.canvas.width / T) + 2 * MARGIN + 1;
+            const th = Math.ceil(ctx.canvas.height / T) + 2 * MARGIN + 1;
+            const key = `${ox}|${oy}|${tw}|${th}|${T}|${+s.reduce}|${waves}|${s.seaMarks.length > 0 ? now : ''}`;
+            if (key !== this.key && !(s.reduce && now - this.builtAt < REDUCE_STEP_MS)) {
+                this.key = key;
+                this.builtAt = now;
+                const t0 = performance.now();
+                this.build(world, land, art, s, cam.tilePx, ox, oy, tw, th);
+                this.cost = 0.8 * this.cost + 0.2 * (performance.now() - t0);
+            }
+            const [x0, y0, x1, y1] = this.box;
+            if (x1 <= x0 || !this.canvas)
+                return;
+            const smooth = ctx.imageSmoothingEnabled;
+            ctx.imageSmoothingEnabled = false;
+            ctx.setTransform(T / 16, 0, 0, T / 16, (this.ox - cam.scrollX) * T, (this.oy - cam.scrollY) * T);
+            ctx.drawImage(this.canvas, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.imageSmoothingEnabled = smooth;
+        }
+        build(world, land, art, s, tilePx, ox, oy, tw, th) {
+            const w = tw * 16;
+            const h = th * 16;
+            if (!this.canvas || this.w !== w || this.h !== h) {
+                this.canvas = this.canvas ?? document.createElement('canvas');
+                this.canvas.width = w;
+                this.canvas.height = h;
+                this.cctx = this.canvas.getContext('2d');
+                this.img = this.cctx ? this.cctx.createImageData(w, h) : null;
+                this.words = this.img ? new Uint32Array(this.img.data.buffer) : new Uint32Array(0);
+                this.rank = new Uint8Array(w * h);
+                this.w = w;
+                this.h = h;
+                this.box = [0, 0, 0, 0];
+            }
+            if (!this.img || !this.cctx)
+                return;
+            if (this.ladderOf !== art) {
+                this.ladderOf = art;
+                const ice = art.manifest.ramps.ice;
+                art.water.forEach((p, k) => { this.ladder[k] = p; this.pos[p] = k; });
+                this.ladder[P_ICE2] = ice[2];
+                this.ladder[P_ICE3] = ice[3];
+                this.ladder[P_ICE4] = ice[4];
+                this.ladder[P_WHITE] = art.manifest.ramps.white[0];
+            }
+            const old = this.box;
+            for (let y = old[1]; y < old[3]; y++) {
+                this.words.fill(0, y * w + old[0], y * w + old[2]);
+                this.rank.fill(0, y * w + old[0], y * w + old[2]);
+            }
+            this.ox = ox;
+            this.oy = oy;
+            this.box = [w, h, 0, 0];
+            const n = (tw + 2) * (th + 2);
+            if (this.cT.length < n) {
+                this.cT = new Float32Array(n);
+                this.cS = new Float32Array(n);
+                this.cE = new Float32Array(n);
+                this.cX = new Float32Array(n);
+                this.cY = new Float32Array(n);
+            }
+            wobble = wobble ?? valueNoise(256, 8, 420);
+            flecks = flecks ?? valueNoise(64, 2, 423);
+            for (const hz of world.hazards.list)
+                if (hz.wave && hz.wave.at.length > 0)
+                    this.paintWave(world, land, hz, hz.wave, s, tilePx, tw, th);
+            for (const m of s.seaMarks)
+                this.paintMark(land, m, s.reduce);
+            const b = this.box;
+            const ux0 = Math.min(old[0], b[0]);
+            const uy0 = Math.min(old[1], b[1]);
+            const ux1 = Math.max(old[2], b[2]);
+            const uy1 = Math.max(old[3], b[3]);
+            if (ux1 > ux0 && uy1 > uy0)
+                this.cctx.putImageData(this.img, 0, 0, ux0, uy0, ux1 - ux0, uy1 - uy0);
+        }
+        /** The sea's palette index at world art pixel (x, y), x unwrapped; 0 off the sea. */
+        static seaAt(land, x, y) {
+            if (y < 0 || y >= SE.GRID_H * 16)
+                return 0;
+            const wx = ((x % WORLD_PX) + WORLD_PX) % WORLD_PX;
+            const m = land.motion(Math.floor(wx / CHUNK_PX), Math.floor(y / CHUNK_PX));
+            return m && m.sea ? m.sea[(y % CHUNK_PX) * CHUNK_PX + (wx % CHUNK_PX)] : 0;
+        }
+        /** Write ladder position p over buffer pixel o (sea colour at b) if `rank` outranks what is there. */
+        put(o, bx, by, p, b, rank) {
+            if (rank <= this.rank[o])
+                return;
+            const q = p < 0 ? 0 : p > P_WHITE ? P_WHITE : p;
+            if (q === b)
+                return;
+            this.rank[o] = rank;
+            this.words[o] = this.ladderOf.rgba[this.ladder[q]];
+            const box = this.box;
+            if (bx < box[0])
+                box[0] = bx;
+            if (by < box[1])
+                box[1] = by;
+            if (bx >= box[2])
+                box[2] = bx + 1;
+            if (by >= box[3])
+                box[3] = by + 1;
+        }
+        /** put() for the wave bands; below NEAR_TILE over the 2×2 block, each sea pixel shifted from its own colour. */
+        putPx(o, bx, by, p, b, rank) {
+            const sea = this.blkSea;
+            if (!sea) {
+                this.put(o, bx, by, p, b, rank);
+                return;
+            }
+            for (let yy = 0; yy < 2; yy++) {
+                for (let xx = 0; xx < 2; xx++) {
+                    const si = sea[this.blkAt + yy * CHUNK_PX + xx];
+                    if (si === 0)
+                        continue;
+                    const b2 = this.pos[si];
+                    this.put(o + yy * this.w + xx, bx + xx, by + yy, p + b2 - b, b2, rank);
+                }
+            }
+        }
+        paintWave(world, land, hz, wave, s, tilePx, tw, th) {
+            const Tvis = hz.age - 1 + s.phase;
+            const amp = Math.max(1, hz.strength ?? 1) / A_REF;
+            const far = s.zoomedOut;
+            const faint = this.cost <= GUARD_MS && !far;
+            const second = !s.reduce && !far && tilePx >= NEAR_TILE;
+            const ahead = faint ? DRAW : 0;
+            // Where the last band drawn ends, in wavelengths (+ crest width and jitter, px).
+            const tail = second ? CREST2 : faint ? FACE + BACK + TROUGH : FACE + BACK;
+            const uLo = -ahead * L_DEEP - 3;
+            const uHi = tail * L_DEEP + 8;
+            const minWidth = tilePx < NEAR_TILE ? 3 : 1;
+            const step = far ? FAR_SAMPLE : tilePx < NEAR_TILE ? 2 : 1;
+            const half = step === 2;
+            const { cT, cS, cE, cX, cY } = this;
+            const cw = tw + 2;
+            // Tile centres [ox − 1, ox + tw] × [oy − 1, oy + th].
+            for (let j = 0; j < th + 2; j++) {
+                const ty = this.oy - 1 + j;
+                for (let i = 0; i < cw; i++) {
+                    const k = j * cw + i;
+                    const c = ty < 0 || ty >= SE.GRID_H ? -1 : SE.waveCell(wave, this.ox - 1 + i, ty);
+                    const t = c < 0 ? Infinity : wave.at[c];
+                    if (!Number.isFinite(t)) {
+                        cT[k] = Infinity;
+                        continue;
+                    }
+                    cT[k] = t;
+                    cS[k] = SE.waveTicks(world.elevation[ty * SE.GRID_W + SE.wrapX(this.ox - 1 + i)]);
+                    cE[k] = wave.energy[c];
+                    const a = wave.angle[c];
+                    cX[k] = Number.isNaN(a) ? 0 : Math.cos(a);
+                    cY[k] = Number.isNaN(a) ? 0 : Math.sin(a);
+                }
+            }
+            const N1 = wobble;
+            const N2 = flecks;
+            const jit = s.reduce || far ? 0 : 1;
+            for (let j = 0; j < th; j++) {
+                const ty = this.oy + j;
+                if (ty < 0 || ty >= SE.GRID_H)
+                    continue;
+                for (let i = 0; i < tw; i++) {
+                    const tx = this.ox + i;
+                    // The 3×3 centres round the tile: in reach and in the time window?
+                    let lo = Infinity;
+                    let hi = -Infinity;
+                    let slow = 0;
+                    let eMax = 0;
+                    for (let dy = 0; dy < 3; dy++) {
+                        for (let dx = 0; dx < 3; dx++) {
+                            const k = (j + dy) * cw + i + dx;
+                            const t = cT[k];
+                            if (t === Infinity)
+                                continue;
+                            if (t < lo)
+                                lo = t;
+                            if (t > hi)
+                                hi = t;
+                            if (cS[k] > slow)
+                                slow = cS[k];
+                            if (cE[k] > eMax)
+                                eMax = cE[k];
+                        }
+                    }
+                    if (lo === Infinity || amp * eMax < FADE0)
+                        continue;
+                    if (Tvis < lo - (ahead * L_DEEP * slow) / 16 - 0.1 || Tvis > hi + ((CREST2 * L_DEEP + 6) * slow) / 16)
+                        continue;
+                    if (world.tech[ty * SE.GRID_W + SE.wrapX(tx)] !== SE.Tech.None)
+                        continue;
+                    const wx0 = SE.wrapX(tx) * 16;
+                    const m = land.motion(Math.floor(wx0 / CHUNK_PX), Math.floor((ty * 16) / CHUNK_PX));
+                    const sea = m && m.sea;
+                    if (!sea)
+                        continue;
+                    this.blkSea = half ? sea : null;
+                    const seaRow = (ty * 16) % CHUNK_PX;
+                    const seaCol = wx0 % CHUNK_PX;
+                    for (let qy = 0; qy < 2; qy++) {
+                        for (let qx = 0; qx < 2; qx++) {
+                            const k00 = (j + qy) * cw + i + qx;
+                            const k10 = k00 + 1;
+                            const k01 = k00 + cw;
+                            const k11 = k01 + 1;
+                            const m00 = cT[k00] !== Infinity ? 1 : 0;
+                            const m10 = cT[k10] !== Infinity ? 1 : 0;
+                            const m01 = cT[k01] !== Infinity ? 1 : 0;
+                            const m11 = cT[k11] !== Infinity ? 1 : 0;
+                            if (m00 + m10 + m01 + m11 === 0)
+                                continue;
+                            const T00 = m00 ? cT[k00] : 0, T10 = m10 ? cT[k10] : 0, T01 = m01 ? cT[k01] : 0, T11 = m11 ? cT[k11] : 0;
+                            const S00 = m00 ? cS[k00] : 0, S10 = m10 ? cS[k10] : 0, S01 = m01 ? cS[k01] : 0, S11 = m11 ? cS[k11] : 0;
+                            // The quadrant's arrival and slowness lie between its corners': skip it whole when no pixel can be in a band.
+                            const tLo = Math.min(m00 ? T00 : Infinity, m10 ? T10 : Infinity, m01 ? T01 : Infinity, m11 ? T11 : Infinity);
+                            const tHi = Math.max(m00 ? T00 : -Infinity, m10 ? T10 : -Infinity, m01 ? T01 : -Infinity, m11 ? T11 : -Infinity);
+                            const sLo = Math.min(m00 ? S00 : Infinity, m10 ? S10 : Infinity, m01 ? S01 : Infinity, m11 ? S11 : Infinity);
+                            const sHi = Math.max(S00, S10, S01, S11);
+                            if (((Tvis - tHi) * 16) / sHi > uHi)
+                                continue;
+                            if (((Tvis - tLo) * 16) / (Tvis < tLo ? sHi : sLo) < uLo)
+                                continue;
+                            const E00 = m00 ? cE[k00] : 0, E10 = m10 ? cE[k10] : 0, E01 = m01 ? cE[k01] : 0, E11 = m11 ? cE[k11] : 0;
+                            let dirX = m00 * cX[k00] + m10 * cX[k10] + m01 * cX[k01] + m11 * cX[k11];
+                            let dirY = m00 * cY[k00] + m10 * cY[k10] + m01 * cY[k01] + m11 * cY[k11];
+                            const dl = Math.hypot(dirX, dirY) || 1;
+                            dirX /= dl;
+                            dirY /= dl;
+                            const lit = -(dirX + dirY) * LIGHT;
+                            for (let ly = qy * 8; ly < qy * 8 + 8; ly += step) {
+                                const sy = far ? ly + 2 : ly;
+                                const fy = qy === 0 ? (sy + 8.5) / 16 : (sy - 7.5) / 16;
+                                const y = ty * 16 + sy;
+                                const by = j * 16 + ly;
+                                for (let lx = qx * 8; lx < qx * 8 + 8; lx += step) {
+                                    const sx = far ? lx + 2 : lx;
+                                    const at = (seaRow + sy) * CHUNK_PX + seaCol + sx;
+                                    const seaIdx = sea[at];
+                                    if (seaIdx === 0)
+                                        continue;
+                                    this.blkAt = at;
+                                    const fx = qx === 0 ? (sx + 8.5) / 16 : (sx - 7.5) / 16;
+                                    const w00 = (1 - fx) * (1 - fy) * m00;
+                                    const w10 = fx * (1 - fy) * m10;
+                                    const w01 = (1 - fx) * fy * m01;
+                                    const w11 = fx * fy * m11;
+                                    const W = w00 + w10 + w01 + w11;
+                                    const t = (w00 * T00 + w10 * T10 + w01 * T01 + w11 * T11) / W;
+                                    const sl = (w00 * S00 + w10 * S10 + w01 * S01 + w11 * S11) / W;
+                                    const x = tx * 16 + sx;
+                                    const S = SE.clamp((sl - SE.WAVE_TICKS_DEEP) / (SE.WAVE_TICKS_SHALLOW - SE.WAVE_TICKS_DEEP), 0, 1);
+                                    const L = L_DEEP * (1 - L_SHOAL * S);
+                                    let u = ((Tvis - t) * 16) / sl;
+                                    if (u < -ahead * L - 3 || u > tail * L + 8)
+                                        continue;
+                                    const A = SE.clamp(amp * ((w00 * E00 + w10 * E10 + w01 * E01 + w11 * E11) / W), 0, 1);
+                                    if (A < FADE0)
+                                        continue;
+                                    u += jit * (N1[(y & 255) * 256 + (x & 255)] - 0.5) * (2 + 2 * A);
+                                    const F = SE.smoothstep(SE.clamp((A - FADE0) / (FADE1 - FADE0), 0, 1));
+                                    const c = A * (0.55 + 0.45 * S);
+                                    const bx = i * 16 + lx;
+                                    const o = by * this.w + bx;
+                                    const b = this.pos[seaIdx];
+                                    const face = FACE * L;
+                                    if (far) {
+                                        if (u < face - 2 || u >= face + 2)
+                                            continue;
+                                        const p = A < 0.5 ? P_ICE3 : A < 0.85 ? P_ICE4 : P_WHITE;
+                                        for (let yy = 0; yy < step; yy++)
+                                            for (let xx = 0; xx < step; xx++)
+                                                this.put(o + yy * this.w + xx, bx + xx, by + yy, p, b, 4);
+                                        continue;
+                                    }
+                                    const B = half ? SE.BAYER4[((y >> 1) & 3) * 4 + ((x >> 1) & 3)] : SE.BAYER4[(y & 3) * 4 + (x & 3)];
+                                    if (u < 0) {
+                                        if (!faint || u < -DRAW * L)
+                                            continue;
+                                        const q = 1 + u / (DRAW * L);
+                                        if (A > 0.7 && B < 0.25 * q)
+                                            this.putPx(o, bx, by, b - 2, b, 1);
+                                        else if (B < F * (0.25 + 0.35 * A) * q)
+                                            this.putPx(o, bx, by, b - 1, b, 1);
+                                        continue;
+                                    }
+                                    if (u < face) {
+                                        if (B < F * (0.3 + (0.7 * u) / face))
+                                            this.putPx(o, bx, by, b + 1, b, 2);
+                                        continue;
+                                    }
+                                    const wc = Math.max(minWidth, 1 + Math.round(1.5 * A + 2 * S * A));
+                                    const crestEnd = face + wc;
+                                    const Fo = F * SE.clamp(A * (0.3 + 0.7 * S) - 0.15, 0, 1);
+                                    if (u < crestEnd) {
+                                        if (B >= F)
+                                            continue;
+                                        let p = Math.max(b + 2, crestFloor(c));
+                                        if (c >= 0.45 && ((lit > 0.3 && u - face < 1) || (lit < -0.3 && crestEnd - u <= 1)))
+                                            p++;
+                                        else if (!s.reduce && c >= 0.65 && SE.landHash(Math.floor((x * -dirY + y * dirX) / 3), Math.floor(u / 2), 422) < 0.5 * Fo)
+                                            p = P_ICE3;
+                                        this.putPx(o, bx, by, s.reduce ? Math.min(p, P_ICE3) : p, b, 4);
+                                        continue;
+                                    }
+                                    const backEnd = crestEnd + BACK * L;
+                                    if (u < backEnd) {
+                                        const f = (u - crestEnd) / (BACK * L);
+                                        const h2 = 0.55 * N2[(y & 63) * 64 + (x & 63)] + 0.45 * B;
+                                        if (!s.reduce && h2 < 0.4 * Fo * (1 - f))
+                                            this.putPx(o, bx, by, P_ICE3, b, 3);
+                                        else if (h2 < Fo * Math.pow(1 - f, 1.5))
+                                            this.putPx(o, bx, by, P_ICE2, b, 3);
+                                        else if (B < F * (1 - f))
+                                            this.putPx(o, bx, by, b + 1, b, 2);
+                                        continue;
+                                    }
+                                    const troughEnd = backEnd + TROUGH * L;
+                                    if (u < troughEnd) {
+                                        if (faint && B < F * 0.3 * A * (1 - (u - backEnd) / (TROUGH * L)))
+                                            this.putPx(o, bx, by, b - 1, b, 1);
+                                        continue;
+                                    }
+                                    if (second && A >= 0.4 && u >= CREST2 * L && u < CREST2 * L + 1 && B < 0.8 * F) {
+                                        this.putPx(o, bx, by, Math.max(b + 1, crestFloor(c / 2)), b, 4);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /** A mark on the sea (FxScene.seaMarks): drawdown, dome or cavity. */
+        paintMark(land, m, reduce) {
+            const R = m.r;
+            const ox = this.ox * 16;
+            const oy = this.oy * 16;
+            const span = WORLD_PX;
+            // The copy of the mark nearest the buffer.
+            const cx = m.x + Math.round((ox + this.w / 2 - m.x) / span) * span;
+            for (let y = Math.floor(m.y - R); y <= Math.ceil(m.y + R); y++) {
+                const by = y - oy;
+                if (by < 0 || by >= this.h)
+                    continue;
+                for (let x = Math.floor(cx - R); x <= Math.ceil(cx + R); x++) {
+                    const bx = x - ox;
+                    if (bx < 0 || bx >= this.w)
+                        continue;
+                    const r = Math.hypot(x + 0.5 - cx, y + 0.5 - m.y);
+                    if (r >= R)
+                        continue;
+                    const seaIdx = SeaWave.seaAt(land, x, y);
+                    if (seaIdx === 0)
+                        continue;
+                    const b = this.pos[seaIdx];
+                    const o = by * this.w + bx;
+                    const B = SE.BAYER4[(y & 3) * 4 + (x & 3)];
+                    const k = m.k;
+                    const rim = r >= R - 1;
+                    if (m.kind === 'draw') {
+                        const p = m.p;
+                        if (rim) {
+                            if (B < 0.6 * k)
+                                this.put(o, bx, by, b + 1, b, 2);
+                            continue;
+                        }
+                        const wx = ((x % span) + span) % span;
+                        if (!reduce && SE.landHash(wx, y, 421) < 0.15 * p * k)
+                            this.put(o, bx, by, P_ICE2, b, 3);
+                        else if (r < R / 2 && B < 0.4 * p * k)
+                            this.put(o, bx, by, b - 2, b, 1);
+                        else if (B < (0.3 + 0.5 * p) * k)
+                            this.put(o, bx, by, b - 1, b, 1);
+                    }
+                    else if (m.kind === 'dome') {
+                        if (r < R / 2 && B < 0.5 * k)
+                            this.put(o, bx, by, b + 2, b, 4);
+                        else if (B < 0.7 * k)
+                            this.put(o, bx, by, b + 1, b, 2);
+                    }
+                    else if (rim) {
+                        if (B < k)
+                            this.put(o, bx, by, P_ICE3, b, 4);
+                    }
+                    else if (B < 0.8 * k) {
+                        this.put(o, bx, by, b - 2, b, 1);
+                    }
+                }
+            }
+        }
+    }
+    SE.SeaWave = SeaWave;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — a tidal wave at the coast
+ * -----------------------------------------------------------------------------
+ * docs/ereignisse-spec.md §3.5, on the coast's surf pixels (landsurf.ts rings
+ * 1–5), from the wave's arrival field sampled per art pixel, so every effect
+ * sweeps along an oblique coast instead of popping by tile:
+ *   drawdown   a tick before the crest the sea runs off the shore: the foam
+ *              line calms, wet sand and the bare shelf show, ring by ring
+ *   breaking   the crest rolls in as one white line along the real foam
+ *              line, fades to foam and churns as surge water until the
+ *              backwash
+ *   backwash   a muddy plume spreads out from the shore and dissolves
+ *   accents    a few breaker sprites on strong waves (never side by side),
+ *              spray bursts at the spray sites (waterspray.ts)
+ * Ambient surf (watermotion.ts) leaves the tiles in play alone (`shoreBusy`).
+ * Time is the screen's wave time Tvis = age − 1 + phase (fxwater.ts).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Twelve pictures a second. */
+    const STEP_MS = 83;
+    /** CSS px per tile from which the coast moves (WaterMotion's limit). */
+    const MIN_TILE = 16;
+    const CHUNK_PX = SE.LAND_CHUNK * 16;
+    const CHUNKS_X = SE.GRID_W / SE.LAND_CHUNK;
+    const WORLD_PX = SE.GRID_W * 16;
+    /** Ticks before the crest that the sea draws back, and the energy below which it does not. */
+    const DRAW_TICKS = 1;
+    const DRAW_MIN_ENERGY = 0.15;
+    /** Ticks the surge churns where no run-up follows (a cliff). */
+    const SURGE_CLIFF = 1.5;
+    /** Ticks the backwash plume lasts. */
+    const PLUME_TICKS = 2;
+    /** Breaker sprites: on coast water from this energy, this share of the tiles, at most this many a wave. */
+    const BREAK_ENERGY = 0.45;
+    const BREAK_SHARE = 0.3;
+    const BREAKERS = 4;
+    /** Spray strength from which a shore counts as a cliff: spray, no breaker. */
+    const BREAK_CLIFF = 0.5;
+    /** Art pixels a breaker stands from its tile's centre towards the land, and its jitter along the shore. */
+    const BREAK_SHIFT = 6;
+    const BREAK_JITTER = 6;
+    const BREAK_DELAY_MS = 120;
+    /** Ticks after the crest during which the spray sites throw their three bursts. */
+    const SPRAY_TICKS = 1.2;
+    const DIRECTIONS = 8;
+    /** Ticks each surf ring further out is reached before the one inside it. */
+    const RING_LEAD = 0.05;
+    const R = SE.TERRAIN_MANIFEST.ramps;
+    const WATER6 = R.water[6];
+    const WATER7 = R.water[7];
+    const SAND0 = R.sand[0];
+    const SAND1 = R.sand[1];
+    const SAND2 = R.sand[2];
+    const SOIL3 = R.soil[3];
+    const ICE3 = R.ice[3];
+    const ICE4 = R.ice[4];
+    const WHITE = R.white[0];
+    /** The breaking line, brightest first. */
+    const BREAK_LADDER = [WHITE, ICE4, ICE3, WATER7];
+    /** Tiles where a tidal wave works the coast this picture; ambient surf skips them. */
+    SE.shoreBusy = new Uint8Array(SE.TILE_COUNT);
+    /**
+     * Arrival and energy where cells next to reached water (land, mostly) take
+     * the mean of those neighbours: every lattice corner then has one value,
+     * whichever pixel asks, so the coast's field has no seams at tile centres.
+     */
+    function filled(wave) {
+        const at = Float32Array.from(wave.at);
+        const energy = Float32Array.from(wave.energy);
+        for (let c = 0; c < SE.WAVE_BOX * SE.WAVE_BOX; c++) {
+            if (Number.isFinite(wave.at[c]))
+                continue;
+            const bx = c % SE.WAVE_BOX;
+            const by = (c / SE.WAVE_BOX) | 0;
+            let n = 0;
+            let t = 0;
+            let e = 0;
+            for (let k = 0; k < 8; k++) {
+                const x = bx + SE.HAZARD_NX[k];
+                const y = by + SE.HAZARD_NY[k];
+                if (x < 0 || y < 0 || x >= SE.WAVE_BOX || y >= SE.WAVE_BOX)
+                    continue;
+                const a = wave.at[y * SE.WAVE_BOX + x];
+                if (!Number.isFinite(a))
+                    continue;
+                n++;
+                t += a;
+                e += wave.energy[y * SE.WAVE_BOX + x];
+            }
+            if (n > 0) {
+                at[c] = t / n;
+                energy[c] = e / n;
+            }
+        }
+        return { wave, at, energy };
+    }
+    function nearLand(world, x, y) {
+        for (let n = 0; n < 8; n++) {
+            const ny = y + SE.HAZARD_NY[n];
+            if (ny >= 0 && ny < SE.GRID_H && world.elevation[SE.idx(SE.wrapX(x + SE.HAZARD_NX[n]), ny)] >= 0)
+                return true;
+        }
+        return false;
+    }
+    /** Direction index (HAZARD_NX/NY) of the land around water tile (x, y), -1 if none. */
+    function landward(world, x, y) {
+        let lx = 0;
+        let ly = 0;
+        for (let n = 0; n < 8; n++) {
+            const ny = y + SE.HAZARD_NY[n];
+            if (ny < 0 || ny >= SE.GRID_H || world.elevation[SE.idx(SE.wrapX(x + SE.HAZARD_NX[n]), ny)] < 0)
+                continue;
+            lx += SE.HAZARD_NX[n];
+            ly += SE.HAZARD_NY[n];
+        }
+        for (let k = 0; k < 8; k++)
+            if (SE.HAZARD_NX[k] === Math.sign(lx) && SE.HAZARD_NY[k] === Math.sign(ly))
+                return k;
+        return -1;
+    }
+    class FxShore {
+        constructor() {
+            this.key = '';
+            this.paths = new Map();
+            this.originX = 0;
+            this.originY = 0;
+            this.colors = [];
+            this.ice = [];
+            this.busyList = [];
+            this.backs = new Map();
+            this.fields = new Map();
+            this.breakers = new Map();
+            this.spray = new SE.WaterSpray();
+            /** Real length of a tick, measured, for the spray's seconds. */
+            this.tick = -1;
+            this.tickAt = 0;
+            this.tickMs = 400;
+            /** Sample of the last `sample()`: arrival, energy, backwash start. */
+            this.tc = 0;
+            this.e = 0;
+            this.b = 0;
+            this.put = (color, x, y) => this.add(color, x, y);
+        }
+        draw(ctx, world, cam, land, s) {
+            if (world.ticks !== this.tick) {
+                if (world.ticks === this.tick + 1)
+                    this.tickMs = SE.clamp(s.now - this.tickAt, 60, 4000);
+                this.tick = world.ticks;
+                this.tickAt = s.now;
+            }
+            const preps = [];
+            for (const h of world.hazards.list) {
+                if (!h.wave)
+                    continue;
+                let field = this.fields.get(h.id);
+                if (field?.wave !== h.wave) {
+                    field = filled(h.wave);
+                    this.fields.set(h.id, field);
+                }
+                preps.push({ h, wave: h.wave, T: h.age - 1 + s.phase, back: this.backOf(h.id, h.wave, world), field });
+            }
+            for (const id of [...this.breakers.keys()])
+                if (!world.hazards.hazard(id))
+                    this.breakers.delete(id);
+            for (const id of [...this.backs.keys()])
+                if (!world.hazards.hazard(id))
+                    this.backs.delete(id);
+            for (const id of [...this.fields.keys()])
+                if (!world.hazards.hazard(id))
+                    this.fields.delete(id);
+            const art = land.art;
+            if (preps.length === 0 || cam.tilePx < MIN_TILE || !land.ready || !art) {
+                if (this.busyList.length > 0)
+                    this.markBusy(world, []);
+                return;
+            }
+            if (!s.reduce)
+                for (const p of preps)
+                    this.breakersOf(s, world, p);
+            const ox = Math.floor(cam.scrollX);
+            const oy = Math.floor(cam.scrollY);
+            const key = `${Math.floor(s.now / STEP_MS)}|${ox}|${oy}|${s.x0}|${s.x1}|${s.y0}|${s.y1}`;
+            if (key !== this.key) {
+                this.key = key;
+                this.originX = ox;
+                this.originY = oy;
+                if (this.colors.length === 0)
+                    this.colors = art.manifest.palette.map(([r, g, b]) => `rgb(${r},${g},${b})`);
+                this.ice = art.manifest.ramps.ice;
+                this.markBusy(world, preps);
+                this.build(world, land, preps, s);
+            }
+            const T = cam.tilePx * cam.dpr;
+            ctx.setTransform(T / 16, 0, 0, T / 16, (ox - cam.scrollX) * T, (oy - cam.scrollY) * T);
+            for (const [color, path] of this.paths) {
+                ctx.fillStyle = this.colors[color];
+                ctx.fill(path);
+            }
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+        }
+        /** Backwash start per box cell: the latest recede (FloodRun.off) of the run tiles each coast water cell touches. */
+        backOf(id, wave, world) {
+            let back = this.backs.get(id);
+            if (!back) {
+                back = new Float32Array(SE.WAVE_BOX * SE.WAVE_BOX);
+                this.backs.set(id, back);
+            }
+            back.fill(0);
+            for (const run of wave.runs) {
+                for (let j = 0; j < run.tiles.length; j++) {
+                    const i = run.tiles[j];
+                    for (let n = 0; n < 8; n++) {
+                        const k = SE.hazardNeighbour(i, n);
+                        if (k < 0 || world.elevation[k] >= 0)
+                            continue;
+                        const c = SE.waveCell(wave, k % SE.GRID_W, (k / SE.GRID_W) | 0);
+                        if (c >= 0 && run.off[j] > back[c])
+                            back[c] = run.off[j];
+                    }
+                }
+            }
+            return back;
+        }
+        /** Mark the tiles round every coast water cell whose window [arrival − DRAW_TICKS, end] holds Tvis. */
+        markBusy(world, preps) {
+            for (const i of this.busyList)
+                SE.shoreBusy[i] = 0;
+            this.busyList.length = 0;
+            for (const p of preps) {
+                const { wave, T } = p;
+                for (let c = 0; c < SE.WAVE_BOX * SE.WAVE_BOX; c++) {
+                    const a = wave.at[c];
+                    if (!(a <= T + DRAW_TICKS + 4 * RING_LEAD))
+                        continue;
+                    const end = p.back[c] > 0 ? p.back[c] + PLUME_TICKS : a + SURGE_CLIFF;
+                    if (T > end)
+                        continue;
+                    const x = wave.x0 + (c % SE.WAVE_BOX);
+                    const y = wave.y0 + ((c / SE.WAVE_BOX) | 0);
+                    if (!nearLand(world, x, y))
+                        continue;
+                    for (let dy = -1; dy <= 1; dy++) {
+                        if (y + dy < 0 || y + dy >= SE.GRID_H)
+                            continue;
+                        for (let dx = -1; dx <= 1; dx++) {
+                            const i = SE.idx(SE.wrapX(x + dx), y + dy);
+                            if (SE.shoreBusy[i])
+                                continue;
+                            SE.shoreBusy[i] = 1;
+                            this.busyList.push(i);
+                        }
+                    }
+                }
+            }
+        }
+        build(world, land, preps, s) {
+            this.paths = new Map();
+            const tx0 = s.x0;
+            const tx1 = s.x1 + 1;
+            const ty0 = s.y0;
+            const ty1 = s.y1 + 1;
+            for (let cy = Math.floor(ty0 / SE.LAND_CHUNK); cy <= Math.floor((ty1 - 1) / SE.LAND_CHUNK); cy++) {
+                for (let cu = Math.floor(tx0 / SE.LAND_CHUNK); cu <= Math.floor((tx1 - 1) / SE.LAND_CHUNK); cu++) {
+                    const cw = ((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X;
+                    const m = land.motion(cw, cy);
+                    if (!m)
+                        continue;
+                    for (let k = 0; k < m.surf.length; k++) {
+                        const at = m.surfAt[k];
+                        const x = cu * CHUNK_PX + (at & 0xffff);
+                        const y = cy * CHUNK_PX + (at >>> 16);
+                        const tx = x >> 4;
+                        const ty = y >> 4;
+                        if (tx < tx0 || tx >= tx1 || ty < ty0 || ty >= ty1 || !SE.shoreBusy[ty * SE.GRID_W + SE.wrapX(tx)])
+                            continue;
+                        if (world.tech[ty * SE.GRID_W + SE.wrapX(tx)] !== SE.Tech.None)
+                            continue;
+                        const info = m.surf[k];
+                        const ring = (info >>> 8) & 255;
+                        const h = (info >>> 24) / 256;
+                        const hx = cw * CHUNK_PX + (at & 0xffff);
+                        for (const p of preps) {
+                            const color = this.colorAt(p, x, y, hx, ring, h, info & 255, s.reduce);
+                            if (color < 0)
+                                continue;
+                            this.add(color, x, y);
+                            break;
+                        }
+                    }
+                    if (!s.reduce)
+                        this.sprayAt(m, cu, cw, cy, world, preps, tx0, ty0, tx1, ty1);
+                }
+            }
+        }
+        /** What surf pixel (x, y) (hx: x wrapped) shows under wave p, or -1. */
+        colorAt(p, x, y, hx, ring, h, own, still) {
+            if (!this.sample(p, x, y))
+                return -1;
+            // Outer rings are reached first: the crest rolls shoreward across the band.
+            const u = p.T - this.tc + (ring - 1) * RING_LEAD;
+            if (u < -DRAW_TICKS)
+                return -1;
+            if (u < 0) {
+                if (this.e < DRAW_MIN_ENERGY)
+                    return -1;
+                const q = (u + DRAW_TICKS) * (u + DRAW_TICKS);
+                if (ring === 1)
+                    return q > 0.15 + 0.3 * h ? (h < 0.3 ? SAND1 : SAND2) : WATER6;
+                if (ring === 2)
+                    return q > 0.4 + 0.3 * h ? (h < 0.5 ? SAND1 : WATER7) : own;
+                if (ring === 3)
+                    return q > 0.65 + 0.3 * h ? WATER7 : own;
+                return u >= -0.15 ? WATER7 : own;
+            }
+            const back = this.b;
+            // Frozen with reduced effects: the surge churns without twinkling.
+            const churn = still ? 0 : Math.floor(p.T * 4);
+            if (back > 0 ? p.T < back : u < SURGE_CLIFF) {
+                const weak = this.e < 0.08 ? 2 : this.e < 0.2 ? 1 : 0;
+                if (u < 0.15)
+                    return BREAK_LADDER[weak];
+                if (u < 0.35)
+                    return BREAK_LADDER[Math.min(2, 1 + weak)];
+                if (u < 0.7)
+                    return h < 1 - (u - 0.35) / 0.35 ? BREAK_LADDER[Math.min(3, 2 + (weak >> 1))] : -1;
+                const r = SE.landHash(hx + churn * 4099, y, 431);
+                return r < 0.1 ? ICE3 : r < 0.28 ? WATER7 : -1;
+            }
+            const t = p.T - back;
+            if (back <= 0 || t >= PLUME_TICKS)
+                return -1;
+            if (t / 0.4 > ring - 1 + 0.8 * h && h < 2 - t) {
+                if (h < 0.35)
+                    return SAND0;
+                if (h < 0.55)
+                    return SOIL3;
+            }
+            return SE.landHash(hx + churn * 4099, y, 432) < 0.06 ? ICE3 : -1;
+        }
+        /**
+         * Arrival, energy and backwash start at world art pixel (x, y): bilinear
+         * between the four tile centres round it, over the reached ones only.
+         */
+        sample(p, x, y) {
+            const fx = (x - 8) / 16;
+            const fy = (y - 8) / 16;
+            const ix = Math.floor(fx);
+            const iy = Math.floor(fy);
+            const ax = fx - ix;
+            const ay = fy - iy;
+            let w = 0;
+            let tc = 0;
+            let e = 0;
+            let b = 0;
+            for (let k = 0; k < 4; k++) {
+                const c = SE.waveCell(p.wave, ix + (k & 1), iy + (k >> 1));
+                if (c < 0)
+                    continue;
+                const a = p.field.at[c];
+                if (!Number.isFinite(a))
+                    continue;
+                const wk = ((k & 1) ? ax : 1 - ax) * ((k >> 1) ? ay : 1 - ay) + 1e-6;
+                w += wk;
+                tc += a * wk;
+                e += p.field.energy[c] * wk;
+                if (p.back[c] > b)
+                    b = p.back[c];
+            }
+            if (w === 0)
+                return false;
+            this.tc = tc / w;
+            this.e = e / w;
+            this.b = b;
+            return true;
+        }
+        /** Spray sites in the band throw three bursts as the crest hits, higher on a strong wave. */
+        sprayAt(m, cu, cw, cy, world, preps, tx0, ty0, tx1, ty1) {
+            const sites = this.spray.sitesOf(m, cw, cy, world);
+            for (let j = 0; j < sites.length; j++) {
+                const at = m.surfAt[sites[j] & 0xffffff];
+                const x = cu * CHUNK_PX + (at & 0xffff);
+                const y = cy * CHUNK_PX + (at >>> 16);
+                const tx = x >> 4;
+                const ty = y >> 4;
+                if (tx < tx0 || tx >= tx1 || ty < ty0 || ty >= ty1 || !SE.shoreBusy[ty * SE.GRID_W + SE.wrapX(tx)])
+                    continue;
+                if (world.tech[ty * SE.GRID_W + SE.wrapX(tx)] !== SE.Tech.None)
+                    continue;
+                for (const p of preps) {
+                    if (!this.sample(p, x, y))
+                        continue;
+                    const u = p.T - this.tc;
+                    if (u < 0 || u >= SPRAY_TICKS)
+                        continue;
+                    const wave = Math.floor(u * 3);
+                    const age = ((u - wave / 3) * this.tickMs) / 1000;
+                    if (age >= SE.SPRAY_LIFE)
+                        continue;
+                    const strength = Math.min(1.6, (sites[j] >>> 24) / 255 + 0.6 * this.e);
+                    SE.sprayDrops(age, strength, cw * CHUNK_PX + (at & 0xffff), y, wave, x, y, this.ice, this.put);
+                    break;
+                }
+            }
+        }
+        /** Breaker sprites of wave h: chosen once, each playing its frames once as the crest reaches its tile. */
+        breakersOf(s, world, p) {
+            const { h, wave, T } = p;
+            let list = this.breakers.get(h.id);
+            if (!list) {
+                list = FxShore.chooseBreakers(world, h, wave);
+                this.breakers.set(h.id, list);
+            }
+            const sp = SE.FX_MANIFEST.sprites.wave_break;
+            if (!sp)
+                return;
+            const ms = 1000 / Math.max(1, sp.fps);
+            const per = sp.frames.length / DIRECTIONS;
+            for (const b of list) {
+                if (T < b.at)
+                    continue;
+                if (Number.isNaN(b.born))
+                    b.born = s.now + b.delay;
+                const f = Math.floor((s.now - b.born) / ms);
+                if (f < 0 || f >= per || !s.sees(SE.wrapX(b.x >> 4), b.y >> 4))
+                    continue;
+                s.add({ id: 'wave_break', frame: b.d * per + f, x: b.x, y: b.y, foot: b.y });
+            }
+        }
+        /** Coast water tiles hit hard enough, about BREAK_SHARE of them, never two side by side, at most BREAKERS. */
+        static chooseBreakers(world, h, wave) {
+            const cand = [];
+            for (let c = 0; c < SE.WAVE_BOX * SE.WAVE_BOX; c++) {
+                if (!Number.isFinite(wave.at[c]) || wave.energy[c] < BREAK_ENERGY)
+                    continue;
+                const x = wave.x0 + (c % SE.WAVE_BOX);
+                const y = wave.y0 + ((c / SE.WAVE_BOX) | 0);
+                const i = SE.idx(SE.wrapX(x), y);
+                const roll = SE.hazardRoll(h.id, i, 31);
+                if (roll < BREAK_SHARE)
+                    cand.push({ c, roll });
+            }
+            // In roll order, so the few breakers spread over the whole coast.
+            cand.sort((a, b) => a.roll - b.roll);
+            const taken = new Set();
+            const out = [];
+            for (const { c } of cand) {
+                if (out.length >= BREAKERS)
+                    break;
+                const x = SE.wrapX(wave.x0 + (c % SE.WAVE_BOX));
+                const y = wave.y0 + ((c / SE.WAVE_BOX) | 0);
+                const i = SE.idx(x, y);
+                const d = landward(world, x, y);
+                if (d < 0 || SE.sprayStrength(world, x, y) >= BREAK_CLIFF)
+                    continue;
+                let near = false;
+                for (let n = 0; n < 8 && !near; n++)
+                    near = taken.has(SE.hazardNeighbour(i, n));
+                if (near)
+                    continue;
+                taken.add(i);
+                const along = (SE.hazardRoll(h.id, i, 34) - 0.5) * BREAK_JITTER;
+                const nx = SE.HAZARD_NX[d];
+                const ny = SE.HAZARD_NY[d];
+                const len = Math.hypot(nx, ny);
+                out.push({
+                    x: Math.round(x * 16 + 8 + (nx / len) * BREAK_SHIFT - (ny / len) * along),
+                    y: Math.round(y * 16 + 15 + (ny / len) * BREAK_SHIFT + (nx / len) * along),
+                    d, at: wave.at[c] + 0.25 * SE.hazardRoll(h.id, i, 32), delay: SE.hazardRoll(h.id, i, 33) * BREAK_DELAY_MS, born: NaN,
+                });
+            }
+            return out;
+        }
+        /** One art pixel at world pixel (x, y), x unwrapped like the origin. */
+        add(color, x, y) {
+            let path = this.paths.get(color);
+            if (!path) {
+                path = new Path2D();
+                this.paths.set(color, path);
+            }
+            path.rect(x - this.originX * 16, y - this.originY * 16, 1, 1);
+        }
+    }
+    SE.FxShore = FxShore;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — the effect layer
@@ -39948,6 +41426,8 @@ var SE;
             this.show = new SE.FxShow();
             this.particles = new SE.FxParticles();
             this.ground = new SE.FxGround();
+            this.sea = new SE.SeaWave();
+            this.shore = new SE.FxShore();
             this.scene = null;
             this.last = 0;
             /** Occluder patches by position, each with the terrain signature of the row it was cut from. */
@@ -39963,12 +41443,12 @@ var SE;
         set reduce(on) {
             this.show.reduce = on;
         }
-        /** Build this frame's scene and move the particles. */
-        update(world, cam, cols, rows, now) {
+        /** Build this frame's scene and move the particles; `phase` is how far the game is between two ticks. */
+        update(world, cam, cols, rows, now, phase) {
             const dt = this.last ? Math.min(0.25, (now - this.last) / 1000) : 0;
             this.last = now;
             this.particles.update(dt);
-            this.scene = this.show.build(world, cam, cols, rows, now, dt, this.particles);
+            this.scene = this.show.build(world, cam, cols, rows, now, dt, this.particles, phase);
         }
         drawShake(ctx, base, cam, now) {
             const s = this.scene;
@@ -39987,7 +41467,11 @@ var SE;
             }
         }
         drawGround(ctx, world, cam, land, now, cities) {
-            this.ground.draw(ctx, cam, world, land, now, cities, this.baseTick);
+            if (this.scene)
+                this.sea.draw(ctx, world, cam, land, this.scene, now);
+            this.ground.draw(ctx, cam, world, land, now, cities, this.baseTick, this.scene?.phase);
+            if (this.scene)
+                this.shore.draw(ctx, world, cam, land, this.scene);
             this.drawRings(ctx, cam, true);
             this.drawDecals(ctx, world, cam, land, cities);
         }
@@ -40427,6 +41911,339 @@ var SE;
     SE.WhaleLayer = WhaleLayer;
 })(SE || (SE = {}));
 /* =============================================================================
+ * SimEarth 2.0 — dolphin pods leaping in warm seas
+ * -----------------------------------------------------------------------------
+ * Once the dolphins (Cetacean sub-species 6) live on a tropical sea, their
+ * herd markers there become pods of three to five pixel dolphins that
+ * porpoise along: each leaps twice, the others following the leader a beat
+ * later, then the pod swims on unseen until its next round. The leap and its
+ * splashes are all in the sprite (dolphin_leap, tools/fx/fauna.js); this file
+ * only places the pod and times the leaps. Like a whale (whalelayer.ts), a
+ * pod takes over its marker's tile and facing only while out of sight, and
+ * one first seen mid-round sits that round out, so nothing pops. In cooler
+ * water, by the coast, below 16 px per tile and with "Effekte reduzieren"
+ * the herd icon stays. Visual only: the simulation never reads this.
+ *
+ * Wiring (render.ts / herds.ts): `draw` expects ctx at identity (device
+ * pixels) and leaves it there; pass `claims` to the herd layer's skip so the
+ * icon isn't drawn where a pod swims.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** CSS px per tile from which pods are drawn; below that an art pixel is under a screen pixel. */
+    const MIN_TILE = 16;
+    /** The Cetacean sub-species that leaps. */
+    SE.DOLPHIN_STAGE = 6;
+    /** Sea temperature from which dolphins leap, °C: the tropics, about 27° either side of the equator on today's Earth. */
+    SE.DOLPHIN_WARM = 25;
+    const SPRITE = 'dolphin_leap';
+    /** Frames per direction (east, then west). */
+    const FRAMES = 16;
+    /** Round length in s, staggered by marker rank. */
+    const PERIOD_MIN = 6;
+    const PERIOD_MAX = 10;
+    /** Leaps per dolphin and round; the next begins this many s after the last; how much further on it surfaces, art px. */
+    const LEAPS = 2;
+    const LEAP_EVERY = 1.05;
+    const ADVANCE = 24;
+    /** The pod, east-facing: art px behind the leader, art px south (+) of it, s after it (ascending). */
+    const POD = [
+        [0, 0, 0], [-8, -5, 0.3], [-6, 5, 0.45], [-14, -1, 0.7], [-13, 6, 0.85],
+    ];
+    /** Up to this many s later than its place in the pod, per round, so no two rounds look alike. */
+    const JITTER = 0.2;
+    /** Free water kept between two leaping pods along the way, art px; across it, pods a tile row apart count as close. */
+    const SPACING = 8;
+    const ROW_GAP = 24;
+    const WORLD_PX = SE.GRID_W * 16;
+    /** Frame (0–15) of leap `leap` of pod member `k`, `u` s into round `round`; −1 while that leap is out of sight. */
+    function dolphinFrame(u, k, leap, round, seed, fps) {
+        const start = POD[k][2] + JITTER * SE.landHash(k, round, seed) + leap * LEAP_EVERY;
+        const f = Math.floor((u - start) * fps);
+        return f >= 0 && f < FRAMES ? f : -1;
+    }
+    SE.dolphinFrame = dolphinFrame;
+    /** Seconds into a round after which every leap and splash is over. */
+    function dolphinActive(fps) {
+        return POD[POD.length - 1][2] + JITTER + (LEAPS - 1) * LEAP_EVERY + FRAMES / fps;
+    }
+    SE.dolphinActive = dolphinActive;
+    /** Along the way, art px from the leader's first exit: the middle of all the pod's leaps and half their length. */
+    function podSpan(sp) {
+        const mx = sp.mouth[0];
+        const from = Math.min(...POD.map((p) => p[0])) - mx;
+        const to = (LEAPS - 1) * ADVANCE + sp.w - mx;
+        return [Math.round((from + to) / 2), (to - from) / 2];
+    }
+    class DolphinLayer {
+        constructor() {
+            /** "Effekte reduzieren": no pods, the herd icon stays. */
+            this.still = false;
+            this.reducedMotion = typeof window !== 'undefined' && !!window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            this.pods = new WeakMap();
+            /** Pods leaping this round, holding their stretch of sea. */
+            this.live = [];
+            this.stamp = 0;
+        }
+        /** Whether marker m is drawn as a dolphin pod here, so the herd layer skips its icon. */
+        claims(m, world, tilePx) {
+            if (this.still || this.reducedMotion || tilePx < MIN_TILE)
+                return false;
+            if (m.c !== SE.Life.Cetacean || m.stage !== SE.DOLPHIN_STAGE || world.temperature[m.tile] < SE.DOLPHIN_WARM)
+                return false;
+            const sp = SE.FX_MANIFEST.sprites[SPRITE];
+            if (!sp || !sp.mouth || !SE.FxArt.shared().ready)
+                return false;
+            // Sea under every leap, whichever way the pod swims.
+            const reach = Math.ceil((podSpan(sp)[1] - 8) / 16);
+            const x = m.tile % SE.GRID_W;
+            const y = (m.tile / SE.GRID_W) | 0;
+            for (let dx = -reach; dx <= reach; dx++)
+                if (!world.isWater(SE.idx(SE.wrapX(x + dx), y)))
+                    return false;
+            return true;
+        }
+        draw(ctx, cam, markers, world, now) {
+            const art = SE.FxArt.shared();
+            const sp = SE.FX_MANIFEST.sprites[SPRITE];
+            if (!art.ready || !sp || !sp.mouth)
+                return;
+            const T = cam.tilePx * cam.dpr;
+            const cols = ctx.canvas.width / T;
+            const rows = ctx.canvas.height / T;
+            const clock = now / 1000;
+            const stamp = ++this.stamp;
+            const active = dolphinActive(sp.fps);
+            const [mid, half] = podSpan(sp);
+            for (const m of markers) {
+                if (!this.claims(m, world, cam.tilePx))
+                    continue;
+                const period = PERIOD_MIN + (PERIOD_MAX - PERIOD_MIN) * m.rank;
+                let pod = this.pods.get(m);
+                if (!pod) {
+                    pod = { tile: m.tile, flip: m.flip, offset: Math.random() * period - clock, wait: NaN, seen: 0, round: NaN, x: 0, y: 0, until: 0 };
+                    this.pods.set(m, pod);
+                }
+                const t = clock + pod.offset;
+                const round = Math.floor(t / period);
+                const u = t - round * period;
+                if (pod.seen !== stamp - 1 && u < active)
+                    pod.wait = round;
+                pod.seen = stamp;
+                if (u >= active) {
+                    pod.tile = m.tile;
+                    pod.flip = m.flip;
+                    continue;
+                }
+                if (round !== pod.round && round !== pod.wait)
+                    this.decide(pod, round, half, clock, clock + active - u);
+                if (round === pod.wait)
+                    continue;
+                // The copy of the tile on the wrapping map nearest the view.
+                let rx = (pod.tile % SE.GRID_W) - cam.scrollX;
+                rx -= Math.floor(rx / SE.GRID_W) * SE.GRID_W;
+                if (rx > SE.GRID_W - 4)
+                    rx -= SE.GRID_W;
+                const ry = ((pod.tile / SE.GRID_W) | 0) - cam.scrollY;
+                if (rx < -4 || rx > cols + 3 || ry < -2 || ry > rows + 2)
+                    continue;
+                const dir = pod.flip ? -1 : 1;
+                const lead = Math.round(cam.scrollX + rx) * 16 + 8 - dir * mid;
+                const cy = Math.round(cam.scrollY + ry) * 16 + 8;
+                const seed = Math.floor(m.rank * 1e6);
+                // Three to five dolphins, the formation mirrored in every other pod; the northern ones first, so the southern overlap them.
+                const size = 3 + Math.floor(((m.rank * 31) % 1) * 3);
+                const side = (m.rank * 97) % 1 < 0.5 ? 1 : -1;
+                const members = POD.slice(0, size).map((p, k) => k).sort((a, b) => (POD[a][1] - POD[b][1]) * side);
+                const mx = pod.flip ? sp.w - 1 - sp.mouth[0] : sp.mouth[0];
+                for (const k of members) {
+                    for (let leap = 0; leap < LEAPS; leap++) {
+                        const f = dolphinFrame(u, k, leap, round, seed, sp.fps);
+                        if (f < 0)
+                            continue;
+                        const x = lead + dir * (POD[k][0] + leap * ADVANCE);
+                        art.drawSprite(ctx, cam, SPRITE, f + (pod.flip ? FRAMES : 0), x, cy + side * POD[k][1], null, mx, sp.mouth[1]);
+                    }
+                }
+            }
+        }
+        /**
+         * At the start of a round: may this pod leap, or is another pod leaping
+         * within reach of its stretch of sea? First come, first served; a pod that
+         * loses sits the round out.
+         */
+        decide(pod, round, half, clock, until) {
+            pod.round = round;
+            const x = (pod.tile % SE.GRID_W) * 16 + 8;
+            const y = ((pod.tile / SE.GRID_W) | 0) * 16 + 8;
+            this.live = this.live.filter((o) => o !== pod && o.until > clock);
+            const close = this.live.some((o) => {
+                let dx = o.x - x;
+                dx -= Math.round(dx / WORLD_PX) * WORLD_PX;
+                return Math.abs(dx) < 2 * half + SPACING && Math.abs(o.y - y) < ROW_GAP;
+            });
+            if (close) {
+                pod.wait = round;
+                return;
+            }
+            pod.x = x;
+            pod.y = y;
+            pod.until = until;
+            this.live.push(pod);
+        }
+    }
+    SE.DolphinLayer = DolphinLayer;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — oxygen pearling off the coasts before the Great Oxidation
+ * -----------------------------------------------------------------------------
+ * From the moment the sea's iron is used up (the chronicle's "Eisen im Meer
+ * aufgebraucht") until the air turns oxic (the Great Oxidation Event), the
+ * cyanobacteria's oxygen stays in the water and leaves it across the surface
+ * (oceanchem.ts). On the map it pearls up all along the coasts: a spot in the
+ * sea next to land sends up a string of bubbles for a few seconds, then goes
+ * quiet, and another starts elsewhere; more as the sea fills with oxygen. A
+ * bubble rises like the terraform brush's, swells from one art pixel to a
+ * 3×3 ring lit from the upper left and pops in three specks. None with
+ * "Effekte reduzieren". Visual only: the simulation never reads this.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** New pearling spots per second and coastal sea tile in view, at full strength (about one spot per 6 tiles). */
+    const SPOT_RATE = 0.055;
+    /** A spot pearls for 2–4 s, a bubble every BEAT s on average; at most SPOTS_MAX at once. */
+    const SPOT_LIFE_MIN = 2;
+    const SPOT_LIFE_MAX = 4;
+    const BEAT = 0.3;
+    const SPOTS_MAX = 120;
+    /** A bubble's life in s and how far it rises, art px; shares of its life at which it grows and pops. */
+    const BUBBLE_LIFE = 1.1;
+    const RISE = 9;
+    const PEARL_AT = 0.2;
+    const RING_AT = 0.45;
+    const POP_AT = 0.85;
+    /** Spots pearling in view from which the bubbling sounds at full level: few, since a zoomed-in view holds only a stretch of coast. */
+    const FULL_SOUND_SPOTS = 3;
+    /** Strength once the iron is gone; full when the sea counts as oxygenated (OCEAN_O2_RISEN). */
+    const FAINT = 0.6;
+    const WHITE = SE.fxColor('white', 0);
+    const LIT = SE.fxColor('ice', 4);
+    const SHADE = SE.fxColor('ice', 3);
+    /** How strongly the sea gives off oxygen: 0 before its iron runs out and from the Great Oxidation Event on. */
+    function oxygenPearling(world) {
+        if (world.oceanIron >= SE.IRON_DEPLETED || world.o2 >= SE.AIR_O2_RISEN)
+            return 0;
+        return FAINT + (1 - FAINT) * SE.clamp(world.oceanO2 / SE.OCEAN_O2_RISEN, 0, 1);
+    }
+    SE.oxygenPearling = oxygenPearling;
+    /** Sea with land on one of its eight neighbours. */
+    function coastalSea(world, x, y) {
+        if (!world.isWater(SE.idx(SE.wrapX(x), y)))
+            return false;
+        for (let dy = -1; dy <= 1; dy++) {
+            if (y + dy < 0 || y + dy >= SE.GRID_H)
+                continue;
+            for (let dx = -1; dx <= 1; dx++)
+                if (!world.isWater(SE.idx(SE.wrapX(x + dx), y + dy)))
+                    return true;
+        }
+        return false;
+    }
+    class OxygenBubbles {
+        constructor() {
+            /** "Effekte reduzieren": no bubbles. */
+            this.still = false;
+            this.reducedMotion = typeof window !== 'undefined' && !!window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            this.spots = [];
+            this.lastDraw = 0;
+            /** Spots pearling in view at the last draw. */
+            this.inView = 0;
+        }
+        /** How much bubbling is in view, 0..1, for its sound (before the zoom). */
+        presence() {
+            return Math.min(1, this.inView / FULL_SOUND_SPOTS);
+        }
+        /** `cols` × `rows` tiles in view; ctx at identity (device pixels). */
+        draw(ctx, cam, cols, rows, world, now) {
+            const clock = now / 1000;
+            const dt = this.lastDraw ? Math.min(0.1, clock - this.lastDraw) : 0;
+            this.lastDraw = clock;
+            const strength = this.still || this.reducedMotion ? 0 : oxygenPearling(world);
+            // Random tiles in view; a spot starts where one is coastal sea.
+            for (let n = cols * rows * SPOT_RATE * strength * dt; n > 0 && this.spots.length < SPOTS_MAX; n--) {
+                if (n < 1 && Math.random() >= n)
+                    break;
+                const x = Math.floor(cam.scrollX + Math.random() * cols);
+                const y = Math.floor(cam.scrollY + Math.random() * rows);
+                if (y < 0 || y >= SE.GRID_H || !coastalSea(world, x, y))
+                    continue;
+                this.spots.push({
+                    x: x * 16 + 2 + Math.floor(Math.random() * 11), y: y * 16 + 7 + Math.floor(Math.random() * 7),
+                    until: clock + SPOT_LIFE_MIN + Math.random() * (SPOT_LIFE_MAX - SPOT_LIFE_MIN), next: clock, born: [],
+                });
+            }
+            // A spot that went quiet lets its last bubbles rise and pop before it goes.
+            this.spots = this.spots.filter((s) => s.until > clock - BUBBLE_LIFE && (strength > 0 || s.born.length > 0));
+            const px = (cam.tilePx * cam.dpr) / 16;
+            const span = SE.GRID_W * 16;
+            const viewW = ctx.canvas.width;
+            const dot = (color, x, y) => {
+                // The map wraps in x: the copy that lands in or just left of the view.
+                let ax = ((x - cam.scrollX * 16) % span + span) % span;
+                if (ax * px > viewW)
+                    ax -= span;
+                const ay = y - cam.scrollY * 16;
+                const x0 = Math.round(ax * px);
+                const y0 = Math.round(ay * px);
+                ctx.fillStyle = color;
+                ctx.fillRect(x0, y0, Math.max(1, Math.round((ax + 1) * px) - x0), Math.max(1, Math.round((ay + 1) * px) - y0));
+            };
+            this.inView = 0;
+            for (const s of this.spots) {
+                let sx = ((s.x - cam.scrollX * 16) % span + span) % span;
+                if (sx * px > viewW)
+                    sx -= span;
+                const sy = (s.y - cam.scrollY * 16) * px;
+                if (s.until > clock && sx >= 0 && sx * px <= viewW && sy >= 0 && sy <= ctx.canvas.height)
+                    this.inView++;
+                // After a hidden tab the clock jumps: no backlog of bubbles.
+                s.next = Math.max(s.next, clock - BEAT);
+                for (; s.next <= clock && s.next < s.until && strength > 0; s.next += BEAT * (0.5 + Math.random()))
+                    s.born.push(s.next);
+                s.born = s.born.filter((b) => clock - b < BUBBLE_LIFE);
+                for (const b of s.born) {
+                    const u = (clock - b) / BUBBLE_LIFE;
+                    const x = s.x + Math.round(Math.sin(b * 37 + u * 9) * 0.7);
+                    const y = s.y - Math.floor(u * RISE);
+                    if (u >= POP_AT) {
+                        dot(LIT, x - 2, y);
+                        dot(LIT, x + 2, y);
+                        dot(WHITE, x, y - 2);
+                    }
+                    else if (u >= RING_AT) {
+                        dot(WHITE, x, y - 1);
+                        dot(WHITE, x - 1, y);
+                        dot(LIT, x + 1, y);
+                        dot(SHADE, x, y + 1);
+                    }
+                    else if (u >= PEARL_AT) {
+                        dot(WHITE, x, y);
+                        dot(LIT, x + 1, y);
+                        dot(SHADE, x, y + 1);
+                        dot(SHADE, x + 1, y + 1);
+                    }
+                    else {
+                        dot(SHADE, x, y);
+                    }
+                }
+            }
+        }
+    }
+    SE.OxygenBubbles = OxygenBubbles;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — renderers
  * -----------------------------------------------------------------------------
  * EditView  a scrollable, zoomed tile view drawn from pixel sprites, with the
@@ -40727,10 +42544,14 @@ var SE;
             this.waterMotion = new SE.WaterMotion();
             this.herds = new SE.HerdLayer();
             this.whales = new SE.WhaleLayer();
+            this.dolphins = new SE.DolphinLayer();
+            this.bubbles = new SE.OxygenBubbles();
             this.cities = new SE.CityLayer();
             this.settlers = new SE.SettlerLayer();
             /** Disasters: omens, eruptions, lava, smoke (docs/ereignisse-spec.md). */
             this.fx = new SE.EffectLayer();
+            /** How far the game is between two ticks, 0..1 (app.ts); kept while paused. */
+            this.tickPhase = 0;
             this.baseKey = '';
             this.baseTick = -1;
             this.baseTime = 0;
@@ -40771,6 +42592,25 @@ var SE;
             this.fx.reduce = on;
             this.waterMotion.still = on;
             this.whales.still = on;
+            this.dolphins.still = on;
+            this.bubbles.still = on;
+        }
+        /** Make sure a creature of sub-species (c, stage) stands on the map; its tile, -1 if none lives. */
+        pinSpecies(world, c, stage) {
+            this.markDirty();
+            return this.herds.pin(world, c, stage);
+        }
+        /** The creature the map shows on tile i, for the Examine picture: `key` is cheap, `draw` makes its 32 px sprite. */
+        creatureOn(world, i) {
+            const m = this.layers.life ? this.herds.markerOn(i) : null;
+            if (!m)
+                return null;
+            const special = SE.animalSpecialist(this.regions, world, i, m.c, m.stage);
+            const sp = SE.SPECIES[m.c];
+            const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[m.stage]?.art;
+            if (!art)
+                return null;
+            return { key: `${m.c}:${m.stage}:${special}:${+m.flip}`, draw: () => SE.rasterArt(art, 32, SE.CREATURE_LOOK, m.flip, true) };
         }
         /** Force a full redraw on the next frame (after a tool changed the world). */
         markDirty() {
@@ -40962,7 +42802,7 @@ var SE;
             if (!this.land.pending)
                 this.fx.baseTick = this.baseTick;
             if (fx) {
-                fx.update(world, cam, this.cols, this.rows, now);
+                fx.update(world, cam, this.cols, this.rows, now, this.tickPhase);
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
                 if (!previewing)
                     fx.drawShake(ctx, this.base, cam, now);
@@ -40972,9 +42812,11 @@ var SE;
             if (this.layers.life) {
                 this.herds.update(world, now);
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.bubbles.draw(ctx, cam, this.cols, this.rows, world, now);
                 this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
+                this.dolphins.draw(ctx, cam, this.herds.markers, world, now);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                this.herds.draw(ctx, this, world, now, this.tiles, this.regions, (m) => this.whales.claims(m, world, this.tilePx, this.regions));
+                this.herds.draw(ctx, this, world, now, this.tiles, this.regions, (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
             }
             if (this.layers.cities)
                 this.settlers.draw(ctx, this, world, now, dpr);
@@ -41061,6 +42903,18 @@ var SE;
             const zoom = (this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE);
             return SE.clamp((shore / seen) / 0.06, 0, 1) * (0.4 + 0.6 * zoom);
         }
+        /**
+         * How loud the oxygen bubbling should be, 0..1: how much pearls in view,
+         * times the zoom squared, silent fully zoomed out and full fully zoomed
+         * in. Squared because loudness is heard on a log scale: each zoom step
+         * then sounds about as much louder as the last.
+         */
+        bubblePresence() {
+            if (!this.layers.life)
+                return 0;
+            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+            return this.bubbles.presence() * zoom * zoom;
+        }
         /** The last full picture, scaled and moved to where the new zoom puts it. */
         drawZoomPreview(dpr) {
             const k = this.tilePx / this.baseTilePx;
@@ -41076,6 +42930,16 @@ var SE;
             ctx.fillStyle = '#05090c';
             ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             ctx.imageSmoothingEnabled = false;
+            // Zooming out shrinks the last picture: flat tile colours fill the rest
+            // until the real redraw, instead of empty space.
+            const flat = k < 1 && this.pixelTerrain ? this.land.overview() : null;
+            if (flat) {
+                const T = this.tilePx * dpr;
+                const w = SE.GRID_W * T;
+                for (let x = -((((this.scrollX * T) % w) + w) % w); x < this.canvas.width; x += w) {
+                    ctx.drawImage(flat, x, -this.scrollY * T, w, SE.GRID_H * T);
+                }
+            }
             ctx.drawImage(this.base, dx * dpr, dy * dpr, this.base.width * k, this.base.height * k);
         }
         /**
@@ -41449,8 +43313,10 @@ var SE;
             this.mode = SE.MapMode.Terrain;
             /** Flat Robinson-ish projection, or the planet as a globe. */
             this.globe = false;
-            /** Longitude offset used when spinning the globe. */
+            /** Longitude at the globe's centre. */
             this.spin = 0;
+            /** Latitude at the globe's centre. */
+            this.tilt = 0;
             /** Draw the Edit window's viewport as a rectangle. */
             this.editRect = null;
             /** Backing-store resolution as a fraction of the screen's. */
@@ -41477,11 +43343,28 @@ var SE;
             for (let i = 3; i < this.image.data.length; i += 4)
                 this.image.data[i] = 255;
         }
-        /** Convert a pointer position to world tile coordinates (flat mode only). */
+        /** Convert a pointer position to world tile coordinates. */
         tileAt(clientX, clientY) {
             const rect = this.canvas.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0)
                 return null;
+            if (this.globe) {
+                const r = Math.min(rect.width, rect.height) * 0.46;
+                const nx = (clientX - rect.left - rect.width / 2) / r;
+                const ny = (clientY - rect.top - rect.height / 2) / r;
+                const d2 = nx * nx + ny * ny;
+                if (d2 > 1)
+                    return null;
+                const nz = Math.sqrt(1 - d2);
+                const cosT = Math.cos(this.tilt);
+                const sinT = Math.sin(this.tilt);
+                const lat = Math.asin(SE.clamp(-ny * cosT + nz * sinT, -1, 1));
+                const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
+                return {
+                    x: SE.wrapX(Math.floor(((lon / (Math.PI * 2)) + 0.5) * SE.GRID_W)),
+                    y: SE.clampY(Math.floor((0.5 - lat / Math.PI) * SE.GRID_H)),
+                };
+            }
             const fx = (clientX - rect.left) / rect.width;
             const fy = (clientY - rect.top) / rect.height;
             if (fx < 0 || fy < 0 || fx >= 1 || fy >= 1)
@@ -41556,6 +43439,10 @@ var SE;
             const radius = Math.min(w, h) * 0.46;
             const cx = w / 2;
             const cy = h / 2;
+            this.aimAtEditRect();
+            // Orthographic view tilted to `tilt`: rotate the view ray about the x axis.
+            const cosT = Math.cos(this.tilt);
+            const sinT = Math.sin(this.tilt);
             for (let py = 0; py < h; py++) {
                 const ny = (py - cy) / radius;
                 for (let px = 0; px < w; px++) {
@@ -41567,8 +43454,8 @@ var SE;
                         continue;
                     }
                     const nz = Math.sqrt(1 - d2);
-                    const lat = Math.asin(SE.clamp(-ny, -1, 1));
-                    const lon = Math.atan2(nx, nz) + this.spin;
+                    const lat = Math.asin(SE.clamp(-ny * cosT + nz * sinT, -1, 1));
+                    const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
                     const tx = SE.wrapX(Math.round(((lon / (Math.PI * 2)) + 0.5) * SE.GRID_W));
                     const ty = SE.clampY(Math.round((0.5 - lat / Math.PI) * SE.GRID_H));
                     const s = (ty * SE.GRID_W + tx) * 4;
@@ -41582,6 +43469,77 @@ var SE;
             }
             ctx.putImageData(out, 0, 0);
             this.decorateGlobe(ctx, w, h, radius, cx, cy);
+            this.drawGlobeRect(ctx, radius, cx, cy);
+        }
+        /** Ease the globe towards the Edit window's viewport; idle spin without one. */
+        aimAtEditRect() {
+            const e = this.editRect;
+            if (!e) {
+                this.spin += 0.012;
+                return;
+            }
+            const lonT = ((e.x + Math.min(SE.GRID_W, e.w) / 2) / SE.GRID_W - 0.5) * Math.PI * 2;
+            const latT = (0.5 - (e.y + e.h / 2) / SE.GRID_H) * Math.PI;
+            let d = lonT - this.spin;
+            d -= Math.round(d / (Math.PI * 2)) * Math.PI * 2;
+            this.spin += d * 0.15;
+            this.tilt += (latT - this.tilt) * 0.15;
+        }
+        /** The viewport's outline on the sphere: a lat/lon box, so it narrows towards the poles. */
+        drawGlobeRect(ctx, r, cx, cy) {
+            const e = this.editRect;
+            if (!e)
+                return;
+            const x0 = e.x;
+            const x1 = e.x + Math.min(SE.GRID_W, e.w);
+            const y0 = e.y;
+            const y1 = e.y + e.h;
+            const N = 24;
+            const pts = [];
+            for (let i = 0; i < N; i++)
+                pts.push([x0 + (x1 - x0) * i / N, y0]);
+            for (let i = 0; i < N; i++)
+                pts.push([x1, y0 + (y1 - y0) * i / N]);
+            for (let i = 0; i < N; i++)
+                pts.push([x1 - (x1 - x0) * i / N, y1]);
+            for (let i = 0; i <= N; i++)
+                pts.push([x0, y1 - (y1 - y0) * i / N]);
+            const cosT = Math.cos(this.tilt);
+            const sinT = Math.sin(this.tilt);
+            const path = () => {
+                ctx.beginPath();
+                let drawing = false;
+                for (const [tx, ty] of pts) {
+                    const lon = (tx / SE.GRID_W - 0.5) * Math.PI * 2 - this.spin;
+                    const lat = (0.5 - ty / SE.GRID_H) * Math.PI;
+                    const x = Math.cos(lat) * Math.sin(lon);
+                    const y = Math.sin(lat);
+                    const z = Math.cos(lat) * Math.cos(lon);
+                    // Inverse of the tilt in renderGlobe; z is towards the viewer.
+                    const up = y * cosT - z * sinT;
+                    const depth = y * sinT + z * cosT;
+                    if (depth < 0) {
+                        drawing = false;
+                        continue;
+                    }
+                    const px = cx + x * r;
+                    const py = cy - up * r;
+                    if (drawing)
+                        ctx.lineTo(px, py);
+                    else
+                        ctx.moveTo(px, py);
+                    drawing = true;
+                }
+                ctx.stroke();
+            };
+            const lw = Math.max(2, Math.round(r / 90));
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+            ctx.lineWidth = lw + 2;
+            path();
+            ctx.strokeStyle = '#f6f1df';
+            ctx.lineWidth = lw;
+            path();
         }
         /** Stars behind the disc, a bright rim of atmosphere, sunlight from the upper left. */
         decorateGlobe(ctx, w, h, r, cx, cy) {
@@ -49790,15 +51748,6 @@ var SE;
         return box;
     }
     SE.faunaPicture = faunaPicture;
-    function biomeChips(list) {
-        const wrap = SE.make('span', 'fauna-biomes');
-        for (const b of list) {
-            const chip = SE.make('span', 'fauna-biome');
-            chip.append(SE.img(SE.habitatAsset(SE.BIOME_ICONS[b]), 'ico'), SE.make('span', undefined, SE.BIOME_NAMES[b]));
-            wrap.appendChild(chip);
-        }
-        return wrap;
-    }
     function rows(list) {
         const dl = SE.make('dl', 'fauna-dl');
         for (const [k, v] of list) {
@@ -49959,14 +51908,9 @@ var SE;
         values(c, stage) {
             const def = SE.LIFE[c];
             const { el, body } = faunaSection('Lebensraum und Spielwerte', `gilt für die ganze Gruppe „${def.name}“`);
-            const { best, more } = SE.faunaBiomesBySuit(c);
             const [lo, hi] = SE.faunaTempWindow(c, this.deps.params());
             const tolerance = SE.fmt.int(SE.mul(this.deps.params().bio.tolerance) * 100);
             const list = [['Lebensbereich', def.realm === 'sea' ? 'Meer' : 'Land']];
-            if (best.length > 0)
-                list.push(['Bevorzugt', biomeChips(best)]);
-            if (more.length > 0)
-                list.push(['Auch', biomeChips(more)]);
             list.push(['Temperatur', `${SE.fmt.int(lo)} bis ${SE.fmt.int(hi)} °C (Regler „Toleranz“ ${tolerance} %)`]);
             const oxygen = SE.lifeOxygen(c);
             list.push(['Sauerstoff', oxygen.min > 0 ? `über ${SE.faunaNum(oxygen.min)} ${SE.oxygenUnit(oxygen.medium)}, volle Stärke ab ${SE.faunaNum(oxygen.full)} %` : 'braucht keinen']);
@@ -49978,7 +51922,7 @@ var SE;
             if (def.raft > 0)
                 list.push(['Weite Ausbreitung', `gründet neue Populationen bis zu ${def.raft} Felder entfernt, auch jenseits von ${def.realm === 'sea' ? 'Land' : 'Wasser'}`]);
             list.push(['Intelligenz', def.sentient ? 'kann Intelligenz entwickeln und Städte gründen' : 'entwickelt keine Intelligenz']);
-            body.appendChild(rows(list));
+            body.append(SE.examineHabitats(def.suit, -1, `fauna:${c}`), rows(list));
             const effects = SE.make('ul', 'fauna-effects');
             for (const t of SE.faunaEffects(c, this.deps.params()))
                 effects.appendChild(SE.make('li', undefined, t));
@@ -50379,10 +52323,13 @@ var SE;
         return el;
     }
     SE.examinePlant = examinePlant;
+    /** `current`: the examined tile's biome, framed; -1 outside the Examine window. */
     function examineHabitats(suit, current, key) {
         const root = SE.make('div');
         const label = SE.make('div', 'ex-habitats-label');
-        label.append(SE.make('span', undefined, 'Lebensräume'), SE.make('span', 'ex-current-key', 'dieses Feld'));
+        label.append(SE.make('span', undefined, 'Lebensräume'));
+        if (current >= 0)
+            label.append(SE.make('span', 'ex-current-key', 'dieses Feld'));
         const icons = SE.make('div', 'ex-habitats');
         for (let b = 0; b < SE.BIOME_COUNT; b++) {
             const value = suit[b];
@@ -50417,6 +52364,8 @@ var SE;
             this.hero = null;
             this.onShowInTree = null;
             this.onShowSpecies = null;
+            /** The creature the map shows on a tile (render.ts `creatureOn`). */
+            this.creatureOn = null;
         }
         invalidate() { this.signature = ''; }
         update(world, x, y) {
@@ -50428,9 +52377,10 @@ var SE;
                     plants.push(g);
             plants.sort((a, b) => Number(b === world.floraTop[i]) - Number(a === world.floraTop[i]) || a - b);
             const state = SE.LifeSystem.biomeStatusLabel(world, i);
+            const creature = this.creatureOn?.(world, i) ?? null;
             const tileSig = [i, world.biome[i], world.landscape[i], world.landscapeZone[i], world.substrate[i], world.landscapeDensity[i],
                 state, Math.round(world.temperature[i]), Math.round(world.rainfallCm(i)), world.altitudeMeters(i),
-                Math.round(world.magma[i] * 30), SE.landDigest(world, x, y)].join('|');
+                Math.round(world.magma[i] * 30), SE.landDigest(world, x, y), creature?.key ?? ''].join('|');
             const city = world.tech[i] === SE.Tech.None ? '' : ExaminePanel.cityText(world, i);
             const river = world.riverLevel[i] > 0 ? `Fluss · ${SE.fmt.int(SE.RiverSystem.discharge(world, i))} m³/s` : '';
             const event = world.eventTtl[i] > 0 ? `Ereignis: ${SE.EVENT_NAMES[world.eventKind[i]]}` : '';
@@ -50451,7 +52401,7 @@ var SE;
             const scrollTop = sameTile ? scroller?.scrollTop ?? 0 : 0;
             this.tile = i;
             if (!this.hero || tileSig !== this.tileSignature) {
-                this.hero = this.tileHead(world, i, x, y, state);
+                this.hero = this.tileHead(world, i, x, y, state, creature?.draw() ?? null);
                 this.tileSignature = tileSig;
             }
             const actions = {
@@ -50502,10 +52452,10 @@ var SE;
             sec.append(head);
             return sec;
         }
-        tileHead(world, i, x, y, state) {
+        tileHead(world, i, x, y, state, creature) {
             const el = SE.make('div', 'ex-tile');
             const picture = SE.make('div', 'ex-picture');
-            const canvas = SE.examineTilePicture(world, x, y);
+            const canvas = SE.examineTilePicture(world, x, y, creature);
             if (canvas)
                 picture.append(canvas);
             else
@@ -51792,7 +53742,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.9.0';
+    SE.APP_VERSION = '0.9.1';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -52615,29 +54565,34 @@ var SE;
     }
     SE.MusicPlayer = MusicPlayer;
     /** Loudest the surf ever gets: heard more than listened to. */
-    const SURF_VOLUME = 0.16;
-    /** How quickly the surf follows the view, ms to cover most of a change. */
-    const SURF_EASE_MS = 1500;
+    SE.SURF_VOLUME = 0.16;
+    /** Loudest the oxygen bubbling gets (zoomed fully in on a pearling coast): the nearer sound, above the surf. */
+    SE.BUBBLE_VOLUME = 0.3;
+    /** How quickly an ambient loop follows the view, ms to cover most of a change. */
+    const AMBIENT_EASE_MS = 1500;
     /**
-     * The sea's murmur while coasts are in view, louder the closer the camera.
+     * A looping ambient sound that follows what is in view: the sea's murmur
+     * while coasts are on screen, the bubbling while oxygen pearls off them.
      * Same <audio> route as the music, so it also plays over file://.
      */
-    class SurfSound {
-        constructor() {
-            this.audio = new Audio('assets/audio/ambient/ocean-waves.mp3');
+    class AmbientLoop {
+        /** `volume`: the loudest it gets, at target 1. */
+        constructor(src, volume) {
+            this.volume = volume;
             this.level = 0;
             /** No play() retries before this time: autoplay may still be blocked. */
             this.retryAt = 0;
+            this.audio = new Audio(src);
             this.audio.loop = true;
             this.audio.preload = 'auto';
             this.audio.volume = 0;
             document.addEventListener('visibilitychange', () => { if (document.hidden)
                 this.audio.pause(); });
         }
-        /** Every frame: `target` is 0..1 of SURF_VOLUME, already scaled by the player's slider. */
+        /** Every frame: `target` is 0..1 of its volume, already scaled by the player's slider. */
         update(target, dt, now) {
-            this.level += (target - this.level) * Math.min(1, dt / SURF_EASE_MS);
-            this.audio.volume = SE.clamp(this.level * SURF_VOLUME, 0, 1);
+            this.level += (target - this.level) * Math.min(1, dt / AMBIENT_EASE_MS);
+            this.audio.volume = SE.clamp(this.level * this.volume, 0, 1);
             if (this.level < 0.003) {
                 if (!this.audio.paused)
                     this.audio.pause();
@@ -52648,7 +54603,7 @@ var SE;
             }
         }
     }
-    SE.SurfSound = SurfSound;
+    SE.AmbientLoop = AmbientLoop;
     /** The effect volume 0..1, 0 while sound is off; the app points this at its settings. */
     SE.SFX = { volume: () => 0 };
     /**
@@ -55308,8 +57263,10 @@ var SE;
             this.sliderPanels = [];
             this.modelHeroes = new Map();
             this.title = null;
-            this.surf = new SE.SurfSound();
+            this.surf = new SE.AmbientLoop('assets/audio/ambient/ocean-waves.mp3', SE.SURF_VOLUME);
             this.surfTarget = 0;
+            this.bubbling = new SE.AmbientLoop('assets/audio/sfx/simmering-water.mp3', SE.BUBBLE_VOLUME);
+            this.bubblingTarget = 0;
             this.lastSurfCheck = 0;
             this.toolButtons = new Map();
             this.layerButtons = [];
@@ -55319,7 +57276,7 @@ var SE;
             /* ---- state ---- */
             this.speed = 3;
             this.lastRunningSpeed = 3;
-            this.settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
+            this.settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
             this.mapShowsInfo = false;
             this.selection = {
                 tool: SE.Tool.Examine, altitudeRaise: true, flora: SE.Flora.LandPlants, clearing: false,
@@ -55375,6 +57332,9 @@ var SE;
                     }
                     if (this.accumulator > tickMs * SE.MAX_TICKS_PER_FRAME)
                         this.accumulator = 0;
+                    // Effects play between two ticks by this; paused, it stays where it was.
+                    // A pause from inside a tick (milestone) leaves the accumulator below 0.
+                    this.editView.tickPhase = SE.clamp(this.accumulator / tickMs, 0, 0.999);
                 }
                 else {
                     this.accumulator = 0;
@@ -55392,12 +57352,13 @@ var SE;
                 if (now - this.lastSurfCheck > 400) {
                     this.lastSurfCheck = now;
                     this.surfTarget = this.title || !this.settings.ambient ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
+                    this.bubblingTarget = this.title || !this.settings.ambient ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
                 }
                 this.surf.update(this.surfTarget, delta, now);
+                this.bubbling.update(this.bubblingTarget, delta, now);
                 if (this.windows.isVisible('map')) {
                     if (this.mapView.globe) {
                         if (now - this.lastMapRender > 50) {
-                            this.mapView.spin += 0.012;
                             this.mapView.render(this.world);
                             this.lastMapRender = now;
                         }
@@ -55443,7 +57404,11 @@ var SE;
                 }),
             });
             this.notifier.pauseOnMilestone = this.settings.pauseOnMilestone;
-            this.discoveries = new SE.DiscoveryToasts(SE.el('toasts'), {
+            // Made here, not in index.html: a cached old page must still boot with a new bundle.
+            const discoveryHost = SE.make('div', 'discoveries');
+            discoveryHost.setAttribute('aria-live', 'polite');
+            document.body.appendChild(discoveryHost);
+            this.discoveries = new SE.DiscoveryToasts(discoveryHost, {
                 open: (c, s) => { this.speciesInfo.show(c, s); this.windows.show('species'); },
                 openLexicon: () => this.windows.show('lexicon'),
                 held: () => this.screenHeld,
@@ -55895,8 +57860,6 @@ var SE;
             win.body.appendChild(layout);
             this.mapView = new SE.MapView(canvas);
             canvas.addEventListener('pointerdown', (e) => {
-                if (this.mapView.globe)
-                    return;
                 const tile = this.mapView.tileAt(e.clientX, e.clientY);
                 if (tile)
                     this.editView.centerOn(tile.x, tile.y);
@@ -55943,6 +57906,7 @@ var SE;
             this.examinePanel = new SE.ExaminePanel(examBody);
             this.examinePanel.onShowInTree = (id) => this.openTree(id);
             this.examinePanel.onShowSpecies = (c, stage) => { this.speciesInfo.show(c, stage); this.windows.show('species'); };
+            this.examinePanel.creatureOn = (world, i) => this.editView.creatureOn(world, i);
             // Chronicle
             const chron = this.windows.create({ id: 'chronicle', title: 'Chronik', icon: SE.uiIcon('chronicle'), x: 0.34, y: 0.08, width: 460, height: 560 });
             const chronBody = SE.make('div', 'chronicle-body');
@@ -56040,6 +58004,18 @@ var SE;
             oceanO2.el.appendChild(SE.make('span', 'hud-tag', 'Meer'));
             const co2 = chip(SE.resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor');
             const temp = chip(SE.resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor');
+            // The gas chips open the air composition window.
+            for (const c of [o2, oceanO2, co2]) {
+                c.el.setAttribute('role', 'button');
+                c.el.classList.add('hud-link');
+                c.el.addEventListener('click', () => this.windows.toggle('graph-air'));
+                c.el.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        this.windows.toggle('graph-air');
+                    }
+                });
+            }
             const time = SE.make('div', 'hud-time');
             const scale = SE.make('span', 'hud-scale');
             const date = SE.make('span', 'hud-date');
@@ -56191,11 +58167,6 @@ var SE;
                     kind: 'toggle', label: 'Entwicklungen und Meilensteine pausieren', icon: SE.uiIcon('bell'),
                     on: () => this.settings.pauseOnMilestone,
                     toggle: () => { this.settings.pauseOnMilestone = !this.settings.pauseOnMilestone; this.notifier.pauseOnMilestone = this.settings.pauseOnMilestone; this.saveSettings(); },
-                },
-                {
-                    kind: 'toggle', label: 'Bei Entdeckung pausieren', icon: SE.uiIcon('pause'),
-                    on: () => this.settings.pauseOnDiscovery,
-                    toggle: () => { this.settings.pauseOnDiscovery = !this.settings.pauseOnDiscovery; this.saveSettings(); },
                 },
                 {
                     kind: 'toggle', group: true, label: 'Effekte reduzieren (kein Wackeln, keine Blitze)', icon: SE.uiIcon('layer-events'),
@@ -57152,11 +59123,15 @@ var SE;
             const entries = this.evolution.pending.splice(0);
             this.notifier.push(entries, this.world.evo.reported);
         }
-        /** Fly the map to the densest population of a sub-species; false if none lives. */
+        /** Fly the map to the creature standing for a sub-species; false if none lives. */
         jumpToSpecies(c, stage) {
-            const i = SE.FaunaDex.findTile(this.world, c, stage);
+            const i = this.editView.pinSpecies(this.world, c, stage);
             if (i < 0)
                 return false;
+            if (!this.editView.layers.life) {
+                this.editView.layers.life = true;
+                this.syncLayerButtons();
+            }
             const x = i % SE.GRID_W;
             const y = Math.floor(i / SE.GRID_W);
             if (this.windows.narrow) {
@@ -57166,9 +59141,9 @@ var SE;
             SE.flyTo(this.editView, x, y, () => this.editView.ping(x, y, SE.KINGDOM_COLOR[SE.nodeForLife(c)?.kingdom ?? 'animal']));
             return true;
         }
-        /** Pause for a discovery notice (an option); resume unless the player opened it. */
+        /** Pause for a discovery notice; resume unless the player opened it. */
         onDiscovery(shown, clicked = false) {
-            if (shown && this.settings.pauseOnDiscovery && this.speed !== 0) {
+            if (shown && this.speed !== 0) {
                 this.setSpeed(0, true);
                 this.discoveryPaused = true;
             }
@@ -57207,6 +59182,7 @@ var SE;
             this.history.reset();
             this.sliderPanels.forEach((p) => p.sync());
             this.accumulator = 0;
+            this.editView.tickPhase = 0;
             this.milestonePaused = false;
             this.examineTile = null;
             this.windows.hide('examine');
@@ -57292,7 +59268,8 @@ var SE;
             if (i > 0)
                 this.lastRunningSpeed = i;
             this.speed = i;
-            this.accumulator = 0;
+            // Keep the phase, so a speed change never throws a moving effect back.
+            this.accumulator = this.editView.tickPhase * SPEED_TICK_MS[i];
             if (i !== 0)
                 this.milestonePaused = this.discoveryPaused = false;
             this.syncSpeedButtons();
@@ -57502,8 +59479,6 @@ var SE;
                     this.settings.relativeDate = s.relativeDate;
                 if (typeof s.pauseOnMilestone === 'boolean')
                     this.settings.pauseOnMilestone = s.pauseOnMilestone;
-                if (typeof s.pauseOnDiscovery === 'boolean')
-                    this.settings.pauseOnDiscovery = s.pauseOnDiscovery;
                 if (typeof s.sound === 'boolean')
                     this.settings.sound = s.sound;
                 if (typeof s.music === 'boolean')
@@ -57642,6 +59617,7 @@ var SE;
             this.evolution.pending.length = 0;
             this.milestonePaused = false;
             this.accumulator = 0;
+            this.editView.tickPhase = 0;
             this.examineTile = null;
             this.windows.hide('examine');
             this.sliderPanels.forEach((p) => p.sync());

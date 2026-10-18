@@ -487,6 +487,8 @@ p { margin: 0; }
   border: 2px solid var(--glass-border);
   clip-path: var(--px-clip);
 }
+.hud-link { cursor: pointer; }
+.hud-link:hover::before { border-color: var(--focus); }
 .hud-chip:focus-visible { outline: none; }
 .hud-chip:focus-visible::before { border-color: var(--focus); }
 .hud-chip[data-tip]:hover::after,
@@ -1578,6 +1580,16 @@ p { margin: 0; }
   transform: translateX(-50%);
   z-index: 560;
   width: min(540px, calc(100vw - 24px));
+  pointer-events: none;
+  filter: var(--lift);
+}
+.discoveries {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 555;
+  width: min(420px, calc(100vw - 24px));
   pointer-events: none;
   filter: var(--lift);
 }

@@ -31,6 +31,10 @@ namespace SE {
   interface WaveTones { readonly light: string; readonly dark: string; readonly faintLight: string; readonly faintDark: string; readonly dust: readonly string[] }
   const WAVE_ON_DARK: WaveTones = { light: fxColor('sand', 3), dark: fxColor('soil', 0), faintLight: fxColor('sand', 1), faintDark: fxColor('soil', 1), dust: DUST };
   const WAVE_ON_BRIGHT: WaveTones = { light: fxColor('soil', 2), dark: fxColor('soil', 0), faintLight: fxColor('sand', 0), faintDark: fxColor('soil', 1), dust: DUST_ON_BRIGHT };
+  /** Foam flecks instead of dust where the quake shakes the sea. */
+  const FOAM: readonly string[] = [fxColor('ice', 3), fxColor('water', 7), fxColor('water', 6), fxColor('water', 6)];
+  /** A seaquake's waves ripple the water: sea tones, no sand over the sea. */
+  const WAVE_AT_SEA: WaveTones = { light: fxColor('water', 7), dark: fxColor('water', 3), faintLight: fxColor('water', 6), faintDark: fxColor('water', 4), dust: FOAM };
   const WAVES = 3;
   /** Art pixels of arc per dash and per gap of a ground wave. */
   const WAVE_DASH = 4;
@@ -79,12 +83,16 @@ namespace SE {
   /** Every quake seen running, by hazard id: its last landslides come down in the tick it ends. */
   const quakes = new Map<number, QuakeState>();
 
+  /** The world live() last saw: the omen is not handed it, and its specks are foam over the sea. */
+  let seen: WorldState | null = null;
+
   /** Landscapes whose ground is pale: bare rock, sand, salt and snow. */
   const BRIGHT_GROUND = new Set<number>([Landscape.Ice, Landscape.Snow, Landscape.Rock, Landscape.Desert, Landscape.Semidesert]);
 
-  /** The wave colours for the ground around (x, y): bright when most land tiles within the waves' reach are pale. */
+  /** The wave colours around (x, y): sea tones when most tiles within the waves' reach are water, bright when most land tiles are pale. */
   function waveTones(world: WorldState, x: number, y: number): WaveTones {
     let land = 0;
+    let sea = 0;
     let bright = 0;
     const r = WAVE_REACH / 16;
     for (let dy = -r; dy <= r; dy++) {
@@ -92,12 +100,13 @@ namespace SE {
       if (ty < 0 || ty >= GRID_H) continue;
       for (let dx = -r; dx <= r; dx++) {
         const i = idx(wrapX(x + dx), ty);
-        if (world.elevation[i] < 0) continue;
+        if (world.elevation[i] < 0) { sea++; continue; }
         land++;
         const l = world.landscape[i];
         if (BRIGHT_GROUND.has(l) || (l === Landscape.Barren && world.substrate[i] === Substrate.Sand)) bright++;
       }
     }
+    if (sea > land) return WAVE_AT_SEA;
     return bright * 2 > land ? WAVE_ON_BRIGHT : WAVE_ON_DARK;
   }
 
@@ -122,8 +131,9 @@ namespace SE {
       const due = CRACK_FROM_MS + (CRACK_MS * hazardDistance(st.x, st.y, x, y)) / q.magnitude;
       if (t < due) { s.hidden.add(i); continue; }
       if (!s.once(`${st.id}:crack:${i}`)) continue;
-      puff(s, x * 16 + 8, y * 16 + 9, PUFF_MS * 0.8);
-      specks(s, x * 16 + 8, y * 16 + 10, 4, 20, tones.dust);
+      const wet = world.elevation[i] < 0;
+      if (!wet) puff(s, x * 16 + 8, y * 16 + 9, PUFF_MS * 0.8);
+      specks(s, x * 16 + 8, y * 16 + 10, 4, 20, wet ? FOAM : tones.dust);
     }
     const hz = world.hazards;
     const shaken = q.steep.slice(0, SHAKEN_SLOPES);
@@ -204,7 +214,7 @@ namespace SE {
     omen(s: FxScene, x: number, y: number, t: number): void {
       s.shake(x, y, 0, 1);
       const n = Math.floor(t / OMEN_SPECK_MS) - Math.floor((t - s.dt * 1000) / OMEN_SPECK_MS);
-      if (n > 0) specks(s, x * 16 + 8, y * 16 + 12, 2 * n, 24);
+      if (n > 0) specks(s, x * 16 + 8, y * 16 + 12, 2 * n, 24, seen && seen.elevation[idx(x, y)] < 0 ? FOAM : DUST);
     },
 
     main(s: FxScene, st: FxStarted, t: number, world: WorldState): void {
@@ -241,6 +251,7 @@ namespace SE {
     },
 
     live(s: FxScene, world: WorldState): void {
+      seen = world;
       slides(s, world);
       for (const [id, p] of playing) {
         const t = s.now - p.st.born;

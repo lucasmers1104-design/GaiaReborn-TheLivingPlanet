@@ -107,6 +107,22 @@ herausgezoomt bleiben sie SVG-Symbole.
   Rand im Raster ausfranst; dann reißt der Strahl ab, die Krone treibt ab und löst sich mit `dissolve()` auf.
   Gischt am Fuß hält die letzte Zeile besetzt.
 
+## Delfine
+
+Delfine (Wal-Unterart 6) springen ab 16 px pro Kachel als Schulen aus tropischem Meer (Kachel ≥ 25 °C, Wasser zwei
+Kacheln nach Osten und Westen); im kühleren Wasser, an der Küste und bei „Effekte reduzieren“ bleibt das SVG-Symbol.
+
+- **Von der Seite gesehen**, wie alles, was sich über die Karte erhebt (Blas, Seegras, Bäume): ein Sprung ist eine
+  Bewegung nach oben, kein Liegen auf dem Wasser.
+- **Sprite** `dolphin_leap` (32×24, Osten 0–15, Westen 16–31, einmal): Der ganze Bogen liegt im Kasten, Wasserlinie
+  Zeile 18, `mouth` = Austrittspunkt. 0 Schnauze wölbt das Wasser, 1–2 Durchbruch mit Schaumkragen, 3–5 Tropfen von
+  der Fluke, Scheitel gekrümmt, 9–11 Eintauchen, 12–15 nur Spritzkrone und Ring. Unter Wasser ein Schleier wie bei
+  den Walen (`water2`, Rand `water1`/`water4`), tiefer lichter.
+- **Farben:** Gegenschattierung, Rücken `rock0`/`rock1` mit nassem Glanz `ice0`, Bauch `ice2`–`white0`, Rand unten
+  rechts `rock0` bzw. `ice1`; Licht oben links, der Westsatz neu beleuchtet.
+- **Schule:** 3–5 Tiere in lockerer Staffel, je zwei Sprünge hintereinander, die Folgenden einen Takt nach dem
+  Anführer; Runde 6–10 s, davon etwa 3,4 s sichtbar. Eine Schule springt nur, wenn daneben gerade keine springt.
+
 ## Arbeitsablauf für Effekt-Agenten
 
 1. **Katalog:** Neue Einträge kommen in `tools/fx/catalog.js` (Id, Box, Frames, Anker, Ebene). Den Katalog ändert nur

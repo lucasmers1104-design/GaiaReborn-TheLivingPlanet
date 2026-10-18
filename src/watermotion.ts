@@ -154,6 +154,8 @@ namespace SE {
             if (tx < tx0 || tx >= tx1 || ty < ty0 || ty >= ty1) continue;
             const info = m.surf[k];
             const ring = (info >>> 8) & 255;
+            // Rings 4–5 are the tidal wave's (fxshore.ts), as is all surf where one works the coast.
+            if (ring > 3 || shoreBusy[ty * GRID_W + wrapX(tx)]) continue;
             const color = surfColor(ring, swell[(ring === 3 ? 256 : 0) + ((info >>> 16) & 255)], (info >>> 24) / 256, info & 255, this.ice);
             if (color < 0 || WaterMotion.city(world, tx, ty)) continue;
             this.add(color, x, y);
@@ -165,6 +167,7 @@ namespace SE {
             const x = cu * CHUNK_PX + (at & 0xffff);
             const y = cy * CHUNK_PX + (at >>> 16);
             if (x >> 4 < tx0 || x >> 4 >= tx1 || y >> 4 < ty0 || y >> 4 >= ty1 || WaterMotion.city(world, x >> 4, y >> 4)) continue;
+            if (shoreBusy[(y >> 4) * GRID_W + wrapX(x >> 4)]) continue;
             // Spray rides the crests of the main swell, on big waves only: when the second swell is high too.
             const f = ((m.surf[k] >>> 16) & 255) / SURF_PHASE_STEPS;
             const wave = Math.floor(t / SWELL_A + f - 0.25);

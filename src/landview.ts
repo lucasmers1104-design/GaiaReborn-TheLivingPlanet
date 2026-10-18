@@ -73,7 +73,9 @@ namespace SE {
     /** The last draw ran out of time: some chunks are stale or missing, draw again. */
     pending = false;
     private deadline = Infinity;
+    /** One flat colour per tile of the whole planet (overview()), rebuilt after the field changed. */
     private flat: HTMLCanvasElement | null = null;
+    private flatFresh = false;
     /** Tiles the brush changed lately (x may run past the wrap), and when it last did. */
     private brushBox: [number, number, number, number] | null = null;
     private brushAt = -Infinity;
@@ -114,6 +116,7 @@ namespace SE {
       this.fieldKey = key;
       this.fieldWorld = world;
       this.field.refresh(world);
+      this.flatFresh = false;
       if (oceans) {
         this.seaColor = null;
       } else {
@@ -152,6 +155,7 @@ namespace SE {
         return true;
       }
       const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
+      this.flatFresh = false;
       const now = performance.now();
       const b = this.brushBox;
       if (b && now - this.brushAt < FADE_WINDOW_MS) {
@@ -331,28 +335,40 @@ namespace SE {
 
     /** A chunk not composed yet: one flat colour per tile, from its ground or water depth. */
     private drawFlat(ctx: CanvasRenderingContext2D, cu: number, cy: number, cam: LandCamera): void {
+      const flat = this.overview();
+      if (!flat) return;
+      const T = cam.tilePx * cam.dpr;
+      const sx = (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X) * LAND_CHUNK;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(flat, sx, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK,
+        (cu * LAND_CHUNK - cam.scrollX) * T, (cy * LAND_CHUNK - cam.scrollY) * T, LAND_CHUNK * T, LAND_CHUNK * T);
+    }
+
+    /**
+     * The whole planet at one pixel per tile, one flat colour each from its
+     * ground or water depth: what shows where no chunk has been composed yet.
+     */
+    overview(): HTMLCanvasElement | null {
       const art = this.art;
-      if (!art) return;
+      if (!art) return null;
+      if (this.flat && this.flatFresh) return this.flat;
       const flat = this.flat ?? (this.flat = document.createElement('canvas'));
-      flat.width = flat.height = LAND_CHUNK;
+      flat.width = GRID_W;
+      flat.height = GRID_H;
       const fctx = flat.getContext('2d');
-      if (!fctx) return;
-      const image = fctx.createImageData(LAND_CHUNK, LAND_CHUNK);
+      if (!fctx) return null;
+      const image = fctx.createImageData(GRID_W, GRID_H);
       const words = new Uint32Array(image.data.buffer);
       const f = this.field;
-      for (let y = 0; y < LAND_CHUNK; y++) {
-        for (let x = 0; x < LAND_CHUNK; x++) {
-          const i = (cy * LAND_CHUNK + y) * GRID_W + wrapX(cu * LAND_CHUNK + x);
-          const key = f.key[i];
-          words[y * LAND_CHUNK + x] = art.rgba[key === 0
-            ? art.water[Math.min(LAND_SHALLOW, Math.round(f.depth[i]))]
-            : art.ground[landKeyRank(key)][landKeyDensity(key)].px[0]];
-        }
+      for (let i = 0; i < TILE_COUNT; i++) {
+        const key = f.key[i];
+        words[i] = art.rgba[key === 0
+          ? art.water[Math.min(LAND_SHALLOW, Math.round(f.depth[i]))]
+          : art.ground[landKeyRank(key)][landKeyDensity(key)].px[0]];
       }
       fctx.putImageData(image, 0, 0);
-      const T = cam.tilePx * cam.dpr;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(flat, (cu * LAND_CHUNK - cam.scrollX) * T, (cy * LAND_CHUNK - cam.scrollY) * T, LAND_CHUNK * T, LAND_CHUNK * T);
+      this.flatFresh = true;
+      return flat;
     }
 
     /** One chunk region, art pixels (sx, sy, sw, sh) from the chunk corner, to device pixels. */

@@ -34,7 +34,7 @@ namespace SE {
   const CHUNK_PX = LAND_CHUNK * 16;
 
   /** How strongly the shore at tile (tx, ty) throws spray, 0 none .. 1 a high cliff. */
-  function sprayStrength(world: WorldState, tx: number, ty: number): number {
+  export function sprayStrength(world: WorldState, tx: number, ty: number): number {
     let high = -1;
     let open = false;
     for (let dy = -OPEN_SEA_REACH; dy <= OPEN_SEA_REACH; dy++) {

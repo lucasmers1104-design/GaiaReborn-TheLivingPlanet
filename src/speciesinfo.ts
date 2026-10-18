@@ -37,16 +37,6 @@ namespace SE {
     return box;
   }
 
-  function biomeChips(list: readonly number[]): HTMLElement {
-    const wrap = make('span', 'fauna-biomes');
-    for (const b of list) {
-      const chip = make('span', 'fauna-biome');
-      chip.append(img(habitatAsset(BIOME_ICONS[b]), 'ico'), make('span', undefined, BIOME_NAMES[b]));
-      wrap.appendChild(chip);
-    }
-    return wrap;
-  }
-
   function rows(list: readonly (readonly [string, string | HTMLElement])[]): HTMLElement {
     const dl = make('dl', 'fauna-dl');
     for (const [k, v] of list) {
@@ -210,12 +200,9 @@ namespace SE {
     private values(c: Life, stage: number): HTMLElement {
       const def = LIFE[c];
       const { el, body } = faunaSection('Lebensraum und Spielwerte', `gilt für die ganze Gruppe „${def.name}“`);
-      const { best, more } = faunaBiomesBySuit(c);
       const [lo, hi] = faunaTempWindow(c, this.deps.params());
       const tolerance = fmt.int(mul(this.deps.params().bio.tolerance) * 100);
       const list: [string, string | HTMLElement][] = [['Lebensbereich', def.realm === 'sea' ? 'Meer' : 'Land']];
-      if (best.length > 0) list.push(['Bevorzugt', biomeChips(best)]);
-      if (more.length > 0) list.push(['Auch', biomeChips(more)]);
       list.push(['Temperatur', `${fmt.int(lo)} bis ${fmt.int(hi)} °C (Regler „Toleranz“ ${tolerance} %)`]);
       const oxygen = lifeOxygen(c);
       list.push(['Sauerstoff', oxygen.min > 0 ? `über ${faunaNum(oxygen.min)} ${oxygenUnit(oxygen.medium)}, volle Stärke ab ${faunaNum(oxygen.full)} %` : 'braucht keinen']);
@@ -225,7 +212,7 @@ namespace SE {
       list.push(['Fressfeinde', enemies.length > 0 ? faunaLifeNames(enemies) : 'keine']);
       if (def.raft > 0) list.push(['Weite Ausbreitung', `gründet neue Populationen bis zu ${def.raft} Felder entfernt, auch jenseits von ${def.realm === 'sea' ? 'Land' : 'Wasser'}`]);
       list.push(['Intelligenz', def.sentient ? 'kann Intelligenz entwickeln und Städte gründen' : 'entwickelt keine Intelligenz']);
-      body.appendChild(rows(list));
+      body.append(examineHabitats(def.suit, -1, `fauna:${c}`), rows(list));
 
       const effects = make('ul', 'fauna-effects');
       for (const t of faunaEffects(c, this.deps.params())) effects.appendChild(make('li', undefined, t));

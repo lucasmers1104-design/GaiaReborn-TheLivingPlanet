@@ -49,19 +49,26 @@ namespace SE {
     return { width, height, left, top, pixels };
   }
 
-  export function examineTilePicture(world: WorldState, x: number, y: number): HTMLCanvasElement | null {
+  /** `creature`: the animal standing here, a 32 px sprite; the ground is then doubled so it shows as on the map at 32 px per tile. */
+  export function examineTilePicture(world: WorldState, x: number, y: number, creature: HTMLCanvasElement | null = null): HTMLCanvasElement | null {
     const land = PixelTerrain.shared();
     if (TERRAIN_STYLE !== 'pixel' || !land.ready || !land.art) return null;
     land.ensure(world);
     const tile = composeExaminedTile(land.art, land.field, x, y);
+    const k = creature ? 2 : 1;
     const canvas = document.createElement('canvas');
-    canvas.width = tile.width;
-    canvas.height = tile.height;
+    canvas.width = tile.width * k;
+    canvas.height = tile.height * k;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
     const image = ctx.createImageData(tile.width, tile.height);
     new Uint32Array(image.data.buffer).set(tile.pixels);
     ctx.putImageData(image, 0, 0);
+    if (creature) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(canvas, 0, 0, tile.width, tile.height, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(creature, -tile.left * k, -tile.top * k);
+    }
     const scale = Math.max(1, Math.min(8, Math.floor(136 / tile.width), Math.floor(152 / tile.height)));
     canvas.style.width = `${tile.width * scale}px`;
     canvas.style.height = `${tile.height * scale}px`;

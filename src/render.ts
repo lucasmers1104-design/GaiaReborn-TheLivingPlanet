@@ -325,10 +325,14 @@ namespace SE {
     private readonly waterMotion = new WaterMotion();
     private readonly herds = new HerdLayer();
     private readonly whales = new WhaleLayer();
+    private readonly dolphins = new DolphinLayer();
+    private readonly bubbles = new OxygenBubbles();
     private readonly cities = new CityLayer();
     private readonly settlers = new SettlerLayer();
     /** Disasters: omens, eruptions, lava, smoke (docs/ereignisse-spec.md). */
     readonly fx = new EffectLayer();
+    /** How far the game is between two ticks, 0..1 (app.ts); kept while paused. */
+    tickPhase = 0;
     private readonly canvas: HTMLCanvasElement;
     private readonly ctx: CanvasRenderingContext2D;
     /** The world drawn once; frames only add the cursor on top. */
@@ -376,6 +380,25 @@ namespace SE {
       this.fx.reduce = on;
       this.waterMotion.still = on;
       this.whales.still = on;
+      this.dolphins.still = on;
+      this.bubbles.still = on;
+    }
+
+    /** Make sure a creature of sub-species (c, stage) stands on the map; its tile, -1 if none lives. */
+    pinSpecies(world: WorldState, c: Life, stage: number): number {
+      this.markDirty();
+      return this.herds.pin(world, c, stage);
+    }
+
+    /** The creature the map shows on tile i, for the Examine picture: `key` is cheap, `draw` makes its 32 px sprite. */
+    creatureOn(world: WorldState, i: number): { key: string; draw: () => HTMLCanvasElement } | null {
+      const m = this.layers.life ? this.herds.markerOn(i) : null;
+      if (!m) return null;
+      const special = animalSpecialist(this.regions, world, i, m.c, m.stage);
+      const sp = SPECIES[m.c];
+      const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[m.stage]?.art;
+      if (!art) return null;
+      return { key: `${m.c}:${m.stage}:${special}:${+m.flip}`, draw: () => rasterArt(art, 32, CREATURE_LOOK, m.flip, true) };
     }
 
     /** Force a full redraw on the next frame (after a tool changed the world). */
@@ -569,7 +592,7 @@ namespace SE {
       // Only a finished base counts: while the terrain is still composing it shows older ground.
       if (!this.land.pending) this.fx.baseTick = this.baseTick;
       if (fx) {
-        fx.update(world, cam, this.cols, this.rows, now);
+        fx.update(world, cam, this.cols, this.rows, now, this.tickPhase);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         if (!previewing) fx.drawShake(ctx, this.base, cam, now);
         fx.drawGround(ctx, world, cam, this.land, now, cities);
@@ -578,10 +601,12 @@ namespace SE {
       if (this.layers.life) {
         this.herds.update(world, now);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.bubbles.draw(ctx, cam, this.cols, this.rows, world, now);
         this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
+        this.dolphins.draw(ctx, cam, this.herds.markers, world, now);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.herds.draw(ctx, this, world, now, this.tiles, this.regions,
-          (m) => this.whales.claims(m, world, this.tilePx, this.regions));
+          (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
       }
       if (this.layers.cities) this.settlers.draw(ctx, this, world, now, dpr);
       if (fx) {
@@ -664,6 +689,18 @@ namespace SE {
       return clamp((shore / seen) / 0.06, 0, 1) * (0.4 + 0.6 * zoom);
     }
 
+    /**
+     * How loud the oxygen bubbling should be, 0..1: how much pearls in view,
+     * times the zoom squared, silent fully zoomed out and full fully zoomed
+     * in. Squared because loudness is heard on a log scale: each zoom step
+     * then sounds about as much louder as the last.
+     */
+    bubblePresence(): number {
+      if (!this.layers.life) return 0;
+      const zoom = clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+      return this.bubbles.presence() * zoom * zoom;
+    }
+
     /** The last full picture, scaled and moved to where the new zoom puts it. */
     private drawZoomPreview(dpr: number): void {
       const k = this.tilePx / this.baseTilePx;
@@ -677,6 +714,16 @@ namespace SE {
       ctx.fillStyle = '#05090c';
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       ctx.imageSmoothingEnabled = false;
+      // Zooming out shrinks the last picture: flat tile colours fill the rest
+      // until the real redraw, instead of empty space.
+      const flat = k < 1 && this.pixelTerrain ? this.land.overview() : null;
+      if (flat) {
+        const T = this.tilePx * dpr;
+        const w = GRID_W * T;
+        for (let x = -((((this.scrollX * T) % w) + w) % w); x < this.canvas.width; x += w) {
+          ctx.drawImage(flat, x, -this.scrollY * T, w, GRID_H * T);
+        }
+      }
       ctx.drawImage(this.base, dx * dpr, dy * dpr, this.base.width * k, this.base.height * k);
     }
 
@@ -1038,8 +1085,10 @@ namespace SE {
     mode: MapMode = MapMode.Terrain;
     /** Flat Robinson-ish projection, or the planet as a globe. */
     globe = false;
-    /** Longitude offset used when spinning the globe. */
+    /** Longitude at the globe's centre. */
     spin = 0;
+    /** Latitude at the globe's centre. */
+    tilt = 0;
     /** Draw the Edit window's viewport as a rectangle. */
     editRect: { x: number; y: number; w: number; h: number } | null = null;
     /** Backing-store resolution as a fraction of the screen's. */
@@ -1070,10 +1119,26 @@ namespace SE {
       for (let i = 3; i < this.image.data.length; i += 4) this.image.data[i] = 255;
     }
 
-    /** Convert a pointer position to world tile coordinates (flat mode only). */
+    /** Convert a pointer position to world tile coordinates. */
     tileAt(clientX: number, clientY: number): { x: number; y: number } | null {
       const rect = this.canvas.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
+      if (this.globe) {
+        const r = Math.min(rect.width, rect.height) * 0.46;
+        const nx = (clientX - rect.left - rect.width / 2) / r;
+        const ny = (clientY - rect.top - rect.height / 2) / r;
+        const d2 = nx * nx + ny * ny;
+        if (d2 > 1) return null;
+        const nz = Math.sqrt(1 - d2);
+        const cosT = Math.cos(this.tilt);
+        const sinT = Math.sin(this.tilt);
+        const lat = Math.asin(clamp(-ny * cosT + nz * sinT, -1, 1));
+        const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
+        return {
+          x: wrapX(Math.floor(((lon / (Math.PI * 2)) + 0.5) * GRID_W)),
+          y: clampY(Math.floor((0.5 - lat / Math.PI) * GRID_H)),
+        };
+      }
       const fx = (clientX - rect.left) / rect.width;
       const fy = (clientY - rect.top) / rect.height;
       if (fx < 0 || fy < 0 || fx >= 1 || fy >= 1) return null;
@@ -1156,6 +1221,10 @@ namespace SE {
       const radius = Math.min(w, h) * 0.46;
       const cx = w / 2;
       const cy = h / 2;
+      this.aimAtEditRect();
+      // Orthographic view tilted to `tilt`: rotate the view ray about the x axis.
+      const cosT = Math.cos(this.tilt);
+      const sinT = Math.sin(this.tilt);
 
       for (let py = 0; py < h; py++) {
         const ny = (py - cy) / radius;
@@ -1168,8 +1237,8 @@ namespace SE {
             continue;
           }
           const nz = Math.sqrt(1 - d2);
-          const lat = Math.asin(clamp(-ny, -1, 1));
-          const lon = Math.atan2(nx, nz) + this.spin;
+          const lat = Math.asin(clamp(-ny * cosT + nz * sinT, -1, 1));
+          const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
 
           const tx = wrapX(Math.round(((lon / (Math.PI * 2)) + 0.5) * GRID_W));
           const ty = clampY(Math.round((0.5 - lat / Math.PI) * GRID_H));
@@ -1185,6 +1254,70 @@ namespace SE {
       }
       ctx.putImageData(out, 0, 0);
       this.decorateGlobe(ctx, w, h, radius, cx, cy);
+      this.drawGlobeRect(ctx, radius, cx, cy);
+    }
+
+    /** Ease the globe towards the Edit window's viewport; idle spin without one. */
+    private aimAtEditRect(): void {
+      const e = this.editRect;
+      if (!e) {
+        this.spin += 0.012;
+        return;
+      }
+      const lonT = ((e.x + Math.min(GRID_W, e.w) / 2) / GRID_W - 0.5) * Math.PI * 2;
+      const latT = (0.5 - (e.y + e.h / 2) / GRID_H) * Math.PI;
+      let d = lonT - this.spin;
+      d -= Math.round(d / (Math.PI * 2)) * Math.PI * 2;
+      this.spin += d * 0.15;
+      this.tilt += (latT - this.tilt) * 0.15;
+    }
+
+    /** The viewport's outline on the sphere: a lat/lon box, so it narrows towards the poles. */
+    private drawGlobeRect(ctx: CanvasRenderingContext2D, r: number, cx: number, cy: number): void {
+      const e = this.editRect;
+      if (!e) return;
+      const x0 = e.x;
+      const x1 = e.x + Math.min(GRID_W, e.w);
+      const y0 = e.y;
+      const y1 = e.y + e.h;
+      const N = 24;
+      const pts: [number, number][] = [];
+      for (let i = 0; i < N; i++) pts.push([x0 + (x1 - x0) * i / N, y0]);
+      for (let i = 0; i < N; i++) pts.push([x1, y0 + (y1 - y0) * i / N]);
+      for (let i = 0; i < N; i++) pts.push([x1 - (x1 - x0) * i / N, y1]);
+      for (let i = 0; i <= N; i++) pts.push([x0, y1 - (y1 - y0) * i / N]);
+
+      const cosT = Math.cos(this.tilt);
+      const sinT = Math.sin(this.tilt);
+      const path = (): void => {
+        ctx.beginPath();
+        let drawing = false;
+        for (const [tx, ty] of pts) {
+          const lon = (tx / GRID_W - 0.5) * Math.PI * 2 - this.spin;
+          const lat = (0.5 - ty / GRID_H) * Math.PI;
+          const x = Math.cos(lat) * Math.sin(lon);
+          const y = Math.sin(lat);
+          const z = Math.cos(lat) * Math.cos(lon);
+          // Inverse of the tilt in renderGlobe; z is towards the viewer.
+          const up = y * cosT - z * sinT;
+          const depth = y * sinT + z * cosT;
+          if (depth < 0) { drawing = false; continue; }
+          const px = cx + x * r;
+          const py = cy - up * r;
+          if (drawing) ctx.lineTo(px, py);
+          else ctx.moveTo(px, py);
+          drawing = true;
+        }
+        ctx.stroke();
+      };
+      const lw = Math.max(2, Math.round(r / 90));
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.lineWidth = lw + 2;
+      path();
+      ctx.strokeStyle = '#f6f1df';
+      ctx.lineWidth = lw;
+      path();
     }
 
     private stars: readonly (readonly [number, number, number])[] = [];

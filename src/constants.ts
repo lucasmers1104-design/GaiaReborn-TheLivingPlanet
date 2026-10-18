@@ -1244,21 +1244,32 @@ namespace SE {
   export const ATOMIC_DUST = 0.15;
 
   /* Tidal wave and hurricane (hazardwater.ts). */
-  /** Ticks a tidal wave takes to cross a tile of deep sea (below COAST_DEPTH), shelf and shallows (above WAVE_SHALLOW). */
+  /** Ticks a tidal wave takes to cross a tile of deep sea (below COAST_DEPTH); above it × √(COAST_DEPTH / e), at most WAVE_TICKS_SHALLOW. */
   export const WAVE_TICKS_DEEP = 0.33;
-  export const WAVE_TICKS_SHELF = 0.5;
   export const WAVE_TICKS_SHALLOW = 1;
-  export const WAVE_SHALLOW = -0.05;
-  /** Longest path over the water, in tiles; the wave keeps WAVE_DECAY of its energy per tile. */
+  /** Longest path over the water, in tiles; the wave keeps WAVE_DECAY of its energy per tile. A weaker wave ends at the same energy, but after WAVE_PATH_MIN at least. */
   export const WAVE_PATH_MAX = 32;
+  export const WAVE_PATH_MIN = 8;
   export const WAVE_DECAY = 0.93;
+  /** Radius around the origin, in tiles, where the arrival field starts as an exact circle (removes the source's corner bias). */
+  export const WAVE_FMM_INIT = 3;
+  /** Ticks the hazard lasts past the last arrival, while the foam behind the front fades on screen. */
+  export const WAVE_TRAIL_TICKS = 1.5;
   /** Wave height at the coast at full energy (≈ 400 m game height, approved). */
   export const WAVE_HEIGHT = 0.09;
   /** Height a wave or surge loses per land step, and the most land steps it runs. */
   export const FLOOD_RUNUP_LOSS = 0.012;
   export const FLOOD_RUNUP_STEPS = 6;
-  /** Ticks the water stands once it stops climbing; then it recedes, inland first. */
-  export const FLOOD_HOLD_TICKS = 2;
+  /** Ticks the water takes to run up one land tile (diagonals √2 as long). */
+  export const FLOOD_RUNUP_TICKS = 1;
+  /**
+   * Ticks the water stands once it stops climbing; then its edge runs back to the sea, inland first, FLOOD_RECEDE_TICKS a tile.
+   * At least 3: the mud is laid a tick before a tile dries, after the screen has shown the water reach all of it.
+   */
+  export const FLOOD_HOLD_TICKS = 3;
+  export const FLOOD_RECEDE_TICKS = 0.75;
+  /** Ticks a run stays after its last tile dried on screen, for the backwash and wet sheen. */
+  export const FLOOD_TRAIL_TICKS = 2;
   /** Water this deep does the full damage; shallower water from FLOOD_LIFE_SHALLOW and FLOOD_CITY_LOSS up. */
   export const FLOOD_DEPTH_FULL = 0.04;
   export const FLOOD_LIFE_LOSS = 0.8;

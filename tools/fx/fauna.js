@@ -529,6 +529,225 @@ function ring(r) {
 /** Frames 0–3 bow wave east, 4–7 west, 8–11 footprint ring. */
 const wake = (f) => (f < 8 ? bow(f % 4, f >= 4) : ring(f - 8));
 
+/* ---------------------------------------------------------- dolphins -- */
+
+/**
+ * Leap box: the waterline row, where the body centre leaves the water and
+ * how far (span) and high it flies, px. The whole arc lies in the box, so
+ * the runtime only puts the exit point (catalog `mouth`) on the sea.
+ */
+const LEAP = { w: 32, h: 24, water: 18, exit: 6, span: 20, high: 8 };
+/** Body centre along the arc (0 out, 1 back in), frames 0–12; frames 13–15 are splash only. */
+const LEAP_P = [-0.2, -0.08, 0.04, 0.16, 0.28, 0.4, 0.52, 0.64, 0.76, 0.88, 0.98, 1.08, 1.2];
+/** Frames at which the exit and the entry splash begin. */
+const EXIT_SPLASH = 1;
+const ENTRY_SPLASH = 10;
+/**
+ * A dolphin seen from the side, east-facing: spine from the tail stock (u = 0)
+ * to the beak (u = len), `prof` half-heights along it (s = u / len); fins as
+ * polygons in (u, v), v towards the back. `arch` bends the spine along the
+ * arc. Countershaded: dark grey back with a wet sheen, pale belly below the
+ * cape line; each ramp is shadow, body, lit, and its `rim` the lower right.
+ */
+const DOLPHIN = {
+  len: 13,
+  prof: [[0, 0.55], [0.2, 0.85], [0.45, 1.8], [0.62, 2.0], [0.78, 1.7], [0.88, 1.0], [0.92, 0.6], [1, 0.5]],
+  dorsal: [[8.0, 1.2], [6.7, 3.4], [5.0, 4.2], [5.4, 3.0], [5.6, 1.2]],
+  flipper: [[9.0, -1.2], [7.9, -2.9], [7.4, -2.9], [8.0, -1.2]],
+  fluke: [[0.8, 0], [-1.6, 2.2], [-2.1, 1.9], [-0.9, 0.3], [-0.9, -0.3], [-2.1, -1.9], [-1.6, -2.2]],
+  arch: 0.6,
+  back: ['rock0', 'rock1', 'ice0'],
+  belly: ['ice2', 'ice3', 'white0'],
+  rim: { back: 'rock0', belly: 'ice1' },
+};
+/** Lambert values from which a ramp's body and lit step start. */
+const DOLPHIN_CUTS = [0.35, 0.75];
+const SPINE_STEP = 0.1;
+const SPINE_TAIL = -2.5;
+
+/** Spine samples {u, x, y, tx, ty} (east, tangent towards the beak) with the body centre at arc progress p. */
+function leapSpine(p) {
+  const { len, arch } = DOLPHIN;
+  const th = Math.atan2(4 * LEAP.high * (1 - 2 * p), LEAP.span);
+  const ang = (u) => th + arch * (0.5 - Math.max(0, Math.min(len, u)) / len);
+  const n = Math.round((len - SPINE_TAIL) / SPINE_STEP);
+  const pts = [];
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i <= n; i++) {
+    const u = SPINE_TAIL + i * SPINE_STEP;
+    if (i > 0) {
+      const am = ang(u - SPINE_STEP / 2);
+      x += Math.cos(am) * SPINE_STEP;
+      y -= Math.sin(am) * SPINE_STEP;
+    }
+    pts.push({ u, x, y, tx: Math.cos(ang(u)), ty: -Math.sin(ang(u)) });
+  }
+  const mid = pts[Math.round((len / 2 - SPINE_TAIL) / SPINE_STEP)];
+  const ox = LEAP.exit + LEAP.span * p - mid.x;
+  const oy = LEAP.water - LEAP.high * 4 * p * (1 - p) - mid.y;
+  for (const q of pts) { q.x += ox; q.y += oy; }
+  return pts;
+}
+
+/** The part of the dolphin under east point (x, y): 'body' with its spine sample and r (−1 belly .. 1 back), or 'fin'. */
+function dolphinPart(spine, x, y) {
+  let q = spine[0];
+  let best = Infinity;
+  for (const s of spine) {
+    const d = (x - s.x) ** 2 + (y - s.y) ** 2;
+    if (d < best) { best = d; q = s; }
+  }
+  const a = (x - q.x) * q.tx + (y - q.y) * q.ty;
+  if (Math.abs(a) > SPINE_STEP) return null; // beyond the beak or the fluke
+  const u = q.u + a;
+  const v = (x - q.x) * q.ty - (y - q.y) * q.tx;
+  const { len, prof } = DOLPHIN;
+  if (u >= 0 && u <= len) {
+    const hw = lerpProf(prof, u / len);
+    if (Math.abs(v) <= hw) return { kind: 'body', q, s: u / len, r: v / hw };
+  }
+  if (inPoly(DOLPHIN.dorsal, u, v) || inPoly(DOLPHIN.flipper, u, v) || (u < 1 && inPoly(DOLPHIN.fluke, u, v))) return { kind: 'fin' };
+  return null;
+}
+
+/**
+ * Crown splash `a` frames after a dolphin broke the surface at column x0:
+ * drops thrown up and out fall back, foam at the foot, then a ring of
+ * broken foam spreads and fades. Only into pixels the dolphin leaves free.
+ */
+function splash(t, free, x0, a, seed) {
+  const W = LEAP.water;
+  const put = (x, y, name) => { if (free(x, y)) t.set(x, y, P.c(name)); };
+  for (let j = 0; j < 10; j++) {
+    const vx = (k.hash(j, 1, seed) - 0.5) * 2.4;
+    const vy = 1.0 + k.hash(j, 2, seed) * 1.2;
+    const tt = a + 0.6;
+    const up = vy * tt - 0.3 * tt * tt;
+    if (up < 0.5) continue;
+    put(Math.round(x0 + vx * tt), Math.round(W - up), a < 2 ? 'white0' : a < 4 ? 'ice3' : 'ice2');
+  }
+  if (a <= 3) {
+    for (let dx = -3; dx <= 3; dx++) {
+      if (k.hash(dx, a, seed + 5) > (Math.abs(dx) <= 1 ? 0.95 : 0.6)) continue;
+      put(x0 + dx, W, Math.abs(dx) <= 1 && a < 2 ? 'white0' : 'ice3');
+    }
+  }
+  if (a < 2) return;
+  const rx = 1.5 + a * 0.75;
+  const ry = Math.max(1, rx * 0.4);
+  const keep = 1 - (a - 2) / 6;
+  for (let y = W - 3; y <= W + 3; y++) {
+    for (let x = Math.floor(x0 - rx - 1); x <= Math.ceil(x0 + rx + 1); x++) {
+      const dx = (x - x0) / rx;
+      const dy = (y - W) / ry;
+      const d = Math.hypot(dx, dy);
+      if (Math.abs(d - 1) * rx >= 0.55 || k.hash(x - x0, y, seed + 9 + a) >= keep) continue;
+      put(x, y, -(dx * 0.6 + dy * 0.8) > 0.3 ? 'ice3' : 'water7');
+    }
+  }
+}
+
+/** Frame f of a dolphin's leap, east-facing (`west`: the form mirrored, lit afresh). */
+function dolphin(f, west) {
+  const { w: W, h: H, water } = LEAP;
+  const t = new k.Tex(W, H);
+  const ex = (x) => (west ? W - x : x); // pixel-centre coordinate <-> east geometry
+  const parts = new Array(W * H).fill(null);
+  const spine = f < LEAP_P.length ? leapSpine(LEAP_P[f]) : null;
+  if (spine) {
+    // 2×2 samples per pixel: thin parts (beak, tail stock, fin tips) stay unbroken at every angle.
+    const SUB = [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const centre = dolphinPart(spine, ex(x + 0.5), y + 0.5);
+        let hits = 0;
+        let any = null;
+        for (const [sx, sy] of SUB) { const q = dolphinPart(spine, ex(x + sx), y + sy); if (q) { hits++; any = any || q; } }
+        if (centre || hits >= 2) parts[y * W + x] = centre || any;
+      }
+    }
+  }
+  const part = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? null : parts[y * W + x]);
+  const skin = (x, y) => y <= water && !!part(x, y);
+
+  // Under the surface: the dolphin as a silhouette under a veil of sea, sparser the deeper it swims.
+  const VEIL = [16, 11, 8, 6, 4, 2];
+  for (let y = water + 1; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!part(x, y) || k.BAYER4[y & 3][x & 3] >= VEIL[Math.min(5, y - water)]) continue;
+      const lowerRight = !part(x + 1, y) || !part(x, y + 1);
+      const upperLeft = !part(x - 1, y) || !part(x, y - 1);
+      t.set(x, y, P.c(lowerRight ? 'water1' : upperLeft ? 'water4' : 'water2'));
+    }
+  }
+
+  // Above it, skin lit from the upper left: the back's normal turns with the spine.
+  for (let y = 0; y <= water; y++) {
+    for (let x = 0; x < W; x++) {
+      const q = part(x, y);
+      if (!q) continue;
+      let side = 'back';
+      let s;
+      if (q.kind === 'body') {
+        const r = Math.max(-1, Math.min(1, q.r));
+        const nx = (west ? -1 : 1) * q.q.ty * r;
+        const ny = -q.q.tx * r;
+        const lam = nx * LIGHT[0] + ny * LIGHT[1] + Math.sqrt(1 - r * r) * LIGHT[2];
+        s = 0;
+        while (s < DOLPHIN_CUTS.length && lam > DOLPHIN_CUTS[s]) s++;
+        if (r <= 0.1 - 0.4 * bump(q.s, 0.55, 0.45)) side = 'belly';
+      } else {
+        s = !skin(x - 1, y) || !skin(x, y - 1) ? 1 : 0;
+      }
+      const rim = !skin(x + 1, y) && !skin(x, y + 1);
+      if (!rim && !skin(x, y + 1)) s = Math.min(s, 1);
+      t.set(x, y, P.c(rim ? DOLPHIN.rim[side] : DOLPHIN[side][s]));
+    }
+  }
+  const free = (x, y) => !skin(x, y);
+
+  if (spine) {
+    const at = (u) => spine[Math.round((u - SPINE_TAIL) / SPINE_STEP)];
+    let under = 0;
+    for (let x = 0; x < W; x++) if (part(x, water + 1)) under++;
+    let above = false;
+    for (let x = 0; x < W && !above; x++) if (skin(x, water - 1)) above = true;
+    // A collar of foam where the body cuts the surface.
+    if (under && above) {
+      let x0 = W;
+      let x1 = -1;
+      for (let x = 0; x < W; x++) if (part(x, water + 1) || skin(x, water)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); }
+      for (let x = x0 - 3; x <= x1 + 3; x++) {
+        const d = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
+        if (!d || !free(x, water) || k.hash(Math.round(ex(x + 0.5)), f, 91) < 0.2) continue;
+        t.set(x, water, P.c(d === 1 ? 'white0' : d === 2 ? 'ice3' : 'water7'));
+      }
+      for (const x of [x0 - 1, x1 + 1]) if (free(x, water + 1)) t.set(x, water + 1, P.c('ice3'));
+    }
+    // The water domes over the beak just before it breaks out.
+    if (f === 0) {
+      const nose = at(DOLPHIN.len);
+      const X = Math.floor(west ? W - nose.x : nose.x);
+      for (const [dx, name] of [[-1, 'water7'], [0, 'ice3'], [1, 'water7']]) if (free(X + dx, water)) t.set(X + dx, water, P.c(name));
+    }
+    // Drops falling off the fluke as it leaves the water.
+    if (f >= 3 && f <= 5) {
+      const tail = at(-1.5);
+      for (let j = 0; j < 3; j++) {
+        if (k.hash(j, f, 97) < 0.25) continue;
+        const X = Math.floor(west ? W - (tail.x - 0.4 * j) : tail.x - 0.4 * j);
+        const Y = Math.floor(tail.y + 1.5 + j * 1.6 + (f - 3) * 1.2);
+        if (Y < water && free(X, Y)) t.set(X, Y, P.c(j ? 'water7' : 'ice3'));
+      }
+    }
+  }
+  const sx = (x) => Math.round(west ? W - 1 - x : x);
+  if (f >= EXIT_SPLASH) splash(t, free, sx(LEAP.exit), f - EXIT_SPLASH, west ? 211 : 201);
+  if (f >= ENTRY_SPLASH) splash(t, free, sx(LEAP.exit + LEAP.span), f - ENTRY_SPLASH, west ? 231 : 221);
+  return t;
+}
+
 module.exports = {
   sprites: {
     whale_great: set('great'),
@@ -537,6 +756,7 @@ module.exports = {
     whale_blow: blow,
     whale_blow_sperm: (f) => blow(f % 8, f >= 8 ? -1 : 1),
     whale_wake: wake,
+    dolphin_leap: (f) => dolphin(f % 16, f >= 16),
   },
   textures: {},
 };

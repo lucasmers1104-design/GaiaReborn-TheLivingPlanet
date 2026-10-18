@@ -154,3 +154,12 @@ test('oxygen production starts with the actual discovery and stops without livin
   assert.equal(s.atmo.oceanO2Delta, 0, 'the persistent discovery is not a permanent oxygen source');
   assert.ok(dex.isDiscovered(SE.Life.Prokaryote, SE.CYANOBACTERIA_STAGE));
 });
+
+test('the sea pearls oxygen on the map only between its iron running out and the Great Oxidation Event', () => {
+  const at = (oceanIron, o2, oceanO2) => SE.oxygenPearling({ oceanIron, o2, oceanO2 });
+  assert.equal(at(0.5, 0.01, 0), 0, 'iron still binds the oxygen');
+  const faint = at(SE.IRON_DEPLETED / 2, 0.1, 0);
+  const strong = at(SE.IRON_DEPLETED / 2, 0.5, SE.OCEAN_O2_RISEN);
+  assert.ok(faint > 0 && faint < strong && strong <= 1, `${faint} < ${strong}`);
+  assert.equal(at(0, SE.AIR_O2_RISEN, SE.OCEAN_O2_RISEN), 0, 'from the Great Oxidation Event on');
+});

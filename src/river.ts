@@ -334,11 +334,18 @@ namespace SE {
 
     /** Turn discharge into a drawable river and the moisture floor it holds. */
     private static classify(world: WorldState): void {
-      const { elevation, riverFlow, riverLevel, riparian } = world;
+      const { elevation, riverFlow, riverLevel, riparian, landscape, landscapeNext, temperature } = world;
 
       riverLevel.fill(0);
       for (let i = 0; i < TILE_COUNT; i++) {
         if (elevation[i] < 0 || riverFlow[i] < RIVER_THRESHOLD) continue;
+        // Frozen under ice or snow: the water still drains through (meltwater
+        // leaves at the ice edge), but no channel shows until the tile thaws.
+        // Before succession has laid a landscape down, the climate decides.
+        const ls = landscape[i];
+        if (landscapeNext[i] !== LANDSCAPE_UNSET
+          ? ls === Landscape.Ice || ls === Landscape.Snow
+          : temperature[i] < FROZEN_TEMP) continue;
         // Logarithmic: a river carrying ten times the water is not ten times
         // the river, and without the compression the trunk would saturate
         // while every tributary sat at the minimum.

@@ -28,6 +28,8 @@ namespace SE {
     readonly show = new FxShow();
     private readonly particles = new FxParticles();
     private readonly ground = new FxGround();
+    private readonly sea = new SeaWave();
+    private readonly shore = new FxShore();
     private scene: FxScene | null = null;
     private last = 0;
     /** Occluder patches by position, each with the terrain signature of the row it was cut from. */
@@ -48,12 +50,12 @@ namespace SE {
       this.show.reduce = on;
     }
 
-    /** Build this frame's scene and move the particles. */
-    update(world: WorldState, cam: LandCamera, cols: number, rows: number, now: number): void {
+    /** Build this frame's scene and move the particles; `phase` is how far the game is between two ticks. */
+    update(world: WorldState, cam: LandCamera, cols: number, rows: number, now: number, phase?: number): void {
       const dt = this.last ? Math.min(0.25, (now - this.last) / 1000) : 0;
       this.last = now;
       this.particles.update(dt);
-      this.scene = this.show.build(world, cam, cols, rows, now, dt, this.particles);
+      this.scene = this.show.build(world, cam, cols, rows, now, dt, this.particles, phase);
     }
 
     drawShake(ctx: CanvasRenderingContext2D, base: HTMLCanvasElement, cam: LandCamera, now: number): void {
@@ -74,7 +76,9 @@ namespace SE {
 
     drawGround(ctx: CanvasRenderingContext2D, world: WorldState, cam: LandCamera, land: PixelTerrain, now: number,
       cities: (x0: number, y0: number, x1: number, y1: number) => void): void {
-      this.ground.draw(ctx, cam, world, land, now, cities, this.baseTick);
+      if (this.scene) this.sea.draw(ctx, world, cam, land, this.scene, now);
+      this.ground.draw(ctx, cam, world, land, now, cities, this.baseTick, this.scene?.phase);
+      if (this.scene) this.shore.draw(ctx, world, cam, land, this.scene);
       this.drawRings(ctx, cam, true);
       this.drawDecals(ctx, world, cam, land, cities);
     }

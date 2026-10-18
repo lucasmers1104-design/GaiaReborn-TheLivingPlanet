@@ -1,6 +1,6 @@
 # Steam-Achievements
 
-Stand: 2026-10-17 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob sie hier ein Achievement verdienen.
+Stand: 2026-10-18 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob sie hier ein Achievement verdienen.
 
 **Steamworks-Hinweise:** Jedes Achievement braucht einen API-Namen (Spalte „API“), Anzeigename, Beschreibung und **zwei Icons** (256 × 256 px, JPG/PNG): freigeschaltet (farbig) und gesperrt (Graustufen-Version desselben Bildes). „Versteckt“ = Beschreibung erst nach dem Freischalten sichtbar.
 
@@ -21,6 +21,7 @@ Stand: 2026-10-17 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 8 | `ACH_GAIA_CONTENT` | Gaia lächelt | Gaias Stimmung erreicht „Zufrieden“ | Lächelndes Planetengesicht |
 | 9 | `ACH_EPOCH_TODAY` | Vertrautes Terrain | Eine Partie in der Epoche „Heute“ starten | Die heutigen Kontinente als Pixel-Globus |
 | 10 | `ACH_FILM` | Logenplatz der Evolution | Einen Evolutionsfilm komplett ansehen | Filmrolle mit DNA-Strang |
+| 39 | `ACH_GLOBETROTTER` | Weltreisender | In der Übersichtskarte (Globus-Ansicht) per Klick ans andere Ende der Welt springen | Globus mit gestrichelter Flugbahn und Ortsmarke |
 
 ## Mittel (mehrere Stunden, ein Ziel verfolgen)
 
@@ -43,6 +44,8 @@ Stand: 2026-10-17 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 25 | `ACH_LEXICON_50` | Hobby-Naturforscher | 50 von 136 Unterarten im Lexikon | Aufgeschlagenes Notizbuch mit Tierskizzen |
 | 26 | `ACH_NUKE` *(versteckt)* | Der rote Knopf | Einen Atomschlag auslösen | Roter Knopf unter Glasklappe |
 | 27 | `ACH_MONOLITH` *(versteckt)* | Der Monolith | Eine Art durch den Monolithen erwecken | Schwarzer Monolith, Affe davor |
+| 38 | `ACH_DOLPHIN_POD` | Delfinschule | Eine springende Delfinschule im tropischen Meer auf der Karte sehen (Zoom ≥ 16 px) | Drei Delfine im Bogen über türkisem Pixel-Meer |
+| 40 | `ACH_GREAT_OXIDATION` | Der erste Atemzug | Die Große Sauerstoffkatastrophe erreichen | Sauerstoffperlen steigen aus türkisem Küstenwasser in einen hellen Himmel |
 
 ## Schwer (Langzeitziele, Meisterschaft)
 
@@ -131,6 +134,18 @@ Shared style for all 7: detailed 16-bit pixel art, bold saturated colors, one ce
 35. A purple octopus wearing a golden crown, holding small tools in its tentacles, an underwater city behind it.
 36. A small dinosaur standing upright, proudly holding a stone tool, a meteor streaking harmlessly past in the sky behind.
 37. A fiery phoenix rising out of a smoking meteor crater, green plants sprouting at the crater's rim.
+```
+
+### Prompt 5 — Nr. 38– (wird mit neuen Achievements auf 10 aufgefüllt)
+
+```
+Create 3 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
+Shared style: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
+Border: items 38 and 40 get a thin SILVER ring, item 39 gets a thin BRONZE ring.
+
+38. Three grey dolphins with pale bellies leaping one after another in an arc out of a turquoise tropical sea, seen from the side, white splashes where they leave and enter the water.
+39. A small pixel-art globe with a dashed flight path arcing across it from one side to the far side, ending at a glowing location pin.
+40. Strings of shining oxygen bubbles rising out of turquoise coastal water over green bacterial mats near a rocky shore, popping into a bright, newly blue sky.
 ```
 
 ## Ideen für später (wenn das Feature kommt)

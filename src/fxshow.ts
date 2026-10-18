@@ -36,6 +36,14 @@ namespace SE {
   /** Tiles around (x, y) that tremble by `amp` art pixels. */
   export interface FxShake { readonly x: number; readonly y: number; readonly radius: number; readonly amp: number }
 
+  /** A mark on the sea at world art pixel (x, y), radius r, drawn into the sea surface (fxseawave.ts) at density k (0..1). */
+  export interface SeaMark {
+    readonly x: number; readonly y: number; readonly r: number; readonly k: number;
+    /** draw: the sea drawing back (p = how far); dome: the sea heaving up; cavity: a crater blown into it. */
+    readonly kind: 'draw' | 'dome' | 'cavity';
+    readonly p: number;
+  }
+
   /** A hazard whose main animation is playing. */
   export interface FxStarted { readonly id: number; readonly kind: EventKind; readonly x: number; readonly y: number; readonly born: number }
 
@@ -75,7 +83,10 @@ namespace SE {
     readonly tops: FxDraw[] = [];
     readonly shakes: FxShake[] = [];
     readonly rings: FxRing[] = [];
+    readonly seaMarks: SeaMark[] = [];
     now = 0;
+    /** How far the game is between two ticks, 0..1; the screen plays one tick behind the simulation. */
+    phase = 0;
     /** Seconds since the last frame. */
     dt = 0;
     /** "Effekte reduzieren": no shaking, no flashes. */
@@ -162,6 +173,8 @@ namespace SE {
     private readonly known = new Set<number>();
     private generation = -1;
     private view = { x0: 0, y0: 0, x1: -1, y1: -1 };
+    /** When the simulation last ticked, to guess the tick phase when none is given. */
+    private readonly clock = { ticks: -1, at: 0, ms: 400 };
 
     /**
      * Play the omen of `kind` at (x, y), then call `commit`, which starts the
@@ -210,8 +223,8 @@ namespace SE {
       this.timed.push(t);
     }
 
-    /** Assemble this frame's scene. */
-    build(world: WorldState, cam: LandCamera, cols: number, rows: number, now: number, dt: number, particles: FxParticles): FxScene {
+    /** Assemble this frame's scene; without `phase` it is guessed from when the ticks came. */
+    build(world: WorldState, cam: LandCamera, cols: number, rows: number, now: number, dt: number, particles: FxParticles, phase?: number): FxScene {
       if (world.hazards.generation !== this.generation) {
         this.generation = world.hazards.generation;
         this.staged.length = 0;
@@ -226,6 +239,7 @@ namespace SE {
       const s = new FxScene(particles, this);
       s.now = now;
       s.dt = dt;
+      s.phase = phase ?? this.guessPhase(world, now);
       s.reduce = this.reduce;
       s.pixel = (cam.tilePx * cam.dpr) / 16;
       s.zoomedOut = cam.tilePx < 16;
@@ -265,6 +279,16 @@ namespace SE {
       fxMarkers(s, world);
       this.timedSprites(s, now, dt);
       return s;
+    }
+
+    private guessPhase(world: WorldState, now: number): number {
+      const c = this.clock;
+      if (world.ticks !== c.ticks) {
+        if (world.ticks === c.ticks + 1) c.ms = clamp(now - c.at, 60, 4000);
+        c.ticks = world.ticks;
+        c.at = now;
+      }
+      return clamp((now - c.at) / c.ms, 0, 0.999);
     }
 
     private timedSprites(s: FxScene, now: number, dt: number): void {

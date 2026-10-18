@@ -70,6 +70,7 @@
 - Smallest coherent change; no unrelated edits, no full-file rewrites.
 - Add comments or docstrings only for constraints or rationale the code can't express (e.g. browser quirks, measured tuning); intent goes into names and types.
 - No new abstractions, wrappers or dependencies without a concrete need. No runtime dependencies, bundler or ES modules: the `file://` start must keep working.
+- Never add markup to `index.html` for new UI; create it in code (`make` + append). The local server (`python -m http.server`) sends no cache headers, so the browser can pair a cached old `index.html` with a new `simulation.js`, and `el()` on a missing id stops the boot.
 - One responsibility per file; put new features in new files instead of growing files past ~300 lines. Many files are already larger; keep your edits there to wiring.
 - A new `.ts` file goes into `files` in `tsconfig.json`, after everything it uses at load time. A new `.css` file gets an `@import` in `styles.css`.
 - Pass randomness and time into game rules so they stay testable. Simulation randomness comes from the seeded `world.rng` or a hash roll (like `spontaneousRoll`), never from `Math.random()` or `Date.now()`. `Math.random()` is fine for purely visual effects.

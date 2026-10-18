@@ -62,9 +62,10 @@ namespace SE {
     /**
      * Start a hazard on one tile now. With HAZARD_MAX_ACTIVE running, a
      * natural or chained one is dropped and a player's makes the oldest jump
-     * to its aftermath. Null where the hazard cannot start.
+     * to its aftermath. Null where the hazard cannot start. `strength` (1 for
+     * a full one) is set before the impact, so the rule's start sees it.
      */
-    start(world: WorldState, kind: EventKind, x: number, y: number, cause: HazardCause): Hazard | null {
+    start(world: WorldState, kind: EventKind, x: number, y: number, cause: HazardCause, strength?: number): Hazard | null {
       const rule = HAZARD_RULES[kind];
       if (!rule || this.refusal(world, kind, x, y) !== '') return null;
       const hz = world.hazards;
@@ -77,6 +78,7 @@ namespace SE {
       const h: Hazard = {
         id: hz.nextId++, kind, x: wrapX(x), y, cause, startTick: world.ticks, age: 0, done: false, chainUsed: false,
       };
+      if (strength !== undefined) h.strength = strength;
       hz.list.push(h);
       rule.start(world, h);
       hz.revision++;
@@ -105,10 +107,7 @@ namespace SE {
     private chain(world: WorldState, h: Hazard): void {
       if (h.cause === 'chain' || h.chainUsed) return;
       const next = HAZARD_CHAINS[h.kind]?.(world, h);
-      const c = next ? this.start(world, next.kind, next.x, next.y, 'chain') : null;
-      if (!c) return;
-      h.chainUsed = true;
-      if (next?.strength !== undefined) c.strength = next.strength;
+      if (next && this.start(world, next.kind, next.x, next.y, 'chain', next.strength)) h.chainUsed = true;
     }
   }
 

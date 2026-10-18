@@ -84,10 +84,12 @@ namespace SE {
     return el;
   }
 
+  /** `current`: the examined tile's biome, framed; -1 outside the Examine window. */
   export function examineHabitats(suit: readonly number[], current: number, key: string): HTMLElement {
     const root = make('div');
     const label = make('div', 'ex-habitats-label');
-    label.append(make('span', undefined, 'Lebensräume'), make('span', 'ex-current-key', 'dieses Feld'));
+    label.append(make('span', undefined, 'Lebensräume'));
+    if (current >= 0) label.append(make('span', 'ex-current-key', 'dieses Feld'));
     const icons = make('div', 'ex-habitats');
     for (let b = 0; b < BIOME_COUNT; b++) {
       const value = suit[b];

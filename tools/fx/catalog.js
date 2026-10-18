@@ -63,9 +63,7 @@ const SPRITES = [
 
   // Water and wind (Flutwelle, Wirbelsturm).
   // Directed sprites hold 8 directions one after another (HAZARD_NX/NY order), each with its own frames.
-  { id: 'wave_deep', name: 'Wellenkamm, tief: 8 Richtungen × 4 Frames', family: 'water', w: 16, h: 8, frames: 32, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
-  { id: 'wave_coast', name: 'Wellenkamm, küstennah: 8 Richtungen × 4 Frames', family: 'water', w: 16, h: 16, frames: 32, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
-  { id: 'wave_break', name: 'Brechende Welle: 8 Richtungen × 6 Frames', family: 'water', w: 16, h: 24, frames: 48, fps: 10, anchor: 'foot', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'wave_break', name: 'Brechende Welle: 8 Richtungen × 6 Frames', family: 'water', w: 16, h: 16, frames: 48, fps: 10, anchor: 'foot', layer: 'object', mirror: 'generator', directions: 8 },
   { id: 'hurricane', name: 'Wirbelsturm, Nordhalbkugel', family: 'water', w: 48, h: 48, frames: 8, fps: 8, anchor: 'center', layer: 'top', mirror: 'generator' },
   { id: 'hurricane_south', name: 'Wirbelsturm, Südhalbkugel', family: 'water', w: 48, h: 48, frames: 8, fps: 8, anchor: 'center', layer: 'top', mirror: 'generator' },
   { id: 'tornado', name: 'Tornado-Trichter', family: 'water', w: 16, h: 32, frames: 6, fps: 10, anchor: 'foot', layer: 'object' },
@@ -93,6 +91,10 @@ const SPRITES = [
   // Drawn under the whale: bow wave (east 0–3, west 4–7, looped; `mouth` its tip in the east frames, set on
   // the snout) and the footprint ring before a whale rises and after its fluke sinks (8–11, once).
   { id: 'whale_wake', name: 'Bugwelle (Osten, Westen) und Fußabdruck-Ring', family: 'fauna', w: 24, h: 16, frames: 12, loop: 4, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', mouth: [18, 7] },
+  // Dolphins leaping in warm seas (src/dolphinlayer.ts), seen from the side like everything that rises off the
+  // map: east 0–15, west 16–31, played once per leap. The whole arc is in the box; `mouth` is where the body
+  // leaves the water, on the waterline, in the east frames (west: w − 1 − x).
+  { id: 'dolphin_leap', name: 'Delfinsprung: 2 Richtungen × 16 Frames', family: 'fauna', w: 32, h: 24, frames: 32, fps: 12, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [6, 18] },
 ];
 
 /**
@@ -112,7 +114,10 @@ const TEXTURES = [
   { id: 'ground_scorched', name: 'Versengter Boden', family: 'impact', size: 64, frames: 1, fps: 0, rim: 'soil0' },
   { id: 'ground_ash', name: 'Asche', family: 'impact', size: 64, frames: 1, fps: 0, rim: 'rock1' },
   { id: 'fallout_film', name: 'Fahler Schleier (Fallout)', family: 'impact', size: 64, frames: 1, fps: 0, rim: null },
+  { id: 'flood_mud', name: 'Rückströmung, schlammig', family: 'water', size: 64, frames: 2, fps: 4, rim: 'soil2' },
+  { id: 'flood_shallow', name: 'Flutwasser, flach und trüb', family: 'water', size: 64, frames: 2, fps: 4, rim: 'water7' },
   { id: 'flood_water', name: 'Flutwasser', family: 'water', size: 64, frames: 2, fps: 4, rim: 'water7' },
+  { id: 'flood_deep', name: 'Flutwasser, tief', family: 'water', size: 64, frames: 2, fps: 4, rim: 'water7' },
   { id: 'wet_ground', name: 'Nasser Boden (Pfützen)', family: 'water', size: 64, frames: 1, fps: 0, rim: null },
 ];
 

@@ -107,11 +107,18 @@ test('a steep coast stops the wave; the flooded flat coast recedes into mud', ()
   hz = new SE.HazardSystem();
   const h = hz.start(w, SE.EventKind.TidalWave, CX + 13, CY, 'player');
   const ever = new Set();
+  const runs = new Set();
+  const drained = new Map();
   let standing = 0;
   run(SE, w, hz, 80, () => {
+    for (const r of h.wave.runs) runs.add(r);
     let now = 0;
     for (let i = 0; i < SE.TILE_COUNT; i++) {
-      if (w.hazards.tile[i] !== SE.HazardTile.Flood) continue;
+      if (w.hazards.tile[i] !== SE.HazardTile.Flood) {
+        // Early mud may heal before the wave ends: check each tile as its water goes.
+        if (ever.has(i) && !drained.has(i)) drained.set(i, [w.hazards.scar[i], SE.LANDSCAPE_LEVEL[w.landscape[i]]]);
+        continue;
+      }
       ever.add(i);
       now++;
     }
@@ -119,18 +126,37 @@ test('a steep coast stops the wave; the flooded flat coast recedes into mud', ()
   });
   assert.ok(ever.size >= 5, `${ever.size} tiles flooded`);
   assert.equal(h.done, true);
+  // Smooth run-up: the water arrives later with every land step, and its edge runs back to the sea inland first, not in two jumps.
+  let levels = 0;
+  for (const r of runs) {
+    const lv = [];
+    r.tiles.forEach((_, m) => {
+      assert.ok(r.at[m] < r.off[m], 'water comes before it goes');
+      const l = (lv[r.reach[m]] ??= { a0: Infinity, a1: -Infinity, off: -Infinity });
+      l.a0 = Math.min(l.a0, r.at[m]);
+      l.a1 = Math.max(l.a1, r.at[m]);
+      l.off = Math.max(l.off, r.off[m]);
+    });
+    const steps = lv.filter(Boolean);
+    for (let k = 1; k < steps.length; k++) {
+      assert.ok(steps[k].a0 >= steps[k - 1].a0 && steps[k].a1 >= steps[k - 1].a1, `step ${k} floods later`);
+      assert.ok(steps[k].off < steps[k - 1].off, `step ${k} dries earlier`);
+    }
+    if (steps.length >= 3) assert.ok(new Set(r.off.map((v) => v.toFixed(6))).size >= 3, 'the edge recedes continuously');
+    levels = Math.max(levels, steps.length);
+  }
+  assert.ok(levels >= 3, `${levels} land steps run up`);
   for (const i of ever) {
     assert.equal(w.hazards.tile[i], SE.HazardTile.None, 'the water has gone');
-    assert.equal(w.hazards.scar[i], SE.ScarKind.Mud, 'mud is left');
-    assert.equal(SE.LANDSCAPE_LEVEL[w.landscape[i]], 0, 'raw ground');
+    assert.deepEqual(drained.get(i), [SE.ScarKind.Mud, 0], 'mud on raw ground is left');
   }
   // Mud holds its ground for its minimum ticks, then succession may take it back.
   const min = SE.SCAR_MIN_TICKS[SE.ScarKind.Mud];
-  const age0 = new Map([...ever].map((i) => [i, w.hazards.scarAge[i]]));
+  const age0 = new Map([...ever].filter((i) => w.hazards.scar[i] === SE.ScarKind.Mud).map((i) => [i, w.hazards.scarAge[i]]));
   for (let t = 1; t < min; t++) {
     hz.step(w);
-    for (const i of ever) {
-      if (age0.get(i) + t >= min) continue;
+    for (const [i, a] of age0) {
+      if (a + t >= min) continue;
       assert.equal(w.hazards.scar[i], SE.ScarKind.Mud, `still mud at age ${w.hazards.scarAge[i]}`);
       assert.equal(SE.LANDSCAPE_LEVEL[w.landscape[i]], 0, 'nothing grows on young mud');
     }
@@ -140,20 +166,41 @@ test('a steep coast stops the wave; the flooded flat coast recedes into mud', ()
 test('the wave crosses deep water faster than the shelf and the shallows', () => {
   const s = sim();
   const { SE, world: w } = s;
-  const arrivalAt = (depth) => {
+  const wave = (depth, strength) => {
     w.hazards.clear();
     w.elevation.fill(depth);
-    const h = new SE.HazardSystem().start(w, SE.EventKind.TidalWave, CX, CY, 'player');
-    const k = h.wave.tiles.indexOf(SE.idx(CX + 10, CY));
+    return new SE.HazardSystem().start(w, SE.EventKind.TidalWave, CX, CY, 'player', strength).wave;
+  };
+  const arrivalAt = (depth) => {
+    const wv = wave(depth);
+    const k = wv.tiles.indexOf(SE.idx(CX + 10, CY));
     assert.ok(k >= 0, 'reached ten tiles away');
-    assert.ok(h.wave.tiles.every((i) => SE.hazardDistance(CX, CY, i % SE.GRID_W, Math.floor(i / SE.GRID_W)) <= SE.WAVE_PATH_MAX));
-    return h.wave.arrival[k];
+    assert.ok(wv.tiles.every((i) => SE.hazardDistance(CX, CY, i % SE.GRID_W, Math.floor(i / SE.GRID_W)) <= SE.WAVE_PATH_MAX));
+    assert.ok(Math.abs(wv.at[SE.waveCell(wv, CX + 10, CY)] - wv.arrival[k]) < 1e-5, 'the box holds the list arrival');
+    return wv.arrival[k];
   };
   const deep = arrivalAt(-0.5);
   const shelf = arrivalAt(-0.1);
   const shallow = arrivalAt(-0.02);
   assert.ok(Math.abs(deep - 10 * SE.WAVE_TICKS_DEEP) < 0.05, `deep ${deep}`);
   assert.ok(deep < shelf && shelf < shallow, `deep ${deep}, shelf ${shelf}, shallows ${shallow}`);
+  // Uniform deep sea: a round front, not an octagon; a weaker wave reaches less far.
+  const reach = (wv) => {
+    let far = 0;
+    for (let dy = -SE.WAVE_PATH_MAX; dy <= SE.WAVE_PATH_MAX; dy++) {
+      for (let dx = -SE.WAVE_PATH_MAX; dx <= SE.WAVE_PATH_MAX; dx++) {
+        const T = wv.at[SE.waveCell(wv, SE.wrapX(CX + dx), CY + dy)];
+        if (!Number.isFinite(T)) continue;
+        const d = Math.hypot(dx, dy);
+        if (d >= 20) assert.ok(Math.abs(T / (SE.WAVE_TICKS_DEEP * d) - 1) < 0.02, `round at ${dx},${dy}: ${T}`);
+        far = Math.max(far, d);
+      }
+    }
+    return far;
+  };
+  const full = reach(wave(-0.5));
+  const half = reach(wave(-0.5, 0.5));
+  assert.ok(half < full - 5, `strength 0.5 reaches ${half.toFixed(1)}, strength 1 ${full.toFixed(1)}`);
   w.hazards.clear();
   island(SE, w);
   assert.equal(new SE.HazardSystem().refusal(w, SE.EventKind.TidalWave, CX, CY), 'Eine Flutwelle beginnt im Meer.');
@@ -407,7 +454,7 @@ test('tidal wave and hurricane are deterministic on a real planet', () => {
   assert.ok(a.ms < 5, `${a.ms.toFixed(2)} ms per tick`);
 });
 
-test('on screen the sea draws back, the ring runs out and crests ride the front; the storm turns over its eye', (t) => {
+test('on screen the sea draws back before the wave; the storm turns over its eye', (t) => {
   const s = sim();
   const { SE, world: w } = s;
   if (!SE.FX_MANIFEST.sprites.hurricane) return t.skip('the effect atlas has no water art yet (fx-atlas --write)');
@@ -437,9 +484,9 @@ test('on screen the sea draws back, the ring runs out and crests ride the front;
     return { omen, main, later };
   };
   const wave = play(SE.EventKind.TidalWave, CX + 15, CY);
-  assert.ok(wave.omen.rings.length > 0, 'light rings as the sea draws back');
-  assert.ok(wave.main.rings.some((r) => r.r >= 8), 'the first ring runs out');
-  assert.ok(wave.later.objects.some((d) => d.id === 'wave_deep' || d.id === 'wave_coast' || d.id === 'wave_break'), 'crests on the front');
+  assert.ok(wave.omen.seaMarks.some((m) => m.kind === 'draw'), 'the sea draws back');
+  // Built without a phase, the scene guesses one.
+  assert.ok(wave.later.phase >= 0 && wave.later.phase <= 1, `phase ${wave.later.phase}`);
   const north = play(SE.EventKind.Hurricane, CX + 15, 50);
   assert.ok(north.omen.tops.some((d) => d.id === 'storm_small'), 'a small spiral gathers');
   assert.ok(north.later.tops.some((d) => d.id === 'hurricane'), 'the northern storm');
@@ -447,46 +494,76 @@ test('on screen the sea draws back, the ring runs out and crests ride the front;
   assert.ok(south.later.tops.some((d) => d.id === 'hurricane_south'), 'the southern storm turns the other way');
 });
 
-test('on screen crests point along the heading, break on the coast, and tornadoes stand on their paths', (t) => {
+test('on screen the wave is made of the sea: a round crest on its arrival line; a chained wave heaves the sea at its start', () => {
   const s = sim();
   const { SE, world: w } = s;
-  if (!SE.FX_MANIFEST.sprites.wave_break || !SE.FX_MANIFEST.sprites.tornado) return t.skip('the effect atlas has no stage-2 water art yet (fx-atlas --write)');
-  const particles = new SE.FxParticles();
-  const build = (show, x, y, now) => show.build(w, { scrollX: x - 12, scrollY: y - 8, tilePx: 32, dpr: 1 }, 24, 16, now, 0.05, particles);
-  island(SE, w);
-  let hz = new SE.HazardSystem();
-  hz.start(w, SE.EventKind.TidalWave, CX + 15, CY, 'player');
-  let show = new SE.FxShow();
-  let now = 10000;
-  build(show, CX + 6, CY, now);
-  let crests = 0;
-  let breaks = 0;
-  for (let k = 0; k < 12 && w.hazards.list.length > 0; k++) {
+  w.elevation.fill(-0.5);
+  w.tech.fill(0);
+  const hz = new SE.HazardSystem();
+  const h = hz.start(w, SE.EventKind.TidalWave, CX, CY, 'player');
+  for (let k = 0; k < 3; k++) {
     hz.step(w);
     w.ticks++;
-    for (let f = 0; f < 4; f++) {
-      now += 100;
-      for (const d of build(show, CX + 6, CY, now).objects) {
-        if (d.id === 'wave_break') breaks++;
-        if (d.id !== 'wave_deep' && d.id !== 'wave_coast') continue;
-        crests++;
-        // Between the origin and the island the front travels west.
-        if (d.x >= (CX + 12) * 16 || Math.abs(d.y - CY * 16 - 8) > 48) continue;
-        const per = SE.FX_MANIFEST.sprites[d.id].frames.length / 8;
-        // Travelling west towards the island: directions [-1,-1], [-1,0] or [-1,1].
-        assert.ok([0, 3, 5].includes(Math.floor(d.frame / per)), `crest frame ${d.frame} faces west`);
-      }
-    }
   }
-  assert.ok(crests > 0, 'crests ride the front');
-  assert.ok(breaks > 0, 'the wave breaks on the coast');
+  // A stand-in canvas and an all-sea terrain, so SeaWave paints in Node.
+  const fakeCtx = () => ({ createImageData: (cw, ch) => ({ data: new Uint8ClampedArray(cw * ch * 4) }), putImageData() {} });
+  globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: fakeCtx }) };
+  const m = SE.TERRAIN_MANIFEST;
+  const art = { manifest: m, water: m.ramps.water, rgba: new Uint32Array(256) };
+  const sea = new Uint8Array((SE.LAND_CHUNK * 16) ** 2).fill(m.ramps.water[2]);
+  const land = { art, ready: true, motion: () => ({ sea }) };
+  const cam = { scrollX: CX - 12, scrollY: CY - 8, tilePx: 32, dpr: 1 };
+  const scene = new SE.FxShow().build(w, cam, 24, 16, 0, 0, new SE.FxParticles(), 0.5);
+  const sw = new SE.SeaWave();
+  const ctx = { canvas: { width: 24 * 32, height: 16 * 32 }, imageSmoothingEnabled: false, setTransform() {}, drawImage() {} };
+  sw.draw(ctx, w, cam, land, scene, 0);
+  delete globalThis.document;
+  // The outermost crest pixel (rank 4, private to SeaWave) in each of 8 sectors lies just behind the arrival line, the same on every side.
+  const Tvis = h.age - 1 + 0.5;
+  const front = (Tvis / SE.WAVE_TICKS_DEEP) * 16;
+  const outer = new Array(8).fill(0);
+  for (let o = 0; o < sw.rank.length; o++) {
+    if (sw.rank[o] !== 4) continue;
+    const dx = sw.ox * 16 + (o % sw.w) + 0.5 - (CX * 16 + 8);
+    const dy = sw.oy * 16 + Math.floor(o / sw.w) + 0.5 - (CY * 16 + 8);
+    const sector = (Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) + 8) % 8;
+    outer[sector] = Math.max(outer[sector], Math.hypot(dx, dy));
+  }
+  for (const r of outer) assert.ok(Math.abs(r - (front - 0.15 * 40)) <= 4, `crest at ${outer.map((v) => v.toFixed(1)).join(' ')} px, front ${front.toFixed(1)} px`);
   for (const g of w.hazards.list) SE.HAZARD_RULES[g.kind].finish(w, g);
   w.hazards.list.length = 0;
 
+  // A quake at sea: its wave starts with the sea heaving up over the epicentre.
+  island(SE, w);
+  const show = new SE.FxShow();
+  const view = { scrollX: CX + 3, scrollY: CY - 8, tilePx: 32, dpr: 1 };
+  show.build(w, view, 24, 16, 0, 0, new SE.FxParticles(), 0);
+  const quake = new SE.HazardSystem();
+  show.stage(w, SE.EventKind.Earthquake, CX + 15, CY, () => quake.start(w, SE.EventKind.Earthquake, CX + 15, CY, 'player'));
+  const t0 = performance.now();
+  let marks = [];
+  for (let f = 1; f <= 12 && marks.length === 0; f++) {
+    const sc = show.build(w, view, 24, 16, t0 + f * 200, 0.2, new SE.FxParticles(), 0.1);
+    marks = sc.seaMarks.filter((mk) => mk.kind === 'dome');
+  }
+  const chained = w.hazards.list.find((g) => g.kind === SE.EventKind.TidalWave);
+  assert.ok(chained && chained.cause === 'chain', 'the quake raised a wave');
+  assert.ok(marks.some((mk) => Math.abs(mk.x - ((CX + 15) * 16 + 8)) <= 8 && Math.abs(mk.y - (CY * 16 + 8)) <= 8), 'the chained wave plays its start');
+  for (const g of w.hazards.list) SE.HAZARD_RULES[g.kind].finish(w, g);
+  w.hazards.list.length = 0;
+});
+
+test('on screen tornadoes stand on their paths', (t) => {
+  const s = sim();
+  const { SE, world: w } = s;
+  if (!SE.FX_MANIFEST.sprites.tornado) return t.skip('the effect atlas has no stage-2 water art yet (fx-atlas --write)');
+  const particles = new SE.FxParticles();
+  const build = (show, x, y, now) => show.build(w, { scrollX: x - 12, scrollY: y - 8, tilePx: 32, dpr: 1 }, 24, 16, now, 0.05, particles);
+  let now = 10000;
   landfall(SE, w, 3);
-  hz = new SE.HazardSystem();
+  const hz = new SE.HazardSystem();
   const storm = hz.start(w, SE.EventKind.Hurricane, 97, 60, 'player');
-  show = new SE.FxShow();
+  const show = new SE.FxShow();
   let seen = 0;
   for (let k = 0; k < 20 && w.hazards.list.length > 0; k++) {
     hz.step(w);

@@ -206,7 +206,7 @@ Die ausführliche Fassung entsteht in Stufe 1 als `docs/ereignisse-2026-10/stil.
 | Meteorit | überall | 2 (Bild 4) | keine; Staubwolke nur Bild | Krater, versengter Ring | 8 / 30 Ticks |
 | Flächenbrand | Land mit Pflanzendecke | 10, ≤ 90 Kacheln | Zellautomat | verbrannte Erde, Stämme | 8 Ticks bis Gras |
 | Wirbelsturm | überall | Bahn ≤ 24, Streifen 5 breit | Zugbahn 1 Kachel/Tick | Windwurf, nass, Schlamm | 10 Ticks |
-| Flutwelle | Meer | 32 übers Wasser, 6 landeinwärts | Wellenfront, Auflaufen | Schlamm, Treibgut | 10 Ticks |
+| Flutwelle | Meer | 32 übers Wasser (schwächere Wellen weniger), 6 landeinwärts | Wellenfront, Auflaufen | Schlamm, Treibgut | 10 Ticks |
 | Erdbeben | überall | 4 | Erdrutsche 1–3 Ticks | Riss, Schutt, Ruinen | 30 / 10 Ticks |
 | Atomschlag | überall | 3 + Fahne 3 | Fallout mit dem Wind | Asche, fahle Zone | 150 Ticks |
 | Seuche | Stadt | Nachbarstädte ≤ 14 | Civ-Seuchenregeln | Bevölkerungsverlust | – |
@@ -369,26 +369,47 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
 ### 3.5 Flutwelle
 
 - **Auslösefeld:** Meer (Höhe < 0), sonst Ablehnung mit „Eine Flutwelle beginnt im Meer.“
-- **Vorzeichen (0,8 s):** Das Wasser am Feld zieht sich zurück: heller Ring, Schaumflecken.
-- **Hauptereignis (2 s):** Der erste Wellenring (prozedural) wächst auf 2 Kacheln, dann übernimmt die Front pro Tick.
+- **Vorzeichen (0,8 s):** Das Wasser am Feld zieht sich zurück: eine dunklere Scheibe wächst auf 1 Kachel Radius,
+  mit hellerem Rand und zurückbleibenden Schaumflecken.
+- **Hauptereignis:** Die Scheibe löst sich im Rest des ersten Ticks auf, während die Front losläuft; wo sie den
+  Ursprung verlässt, hebt sich kurz das Wasser. Eine Welle aus einem Seebeben beginnt als sich hebende Wasserkuppel,
+  eine aus einem Meteoriten als Krater im Meer mit hellem Rand. Danach ist das Bild allein das Ankunftsfeld.
 - **Ausbreitung über das Wasser:**
-  - Für jede Wasserkachel wird die Ankunftszeit berechnet, als Distanzfeld vom Auslösepunkt (Dijkstra über Wasser,
-    diagonal √2). Kosten je Kachel: 0,33 Ticks in der Tiefsee (< −0,18), 0,5 auf dem Schelf, 1 im Flachwasser
-    (> −0,05). Höchstens 32 Kacheln Weg.
-  - Energie E = 0,93^Weg. Die Wellenhöhe an der Küste ist H = 0,09 · E (≈ 400 m Spielhöhe, siehe Risiken).
-  - Die Front sind die Kacheln mit Ankunft im laufenden Tick.
-    - Ihre Richtung ist das Gefälle des Ankunftsfelds, auf 8 Richtungen gerundet.
+  - Beim Start wird für jede Wasserkachel die Ankunftszeit berechnet, als Laufzeitfeld vom Auslösepunkt (Fast
+    Marching mit Achsen- und Diagonalschablone über Wasser, in einem Feld von 65 × 65 Kacheln um den Ursprung;
+    Kacheln bis 3 Kacheln um den Ursprung exakt als Kreis). Die Front ist dadurch rund (Abweichung vom Kreis
+    ≤ 1,5 %), biegt sich im Flachwasser zur Küste hin (Brechung) und läuft um Inseln herum in deren Schatten (Beugung).
+  - Geschwindigkeit nach der Flachwasserformel c ~ √Tiefe: 0,33 Ticks je Kachel in der Tiefsee (< −0,18), darüber
+    0,33 · √(0,18 / Tiefe), höchstens 1 Tick je Kachel (ab etwa −0,02). Etwa 0,44 bei −0,1, 0,63 bei −0,05.
+  - Energie E = Stärke · 0,93^Weg (Weg = Länge des Laufwegs in Kacheln, Stärke höchstens 1). Die Wellenhöhe an der
+    Küste ist H = 0,09 · E (≈ 400 m Spielhöhe, siehe Risiken). Die Welle endet, wo E unter 0,93^32 fällt: volle
+    Wellen nach 32 Kacheln Weg, die Welle eines Seebebens (Stärke 0,5–0,75) nach 22–28 Kacheln, nie unter 8.
+  - Die Front ist die Linie, an der die Ankunftszeit die laufende Zeit erreicht; das Bild zeichnet sie stufenlos
+    zwischen zwei Ticks, einen Tick hinter der Simulation. Ein Tick flutet die Küste, die die Welle in seinem
+    Zeitfenster erreicht, mit ihrer genauen Ankunftszeit. Das Ereignis endet 1,5 Ticks nach der letzten Ankunft,
+    sobald alles Wasser abgelaufen ist.
+    - Ihre Richtung ist das Gefälle des Ankunftsfelds (als Winkel; für Sprites auf 8 Richtungen gerundet).
     - Ihre Höhenstufe hängt vom Ort ab: tief, küstennah (Schelf) oder brechend (grenzt an Land).
   - So kommt die Welle aus jeder Richtung und folgt jeder Küstenform, ohne Sonderfälle.
-- **Auflaufen an Land:** Erreicht die Front eine Küstenkachel, läuft die Welle über Land weiter. Das ist eine
-  Breitensuche, die nur über schon geflutete Kacheln geht, ein Schritt je Tick, höchstens 6 Kacheln landeinwärts.
-  - Resthöhe nach k Landschritten: h = H − 0,012 · (k − 1); die erste Landkachel trifft die volle Höhe. Eine Kachel wird geflutet, wenn ihre Höhe unter h liegt.
+- **Auflaufen an Land:** Erreicht die Front eine Küstenkachel, läuft die Welle über Land weiter. Der ganze Lauf wird
+  beim Küstentreffer geplant: kürzeste Zeit über Land (Dijkstra, diagonal √2, 1 Tick je Kachel), nur über Kacheln,
+  die selbst geflutet werden, ab der genauen Ankunftszeit an jeder Küstenkachel, höchstens 6 Landschritte.
+  Kacheln, die ein früherer Lauf derselben Welle plant oder auf denen ein anderes Ereignis liegt, bleiben trocken.
+  - Jede Kachel bekommt Flutzeit (Küstenankunft + Weg − 1), Abflusszeit und Tiefe. Die Simulation flutet sie im
+    Tick dieser Zeit, der Bildschirm zeigt das Wasser pixelweise ab genau dieser Zeit (fließender Rand statt
+    Kachelsprüngen).
+  - Resthöhe nach k Landschritten (k = Weg aufgerundet): h = H − 0,012 · (k − 1); die erste Landkachel trifft die volle Höhe. Eine Kachel wird geflutet, wenn ihre Höhe unter h liegt.
   - Geschätzt aus den Messwerten in Abschnitt 1, im Probe zu prüfen:
     - flache Küsten (Median 0,015): 3–5 Kacheln
     - Küsten der Epoche „Heute“ (0,065): 1–2 Kacheln
     - Steilküsten (> 0,1): keine
-  - Eine geflutete Kachel hat den Zustand Flut (Tiefe = h − Höhe) für 2 Ticks. Dann zieht sich das Wasser in 1–2 Ticks
-    von innen nach außen zurück.
+  - Eine geflutete Kachel hat den Zustand Flut (Tiefe = h − Höhe). Nach der letzten Flutzeit des Laufs steht das
+    Wasser 3 Ticks, dann läuft sein Rand stetig zum Meer zurück, 0,75 Ticks je Kachel, die fernste zuerst. Den
+    Schlamm legt die Simulation einen Tick, bevor der Bildschirm die Kachel trocken zeigt.
+  - Darstellung nach Tiefe: tief (Tiefe ≥ 0,03) an der Küste, normal, flach und trüb (< 0,012) im Inland, im
+    letzten Tick vor dem Abfließen löst sich das Wasser per Dither in schlammige, braune Rückströmung auf. Am vorrückenden Rand ein 2–3 Pixel breiter Schaumsaum,
+    beim Zurückweichen brauner Schaum, danach ein nasser Schimmer, der sich in den Schlamm auflöst (Dither, keine
+    Transparenz).
   - Wirkung beim Fluten:
     - Leben −0,8 · t, mit t = 0,4..1 nach der Tiefe.
     - Pflanzen ohne Gehölz weg, Pflanzendecke × 0,4, Feuchte +0,5.
@@ -398,11 +419,10 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
 
 | Sprite | Größe | Frames | Ebene | Stufe |
 |---|---|---|---|---|
-| Wellenkamm, einfach | 16×8 | 2 | Objekt | 1 |
-| Flutwasser: Wasserrampe, Schaumkante an der Wasserlinie, Randmasken | 64×64 | 2 | Boden-Effekt | 1 |
-| Rückzugs- und Wellenring | prozedural | – | Ringe | 1 |
+| Flutwasser tief, normal, flach und trüb, schlammige Rückströmung: Schaumkante an der Wasserlinie, Randmasken | 4 × 64×64 | 2 | Boden-Effekt | 1 |
+| Welle auf dem Meer: die Meerespixel selbst, um Stufen der Wasserleiter (water0–7, ice2–4, white0) verschoben nach dem Abstand hinter der Front – Sog davor, Flanke, Kamm (heller und breiter bei starker Welle und flachem Wasser, Lichtkante oben links), Schaum, der liegen bleibt und sich auflöst, Wellental, zweiter Kamm; Ausblenden mit der Energie per Dither. Herausgezoomt nur eine dünne Kammlinie | prozedural (fxseawave.ts) | – | Boden-Effekt, unter Flut und Küste | 1 |
+| Rückzug am Ursprung, Wasserkuppel, Krater | prozedural | – | Boden-Effekt | 1 |
 | Treibgut (Objekt) | 8×8 | 3 Varianten | Gelände | 1 |
-| Wellenkamm, 8 Richtungen × 2 Höhen (tief, küstennah) | 16×8 / 16×16 | 4 | Objekt | 2 |
 | brechende Welle an der Küste, 8 Richtungen | 16×24 | 6 | Objekt | 2 |
 
 ### 3.6 Erdbeben

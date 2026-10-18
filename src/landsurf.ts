@@ -3,8 +3,8 @@
  * -----------------------------------------------------------------------------
  * When the compositor has finished a rectangle of tiles, it hands the index
  * buffer here once. Two things are read off it:
- *   - surf: the baked foam line off every coast (ring 1) and the two water
- *     rows beyond it (rings 2 and 3), each pixel with the colour it takes
+ *   - surf: the baked foam line off every coast (ring 1) and the four water
+ *     rows beyond it (rings 2 to 5; the ambient swell uses 1–3), each pixel with the colour it takes
  *     when the swell reaches it, its phase on a smooth field along the coast
  *     and a hash threshold. Coasts of ice and snow — sea ice, glaciers —
  *     have no surf.
@@ -31,9 +31,11 @@ namespace SE {
     readonly surf: Uint32Array;
     /** One bit per art pixel, row-major, set where river water shows; null where no river runs. */
     readonly river: Uint32Array | null;
+    /** Per art pixel, row-major: the palette index composed where the sea shows, 0 elsewhere; null where no sea shows. */
+    readonly sea: Uint8Array | null;
   }
 
-  export const NO_LAND_MOTION: LandMotion = { w: 0, surfAt: new Uint32Array(0), surf: new Uint32Array(0), river: null };
+  export const NO_LAND_MOTION: LandMotion = { w: 0, surfAt: new Uint32Array(0), surf: new Uint32Array(0), river: null, sea: null };
 
   let rings = new Uint8Array(0);
   let atOut = new Uint32Array(0);
@@ -95,11 +97,11 @@ namespace SE {
       iced(o - 2) || iced(o + 2) || iced(o - 2 * w) || iced(o + 2 * w) ||
       iced(o - w - 1) || iced(o - w + 1) || iced(o + w - 1) || iced(o + w + 1);
     const front: number[] = [];
-    // Ring 1 two pixels around the tiles too, so rings 2 and 3 reach their edge.
-    const x0 = Math.max(1, pad - 2);
-    const x1 = Math.min(w - 1, pad + iw + 2);
-    const y0 = Math.max(1, pad - 2);
-    const y1 = Math.min(h - 1, pad + ih + 2);
+    // Ring 1 four pixels around the tiles too, so the outer rings reach their edge.
+    const x0 = Math.max(1, pad - 4);
+    const x1 = Math.min(w - 1, pad + iw + 4);
+    const y0 = Math.max(1, pad - 4);
+    const y1 = Math.min(h - 1, pad + ih + 4);
     for (const base of shores) {
       // The shore pass reaches two pixels past its cell.
       const cx = base % w;
@@ -113,6 +115,14 @@ namespace SE {
           rings[o] = 1;
           front.push(o);
         }
+      }
+    }
+    let sea: Uint8Array | null = null;
+    for (let y = 0; y < ih; y++) {
+      for (let x = 0, o = (pad + y) * w + pad; x < iw; x++, o++) {
+        if (water[o] !== 1) continue;
+        sea = sea ?? new Uint8Array(iw * ih);
+        sea[y * iw + x] = px[o];
       }
     }
     let river: Uint32Array | null = null;
@@ -135,7 +145,7 @@ namespace SE {
         }
       }
     }
-    // Rings 2 and 3: open water next to the ring before, inside the buffer's one-pixel frame.
+    // Rings 2 to 5: open water next to the ring before, inside the buffer's one-pixel frame.
     const grow = (n: number, ring: number): void => {
       const nx = n % w;
       if (nx < 1 || nx >= w - 1 || n < w || n >= w * (h - 1)) return;
@@ -143,7 +153,7 @@ namespace SE {
       rings[n] = ring;
       front.push(n);
     };
-    for (let ring = 2, from = 0; ring <= 3; ring++) {
+    for (let ring = 2, from = 0; ring <= 5; ring++) {
       const to = front.length;
       for (let k = from; k < to; k++) {
         const o = front[k];
@@ -177,6 +187,6 @@ namespace SE {
       atOut[n] = x | (y << 16);
       infoOut[n++] = color | (ring << 8) | (phase << 16) | (threshold << 24);
     }
-    return { w: iw, surfAt: atOut.slice(0, n), surf: infoOut.slice(0, n), river };
+    return { w: iw, surfAt: atOut.slice(0, n), surf: infoOut.slice(0, n), river, sea };
   }
 }

@@ -57,7 +57,6 @@ namespace SE {
   interface Settings {
     relativeDate: boolean;
     pauseOnMilestone: boolean;
-    pauseOnDiscovery: boolean;
     dockCollapsed: boolean;
     lastSlot: number;
     /** The chime when a new step arises. */
@@ -121,8 +120,10 @@ namespace SE {
     private menuBar!: MenuBar;
     private title: TitleScreen | null = null;
     private readonly music: MusicPlayer;
-    private readonly surf = new SurfSound();
+    private readonly surf = new AmbientLoop('assets/audio/ambient/ocean-waves.mp3', SURF_VOLUME);
     private surfTarget = 0;
+    private readonly bubbling = new AmbientLoop('assets/audio/sfx/simmering-water.mp3', BUBBLE_VOLUME);
+    private bubblingTarget = 0;
     private lastSurfCheck = 0;
     private canvas!: HTMLCanvasElement;
     private dock!: HTMLElement;
@@ -152,7 +153,7 @@ namespace SE {
     /* ---- state ---- */
     private speed = 3;
     private lastRunningSpeed = 3;
-    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, pauseOnDiscovery: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
+    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
     private mapShowsInfo = false;
     private selection: ToolSelection = {
       tool: Tool.Examine, altitudeRaise: true, flora: Flora.LandPlants, clearing: false,
@@ -222,7 +223,11 @@ namespace SE {
         }),
       });
       this.notifier.pauseOnMilestone = this.settings.pauseOnMilestone;
-      this.discoveries = new DiscoveryToasts(el<HTMLElement>('toasts'), {
+      // Made here, not in index.html: a cached old page must still boot with a new bundle.
+      const discoveryHost = make('div', 'discoveries');
+      discoveryHost.setAttribute('aria-live', 'polite');
+      document.body.appendChild(discoveryHost);
+      this.discoveries = new DiscoveryToasts(discoveryHost, {
         open: (c, s) => { this.speciesInfo.show(c, s); this.windows.show('species'); },
         openLexicon: () => this.windows.show('lexicon'),
         held: () => this.screenHeld,
@@ -675,7 +680,6 @@ namespace SE {
 
       this.mapView = new MapView(canvas);
       canvas.addEventListener('pointerdown', (e) => {
-        if (this.mapView.globe) return;
         const tile = this.mapView.tileAt(e.clientX, e.clientY);
         if (tile) this.editView.centerOn(tile.x, tile.y);
       });
@@ -727,6 +731,7 @@ namespace SE {
       this.examinePanel = new ExaminePanel(examBody);
       this.examinePanel.onShowInTree = (id) => this.openTree(id);
       this.examinePanel.onShowSpecies = (c, stage) => { this.speciesInfo.show(c, stage); this.windows.show('species'); };
+      this.examinePanel.creatureOn = (world, i) => this.editView.creatureOn(world, i);
 
       // Chronicle
       const chron = this.windows.create({ id: 'chronicle', title: 'Chronik', icon: uiIcon('chronicle'), x: 0.34, y: 0.08, width: 460, height: 560 });
@@ -832,6 +837,15 @@ namespace SE {
       oceanO2.el.appendChild(make('span', 'hud-tag', 'Meer'));
       const co2 = chip(resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor');
       const temp = chip(resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor');
+      // The gas chips open the air composition window.
+      for (const c of [o2, oceanO2, co2]) {
+        c.el.setAttribute('role', 'button');
+        c.el.classList.add('hud-link');
+        c.el.addEventListener('click', () => this.windows.toggle('graph-air'));
+        c.el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.windows.toggle('graph-air'); }
+        });
+      }
 
       const time = make('div', 'hud-time');
       const scale = make('span', 'hud-scale');
@@ -986,11 +1000,6 @@ namespace SE {
           kind: 'toggle', label: 'Entwicklungen und Meilensteine pausieren', icon: uiIcon('bell'),
           on: () => this.settings.pauseOnMilestone,
           toggle: () => { this.settings.pauseOnMilestone = !this.settings.pauseOnMilestone; this.notifier.pauseOnMilestone = this.settings.pauseOnMilestone; this.saveSettings(); },
-        },
-        {
-          kind: 'toggle', label: 'Bei Entdeckung pausieren', icon: uiIcon('pause'),
-          on: () => this.settings.pauseOnDiscovery,
-          toggle: () => { this.settings.pauseOnDiscovery = !this.settings.pauseOnDiscovery; this.saveSettings(); },
         },
         {
           kind: 'toggle', group: true, label: 'Effekte reduzieren (kein Wackeln, keine Blitze)', icon: uiIcon('layer-events'),
@@ -1845,10 +1854,14 @@ namespace SE {
       this.notifier.push(entries, this.world.evo.reported);
     }
 
-    /** Fly the map to the densest population of a sub-species; false if none lives. */
+    /** Fly the map to the creature standing for a sub-species; false if none lives. */
     private jumpToSpecies(c: Life, stage: number): boolean {
-      const i = FaunaDex.findTile(this.world, c, stage);
+      const i = this.editView.pinSpecies(this.world, c, stage);
       if (i < 0) return false;
+      if (!this.editView.layers.life) {
+        this.editView.layers.life = true;
+        this.syncLayerButtons();
+      }
       const x = i % GRID_W;
       const y = Math.floor(i / GRID_W);
       if (this.windows.narrow) { this.windows.hide('species'); this.windows.hide('lexicon'); }
@@ -1856,9 +1869,9 @@ namespace SE {
       return true;
     }
 
-    /** Pause for a discovery notice (an option); resume unless the player opened it. */
+    /** Pause for a discovery notice; resume unless the player opened it. */
     private onDiscovery(shown: boolean, clicked = false): void {
-      if (shown && this.settings.pauseOnDiscovery && this.speed !== 0) {
+      if (shown && this.speed !== 0) {
         this.setSpeed(0, true);
         this.discoveryPaused = true;
       } else if (!shown && this.discoveryPaused) {
@@ -1895,6 +1908,7 @@ namespace SE {
       this.history.reset();
       this.sliderPanels.forEach((p) => p.sync());
       this.accumulator = 0;
+      this.editView.tickPhase = 0;
       this.milestonePaused = false;
       this.examineTile = null;
       this.windows.hide('examine');
@@ -1974,7 +1988,8 @@ namespace SE {
     private setSpeed(i: number, quiet = false): void {
       if (i > 0) this.lastRunningSpeed = i;
       this.speed = i;
-      this.accumulator = 0;
+      // Keep the phase, so a speed change never throws a moving effect back.
+      this.accumulator = this.editView.tickPhase * SPEED_TICK_MS[i];
       if (i !== 0) this.milestonePaused = this.discoveryPaused = false;
       this.syncSpeedButtons();
       if (!quiet) this.notifier.message(i === 0 ? 'Pausiert.' : `Tempo: ${SPEED_NAMES[i]}`);
@@ -2173,6 +2188,9 @@ namespace SE {
           steps++;
         }
         if (this.accumulator > tickMs * MAX_TICKS_PER_FRAME) this.accumulator = 0;
+        // Effects play between two ticks by this; paused, it stays where it was.
+        // A pause from inside a tick (milestone) leaves the accumulator below 0.
+        this.editView.tickPhase = clamp(this.accumulator / tickMs, 0, 0.999);
       } else {
         this.accumulator = 0;
       }
@@ -2190,12 +2208,13 @@ namespace SE {
       if (now - this.lastSurfCheck > 400) {
         this.lastSurfCheck = now;
         this.surfTarget = this.title || !this.settings.ambient ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
+        this.bubblingTarget = this.title || !this.settings.ambient ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
       }
       this.surf.update(this.surfTarget, delta, now);
+      this.bubbling.update(this.bubblingTarget, delta, now);
       if (this.windows.isVisible('map')) {
         if (this.mapView.globe) {
           if (now - this.lastMapRender > 50) {
-            this.mapView.spin += 0.012;
             this.mapView.render(this.world);
             this.lastMapRender = now;
           }
@@ -2233,7 +2252,6 @@ namespace SE {
         const s = JSON.parse(raw) as Partial<Settings>;
         if (typeof s.relativeDate === 'boolean') this.settings.relativeDate = s.relativeDate;
         if (typeof s.pauseOnMilestone === 'boolean') this.settings.pauseOnMilestone = s.pauseOnMilestone;
-        if (typeof s.pauseOnDiscovery === 'boolean') this.settings.pauseOnDiscovery = s.pauseOnDiscovery;
         if (typeof s.sound === 'boolean') this.settings.sound = s.sound;
         if (typeof s.music === 'boolean') this.settings.music = s.music;
         if (typeof s.ambient === 'boolean') this.settings.ambient = s.ambient;
@@ -2353,6 +2371,7 @@ namespace SE {
       this.evolution.pending.length = 0;
       this.milestonePaused = false;
       this.accumulator = 0;
+      this.editView.tickPhase = 0;
       this.examineTile = null;
       this.windows.hide('examine');
       this.sliderPanels.forEach((p) => p.sync());

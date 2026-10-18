@@ -107,6 +107,8 @@ test('a quake at sea raises a weaker wave by its magnitude; the eruption chooses
   const wave = w.hazards.list.find((o) => o.kind === SE.EventKind.TidalWave);
   assert.ok(Math.abs(wave.strength - SE.CHAIN_QUAKE_WAVE * quake.quake.magnitude) < 1e-9, 'strength by magnitude');
   assert.ok(wave.strength < 1, 'weaker than a full wave');
+  const reach = SE.WAVE_PATH_MAX + Math.log(wave.strength) / -Math.log(SE.WAVE_DECAY);
+  assert.ok(wave.wave.path.every((p) => p <= reach + 1e-6), 'and reaches less far');
 
   const s = makeSim(4242, 'today');
   const hz2 = new s.SE.HazardSystem();

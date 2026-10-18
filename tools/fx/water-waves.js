@@ -1,15 +1,14 @@
 /* =============================================================================
- * SimEarth 2.0 — directed tidal-wave crests and the breaking wave
+ * SimEarth 2.0 — the breaking tidal wave
  * -----------------------------------------------------------------------------
- * The low crest out at sea, the steepening crest near the coast and the wave
- * breaking on the shore, each in the 8 travel directions of HAZARD_NX /
- * HAZARD_NY (src/hazards.ts), one block of frames per direction.
+ * The wave breaking on the shore in the 8 travel directions of HAZARD_NX /
+ * HAZARD_NY (src/hazards.ts), one block of frames per direction; the sea
+ * surface itself is drawn per pixel (src/fxseawave.ts, src/fxshore.ts).
  * Every direction is drawn from the same 3D body, never rotated or flipped:
  * the wave is an implicit volume in wave coordinates (u along the travel
  * direction, v along the crest, z up), ray-marched in the map's oblique view
  * (plan x, y and height z show at x, y − z) and lit from the upper left on
  * screen (north-west and above), so every direction gets its light afresh.
- * Loops: foam rolls along the crest by a quarter of its period a frame.
  * Style: docs/ereignisse-2026-10/stil.md · contract: tools/fx/catalog.js.
  * ========================================================================== */
 'use strict';
@@ -82,40 +81,14 @@ function render(w, h, cx, cy, d, zMax, field, paint) {
 const period = (d) => 16 * Math.hypot(...DIRS[d]);
 
 /**
- * How far a crest sinks beyond its own stretch of the front (|v| past 7 px;
- * a diagonal front steps by half a diagonal, 11.3 px, along the crest):
- * neighbouring tiles' crests still overlap and join, but a lone crest ends
- * round instead of running out to the corners of its box as a slab.
+ * How far a breaker sinks beyond the middle of its stretch of shore (|v|
+ * past 3.5 px): it ends round instead of running out to the corners of its
+ * box as a plank, whatever its direction.
  */
-const taper = (v) => Math.max(0, Math.abs(v) - 7) * 0.9;
+const taper = (v) => Math.max(0, Math.abs(v) - 3.5) * 1.1;
 
-/** A swell: gentle back slope `back`, steep front `front`, `a` high, lumpy along the crest; foam on its top share `cap`. */
-function swell(d, f, o) {
-  const p = period(d);
-  return render(o.w, o.h, 8, o.cy, d, o.a * 1.6 + 1, (u, v, z) => {
-    const roll = Math.sin(((v / p) + f / 4) * Math.PI * 2);
-    const top = o.a * (1 + o.lump * roll);
-    const prof = u < 0 ? Math.exp(-((u / o.back) ** 2)) : Math.exp(-((u / o.front) ** 2));
-    return { f: top * prof - o.flat - z - taper(v), kind: prof * (1 + o.lump * roll * 0.5) > o.cap ? 'foam' : 'body' };
-  }, (kind, u, v, z, light, x, y) => {
-    if (kind === 'foam') return foam(light + 0.1);
-    // The trough in front of the face lies in the crest's shadow.
-    if (u > 0 && z < o.flat + 0.6) return BODY[0];
-    // Streaks of foam run down the front face of a steep crest.
-    if (o.streaks && u > 0 && k.hash(Math.round(v * 0.7 + 50), Math.floor(z * 1.5) + f, 401 + d) < o.streaks) return foam(light);
-    return body(light);
-  });
-}
-
-function waveDeep(i) {
-  const d = Math.floor(i / 4);
-  return swell(d, i % 4, { w: 16, h: 8, cy: 5, a: 2, back: 1.8, front: 0.9, lump: 0.25, flat: 0.75, cap: 1.04, streaks: 0 });
-}
-
-function waveCoast(i) {
-  const d = Math.floor(i / 4);
-  return swell(d, i % 4, { w: 16, h: 16, cy: 10, a: 3.7, back: 2, front: 0.9, lump: 0.22, flat: 0.9, cap: 0.9, streaks: 0.1 });
-}
+/** Its ends dissolve: past |v| 2 px ever more pixels stay clear, by hash, so no straight edge is left. */
+const frayed = (v, z, seed) => k.hash(Math.round(v * 2 + 40), Math.round(z * 2), seed) < (Math.abs(v) - 2) / 3.5;
 
 /* ------------------------------------------------------------ breaking -- */
 
@@ -139,12 +112,12 @@ function toLine(u, z, pts) {
  * whitewater runs up ahead (4) and the foam thins out (5).
  */
 const BREAK = [
-  { wall: 4, front: 0.9, lip: [[0, 4.2], [1.2, 4.5]], spray: null, run: 0, fade: 0 },
-  { wall: 4.5, front: 0.8, lip: [[-0.2, 4.7], [1.4, 5.1], [2.5, 4.2]], spray: null, run: 0, fade: 0 },
-  { wall: 3.8, front: 0.8, lip: [[-0.2, 4.1], [1.5, 4.5], [2.7, 3.2], [3, 0.8]], spray: { u: 3, z: 2, r: 1.3, rows: 1 }, run: 2.5, fade: 0 },
-  { wall: 2.4, front: 1.1, lip: null, spray: { u: 3, z: 4, r: 1.8, rows: 2 }, run: 4.5, fade: 0 },
-  { wall: 1.3, front: 1.4, lip: null, spray: { u: 3.8, z: 6.5, r: 1.5, rows: 2 }, run: 6.5, fade: 0.35 },
-  { wall: 0, front: 1.4, lip: null, spray: { u: 4.4, z: 8.5, r: 1.1, rows: 1 }, run: 8, fade: 0.6 },
+  { wall: 2.8, front: 0.9, lip: [[0, 2.9], [1.2, 3.2]], spray: null, run: 0, fade: 0 },
+  { wall: 3.2, front: 0.8, lip: [[-0.2, 3.3], [1.4, 3.6], [2.5, 2.9]], spray: null, run: 0, fade: 0 },
+  { wall: 2.7, front: 0.8, lip: [[-0.2, 2.9], [1.5, 3.2], [2.7, 2.2], [3, 0.6]], spray: { u: 3, z: 1.2, r: 1.2, rows: 1 }, run: 2.5, fade: 0 },
+  { wall: 1.7, front: 1.1, lip: null, spray: { u: 3, z: 2.4, r: 1.6, rows: 2 }, run: 4.5, fade: 0.1 },
+  { wall: 0.9, front: 1.4, lip: null, spray: { u: 3.8, z: 3.9, r: 1.4, rows: 2 }, run: 6.5, fade: 0.4 },
+  { wall: 0, front: 1.4, lip: null, spray: { u: 4.4, z: 5.1, r: 1, rows: 1 }, run: 8, fade: 0.65 },
 ];
 
 function waveBreak(i) {
@@ -152,7 +125,7 @@ function waveBreak(i) {
   const f = i % 6;
   const o = BREAK[f];
   const p = period(d);
-  const t = render(16, 24, 8, 16, d, 22, (u, v, z) => {
+  const t = render(16, 16, 8, 11, d, 14, (u, v, z) => {
     const lump = Math.sin((v / p) * Math.PI * 2 + d);
     let best = { f: -1, kind: 'body' };
     const take = (val, kind) => { if (val > best.f) best = { f: val, kind }; };
@@ -179,20 +152,22 @@ function waveBreak(i) {
     best.f -= taper(v);
     return best;
   }, (kind, u, v, z, light) => {
+    if (frayed(v, z, 461 + f)) return null;
     // The face under the lip stays in its shadow.
     if (kind === 'body') return body(u > 0 ? light - 0.25 : light);
-    if (kind === 'run') return u > o.run - 1.3 ? 'white0' : light > 0.5 ? 'ice4' : 'water7';
-    return foam(light + 0.15);
+    if (kind === 'run') return u > o.run - 1.3 ? (Math.abs(v) < 3 ? 'white0' : 'ice4') : light > 0.5 ? 'ice3' : 'water7';
+    // Soft foam: white in flecks on the lit top only, ice tones elsewhere.
+    return light > 0.8 && k.hash(Math.round(v * 2 + 40), Math.round(z * 2), 471 + f) < 0.55 ? 'white0' : foam(light - 0.1);
   });
   // Foot sprites stand on their last row: a streak of surf there if nothing else reached it.
   let foot = false;
-  for (let x = 0; x < 16; x++) if (t.get(x, 23) !== 0) foot = true;
+  for (let x = 0; x < 16; x++) if (t.get(x, 15) !== 0) foot = true;
   if (!foot) {
     const x = 6 + Math.floor(k.hash(d, f, 451) * 3);
-    t.set(x, 23, P.c('water7'));
-    t.set(x + 1, 23, P.c('ice4'));
+    t.set(x, 15, P.c('water7'));
+    t.set(x + 1, 15, P.c('ice4'));
   }
   return t;
 }
 
-module.exports = { waveDeep, waveCoast, waveBreak, DIRS };
+module.exports = { waveBreak, DIRS };

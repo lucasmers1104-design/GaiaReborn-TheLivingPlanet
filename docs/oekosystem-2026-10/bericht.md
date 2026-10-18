@@ -6,6 +6,8 @@ Erste Bakterien und Archaeen besiedeln das Meer ohne Sauerstoffproduktion. Die C
 
 Gelöstes Eisen verbraucht anfangs viel Sauerstoff. Mit anhaltender Produktion reichert sich Sauerstoff im Wasser und durch Gasaustausch auch in der Luft an. Der erste dauerhafte Anstieg des Luftsauerstoffs hängt deshalb von marinen Produzenten ab; Landpflanzen verstärken die Produktion später. Langfristige Sauerstofferträge stehen im Modell für organischen Kohlenstoff, der der vollständigen Zersetzung entgeht.
 
+Auf der Karte ist dieser Gasaustausch zu sehen: Vom Chronikeintrag „Eisen im Meer aufgebraucht“ bis zur „Großen Sauerstoffkatastrophe“ perlen entlang aller Küsten (Meer neben Land, unabhängig von der Tiefe) Ketten kleiner Blasen auf, mit steigendem Sauerstoff im Meer mehr (`src/oxygenbubbles.ts`). Das Zeitfenster ist kurz: etwa 20–25 Ticks, bei „Mittel“ rund 10 Sekunden. Es ist reine Darstellung; ein einzelner Fleck steht nicht für eine örtliche Sauerstoffoase.
+
 Komplexe Zellen können ab **2 % der heutigen Sauerstoffsättigung im Meer** entwickelt werden. Ihre Tragfähigkeit beginnt oberhalb 1 % und erreicht bei 5 % die volle Stärke. Dies sind Spielwerte, keine nachgewiesenen universellen Grenzen der Eukaryotenentstehung. Für die übrigen Wasseratmer werden die bisherigen Schwellen in die Wassereinheit umgerechnet. Wale und Landtiere beziehen ihre Voraussetzung und ihren Verbrauch weiterhin aus der Luft.
 
 ## Einheiten und Grenzen

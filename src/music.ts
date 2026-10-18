@@ -139,31 +139,36 @@ namespace SE {
   }
 
   /** Loudest the surf ever gets: heard more than listened to. */
-  const SURF_VOLUME = 0.16;
-  /** How quickly the surf follows the view, ms to cover most of a change. */
-  const SURF_EASE_MS = 1500;
+  export const SURF_VOLUME = 0.16;
+  /** Loudest the oxygen bubbling gets (zoomed fully in on a pearling coast): the nearer sound, above the surf. */
+  export const BUBBLE_VOLUME = 0.3;
+  /** How quickly an ambient loop follows the view, ms to cover most of a change. */
+  const AMBIENT_EASE_MS = 1500;
 
   /**
-   * The sea's murmur while coasts are in view, louder the closer the camera.
+   * A looping ambient sound that follows what is in view: the sea's murmur
+   * while coasts are on screen, the bubbling while oxygen pearls off them.
    * Same <audio> route as the music, so it also plays over file://.
    */
-  export class SurfSound {
-    private readonly audio = new Audio('assets/audio/ambient/ocean-waves.mp3');
+  export class AmbientLoop {
+    private readonly audio: HTMLAudioElement;
     private level = 0;
     /** No play() retries before this time: autoplay may still be blocked. */
     private retryAt = 0;
 
-    constructor() {
+    /** `volume`: the loudest it gets, at target 1. */
+    constructor(src: string, private readonly volume: number) {
+      this.audio = new Audio(src);
       this.audio.loop = true;
       this.audio.preload = 'auto';
       this.audio.volume = 0;
       document.addEventListener('visibilitychange', () => { if (document.hidden) this.audio.pause(); });
     }
 
-    /** Every frame: `target` is 0..1 of SURF_VOLUME, already scaled by the player's slider. */
+    /** Every frame: `target` is 0..1 of its volume, already scaled by the player's slider. */
     update(target: number, dt: number, now: number): void {
-      this.level += (target - this.level) * Math.min(1, dt / SURF_EASE_MS);
-      this.audio.volume = clamp(this.level * SURF_VOLUME, 0, 1);
+      this.level += (target - this.level) * Math.min(1, dt / AMBIENT_EASE_MS);
+      this.audio.volume = clamp(this.level * this.volume, 0, 1);
       if (this.level < 0.003) {
         if (!this.audio.paused) this.audio.pause();
       } else if (this.audio.paused && !document.hidden && now >= this.retryAt) {
