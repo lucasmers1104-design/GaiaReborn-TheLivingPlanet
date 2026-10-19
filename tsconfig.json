@@ -282,6 +282,7 @@
     "src/titleplanet.ts",
     "src/title.ts",
     "src/music.ts",
+    "src/rumblebass.ts",
     "src/terraformsound.ts",
     "src/terraformtool.ts",
     "src/intro.ts",

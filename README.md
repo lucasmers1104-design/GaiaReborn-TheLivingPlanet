@@ -4,8 +4,17 @@ Eine Natur- und Evolutions-Sandbox im Browser, als moderner Nachfolger von *SimE
 
 ## Starten
 
-- **Spielen:** `index.html` im Browser öffnen. Es braucht keinen Server und keine Installation. Läuft am Desktop und auf dem Handy, mit Maus oder Touch.
+- **Spielen:** `index.html` im Browser öffnen. Es braucht keinen Server und keine Installation. Läuft am Desktop, mit Maus und Tastatur.
 - **Entwickeln:** `npm run build` baut `simulation.js`, `npm test` führt alle Tests aus. Die Regeln für Mitarbeit stehen in [AGENTS.md](AGENTS.md).
+
+## Neu in Version 0.9.3
+
+### Gaia
+- Gaia schläft, bis sich das erste Leben regt, und wacht dann mit einem Jubel auf. Das Fenster ist kompakter und öffnet sich beim Spielstart von selbst.
+- Die vier Stimmungsbalken sind weg; Gaia nennt ihre Sorgen im Gespräch.
+
+### Klang
+- Neuer Bass-Grollen beim Höhenpinsel; der Klick-Ton schweigt dort.
 
 ## Neu in Version 0.8.0
 

@@ -6,19 +6,15 @@
  * planet, the pixel globe of the title screen turning slowly; on it a face
  * pixelled by hand, one for each of her six moods, and around it what weighs
  * on her: sweat when she is hot, snow when cold, smog when the air is foul.
- * She talks about each of her troubles in turn, worst first, cheers or gasps
- * when her mood changes, dozes off while the game is paused, and she can be
- * poked — up to a point.
- * Below, the four things her mood is made of, so the player can see why.
+ * She sleeps until the first life stirs on her. Awake, she talks about each
+ * of her troubles in turn, worst first, cheers or gasps when her mood changes,
+ * dozes off while the game is paused, and she can be poked — up to a point.
+ * Below, her mood as a word and on a scale.
  * ========================================================================== */
 
 namespace SE {
-  const FACTORS: readonly { key: 'climate' | 'life' | 'diversity' | 'clean'; label: string; icon: string }[] = [
-    { key: 'climate', label: 'Klima', icon: 'temperature' },
-    { key: 'life', label: 'Belebtheit', icon: 'biomass' },
-    { key: 'diversity', label: 'Vielfalt', icon: 'diversity' },
-    { key: 'clean', label: 'Reine Luft', icon: 'co2' },
-  ];
+  /** The four things her mood is made of (WorldState.gaiaFactors), in the order she mentions ties. */
+  const FACTORS = ['climate', 'life', 'diversity', 'clean'] as const;
 
   /** Her six moods, worst first; `moodLevel` picks one. */
   const LABELS = ['Entsetzt', 'Besorgt', 'Unruhig', 'Ruhig', 'Zufrieden', 'Glückselig'];
@@ -40,6 +36,9 @@ namespace SE {
     pokedSad: ['Autsch! Hilf mir lieber.', 'Lass das. Ich hab gerade andere Sorgen.', 'Nicht jetzt …'],
     annoyed: ['Jetzt reicht’s aber!', 'Ich bin ein Planet, kein Knopf!'],
     asleep: ['Zzz …', 'Nur noch fünf Minuten …'],
+    dormant: ['Zzz …', 'Zzz … weckt mich, wenn sich das erste Leben regt …'],
+    pokedDormant: ['Mmh … noch nichts los hier …', 'Zzz … erst, wenn was lebt …'],
+    woke: ['Oh! Da regt sich was!', 'Huch – Leben? Hallo, ihr Kleinen!'],
   };
   const MOOD_LINES = ['calm', 'calm', 'calm', 'calm', 'content', 'blissful'];
 
@@ -169,7 +168,6 @@ namespace SE {
     private readonly moodLabel: HTMLElement;
     private readonly moodValue: HTMLElement;
     private readonly moodMark: HTMLElement;
-    private readonly rows = new Map<string, { li: HTMLElement; fill: HTMLElement; text: HTMLElement }>();
     private pointer = { x: 0.5, y: 0.5 };
     private sig = '';
     private frame = -1;
@@ -179,6 +177,10 @@ namespace SE {
     private reactUp = false;
     private pokedAt = -Infinity;
     private pokes = 0;
+    /** No life on her yet: she sleeps until it comes. */
+    private lifeless = false;
+    /** The last reaction was her waking to the first life. */
+    private woke = false;
     /** When the game was paused; −1 while it runs. */
     private pausedAt = -1;
     /** Which of a few lines a poke or a reaction gets. */
@@ -219,18 +221,7 @@ namespace SE {
       this.moodMark = make('span', 'gaia-mood-mark');
       bar.appendChild(this.moodMark);
       head.append(this.moodLabel, this.moodValue, bar);
-      const list = make('ul', 'gaia-factors');
-      for (const f of FACTORS) {
-        const li = make('li', 'gaia-factor');
-        const meter = make('span', 'gaia-meter');
-        const fill = make('span');
-        meter.appendChild(fill);
-        const text = make('span', 'gaia-factor-text');
-        li.append(img(resIcon(f.icon), 'ico'), make('span', 'gaia-factor-label', f.label), text, meter);
-        list.appendChild(li);
-        this.rows.set(f.key, { li, fill, text });
-      }
-      host.append(this.stage, this.say, head, list);
+      host.append(this.stage, this.say, head);
       this.canvas.addEventListener('pointerdown', () => {
         const now = performance.now();
         this.pokes = now - this.pokedAt < POKE_CHAIN_MS ? this.pokes + 1 : 1;
@@ -254,22 +245,38 @@ namespace SE {
       const mood = world.gaiaMood;
       if (!paused) this.pausedAt = -1;
       else if (this.pausedAt < 0) this.pausedAt = now;
-      // She keeps her mood until it is clearly past a border, so she does not flicker on one; a change she reacts to.
+      // The first life wakes her, with a cheer.
+      const lifeless = world.lifeCover <= 0;
+      if (this.lifeless && !lifeless && this.level >= 0) {
+        this.reactUp = true;
+        this.reactAt = now;
+        this.woke = true;
+        this.pick = Math.floor(Math.random() * 1000);
+      }
+      this.lifeless = lifeless;
+      // She keeps her mood until it is clearly past a border, so she does not flicker on one; a change she reacts to,
+      // unless she sleeps through it.
       if (this.level < 0) this.level = moodLevel(mood);
       else if (this.level < moodLevel(mood - 0.015) || this.level > moodLevel(mood + 0.015)) {
         const next = moodLevel(mood);
-        this.reactUp = next > this.level;
-        this.reactAt = now;
-        this.pick = Math.floor(Math.random() * 1000);
+        if (!lifeless) {
+          this.reactUp = next > this.level;
+          this.reactAt = now;
+          this.woke = false;
+          this.pick = Math.floor(Math.random() * 1000);
+        }
         this.level = next;
       }
       const level = this.level;
       const f = world.gaiaFactors();
       const hot = world.globalTemp > 15;
-      // A paused world sends her to sleep, unless she is too worried; a poke or a change of mood wakes her.
-      const asleep = this.pausedAt >= 0 && level >= 2 && now - Math.max(this.pausedAt, this.pokedAt, this.reactAt) > SLEEP_MS;
+      // A lifeless world keeps her asleep, a poke only stirs her; a paused one sends her to sleep unless she is
+      // too worried, and a poke or a change of mood wakes her.
+      const asleep = lifeless
+        ? now - this.pokedAt > POKE_MS
+        : this.pausedAt >= 0 && level >= 2 && now - Math.max(this.pausedAt, this.pokedAt, this.reactAt) > SLEEP_MS;
       // What troubles her, worst first; she talks about one after the other.
-      const troubles = FACTORS.filter((d) => f[d.key] < 0.5).sort((a, b) => f[a.key] - f[b.key]).map((d) => d.key);
+      const troubles = FACTORS.filter((k) => f[k] < 0.5).sort((a, b) => f[a] - f[b]);
       const turn = Math.floor(now / LINE_MS);
       const about = asleep || !troubles.length ? '' : troubles[turn % troubles.length];
       const frame = Math.floor(now / FRAME_MS);
@@ -277,33 +284,16 @@ namespace SE {
         this.frame = frame;
         this.draw(world, now, level, f, hot, still, asleep);
       }
-      const topic = asleep ? 'asleep' : about === 'climate' ? (hot ? 'hot' : 'cold') : about;
+      const topic = asleep ? (lifeless ? 'dormant' : 'asleep') : about === 'climate' ? (hot ? 'hot' : 'cold') : about;
       this.speak(topic, level, now, Math.floor(turn / Math.max(1, troubles.length)));
 
-      const sig = `${Math.round(mood * 100)}|${level}|${[f.climate, f.life, f.diversity, f.clean].map((v) => Math.round(v * 50)).join(',')}|` +
-        `${fmt.one(world.globalTemp)}|${fmt.int(world.co2)}|${f.groups}|${about}`;
+      const sig = `${Math.round(mood * 100)}|${level}`;
       if (sig === this.sig) return;
       this.sig = sig;
       this.moodLabel.textContent = LABELS[level];
       this.canvas.setAttribute('aria-label', `Gaia: ${LABELS[level]}`);
       this.moodValue.textContent = `${Math.round(mood * 100)} %`;
       this.moodMark.style.left = `${Math.round(mood * 1000) / 10}%`;
-      const texts: Record<string, string> = {
-        climate: `${fmt.one(world.globalTemp)} °C`,
-        life: `${fmt.pct(world.lifeCover)} belebt`,
-        diversity: `${f.groups} ${f.groups === 1 ? 'Gruppe' : 'Gruppen'}`,
-        clean: `${fmt.int(world.co2)} ppm CO₂`,
-      };
-      for (const def of FACTORS) {
-        const r = this.rows.get(def.key);
-        if (!r) continue;
-        const v = f[def.key];
-        r.fill.style.width = `${Math.round(v * 100)}%`;
-        r.fill.style.background = v > 0.66 ? 'var(--ok)' : v > 0.33 ? 'var(--amber)' : 'var(--warn)';
-        r.text.textContent = texts[def.key];
-        // The row she is talking about.
-        r.li.classList.toggle('is-trouble', def.key === about);
-      }
     }
 
     /** `topic`: her sleep or the trouble she is on, '' for none; `turn` picks which of its lines. */
@@ -311,10 +301,10 @@ namespace SE {
       // Her topic or her mood; a poke or a change of mood for a moment instead.
       let key = topic || MOOD_LINES[level];
       if (now - this.pokedAt < SAY_MS) {
-        key = this.pokes >= POKES_TOO_MANY ? 'annoyed' : level >= 3 ? 'poked' : 'pokedSad';
+        key = this.pokes >= POKES_TOO_MANY ? 'annoyed' : this.lifeless ? 'pokedDormant' : level >= 3 ? 'poked' : 'pokedSad';
         turn = this.pick;
       } else if (now - this.reactAt < SAY_MS) {
-        key = this.reactUp ? 'better' : 'worse';
+        key = this.woke ? 'woke' : this.reactUp ? 'better' : 'worse';
         turn = this.pick;
       }
       const pool = LINES[key];

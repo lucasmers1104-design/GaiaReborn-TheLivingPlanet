@@ -208,8 +208,12 @@ namespace SE {
       this.music = new MusicPlayer(this.settings.music, this.settings.musicVolume);
       SFX.volume = () => (this.settings.sound ? this.settings.soundVolume : 0);
       // Every press anywhere, UI or map: capture phase, so stopPropagation can't swallow it.
-      // Not under the intro: its music has the stage.
-      document.addEventListener('pointerdown', (e) => { if (e.button === 0 && !activeIntro) playClick(); }, { capture: true });
+      // Not under the intro: its music has the stage. Not for the altitude brush on the map: it has its own sound.
+      document.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || activeIntro) return;
+        if (e.target === this.canvas && this.selection.tool === Tool.SetAltitude) return;
+        playClick();
+      }, { capture: true });
 
       this.windows = new WindowManager(this.stage);
       this.notifier = new Notifier(el<HTMLElement>('toasts'), el<HTMLElement>('milestones'), {
@@ -700,7 +704,7 @@ namespace SE {
 
     private buildInfoWindows(): void {
       // Gaia
-      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 424, width: 300, height: 530 });
+      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 456, width: 300, height: 396 });
       const gaiaWrap = make('div', 'gaia-layout');
       gaia.body.appendChild(gaiaWrap);
       this.gaiaPanel = new GaiaPanel(gaiaWrap);
@@ -2520,7 +2524,10 @@ namespace SE {
 
     private enterGame(speed: number): void {
       this.setSpeed(speed, true);
-      if (!this.windows.narrow) this.windows.show('map', false);
+      if (!this.windows.narrow) {
+        this.windows.show('map', false);
+        this.windows.show('gaia', false);
+      }
       this.canvas.focus({ preventScroll: true });
     }
 

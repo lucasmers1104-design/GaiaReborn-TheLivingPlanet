@@ -24,6 +24,8 @@ namespace SE {
   const TF_GLIDE = 0.07;
   const TF_ATTACK = 0.05;
   const TF_RELEASE = 0.09;
+  /** Time constant of the bass rumble's fade-out, s: down to -43 dB in 0.5 s, stopped silent after 1 s. */
+  const TF_RUMBLE_FADE = 0.1;
   /** Long strokes settle this much quieter (over TF_FATIGUE_S after the first 1.5 s). */
   const TF_FATIGUE = 0.4;
   const TF_FATIGUE_S = 8;
@@ -101,8 +103,33 @@ namespace SE {
 
   let tfRealtime: AudioContext | null = null;
 
+  /**
+   * The bass rumble under every stroke (rumble-bass.mp3, embedded: no fetch()
+   * over file://), decoded once. Played as a buffer, not an <audio> element:
+   * an element's volume steps crackle when faded. Loop points skip the MP3's padding.
+   */
+  let tfRumbleBuf: AudioBuffer | null = null;
+  let tfRumbleLoop = { start: 0, end: 0 };
+  let tfRumbleLoading = false;
+  function tfRumbleLoad(ac: BaseAudioContext): void {
+    if (tfRumbleLoading) return;
+    tfRumbleLoading = true;
+    const bytes = Uint8Array.from(atob(RUMBLE_BASS_MP3), (c) => c.charCodeAt(0));
+    ac.decodeAudioData(bytes.buffer).then((b) => {
+      const d = b.getChannelData(0);
+      let i0 = 0;
+      let i1 = d.length - 1;
+      while (i0 < i1 && Math.abs(d[i0]) < 1e-4) i0++;
+      while (i1 > i0 && Math.abs(d[i1]) < 1e-4) i1--;
+      tfRumbleLoop = { start: i0 / b.sampleRate, end: (i1 + 1) / b.sampleRate };
+      tfRumbleBuf = b;
+    }, () => undefined);
+  }
+
   export class TerraformSound {
-    private rumble: HTMLAudioElement | null = null;
+    /** Only the game's own sound plays the rumble, not tests and recordings. */
+    private readonly withRumble: boolean;
+    private rumble: { src: AudioBufferSourceNode; gain: GainNode } | null = null;
     private ac: BaseAudioContext | null;
     private bus: GainNode | null = null;
     private voice: TfVoice | null = null;
@@ -126,12 +153,8 @@ namespace SE {
      */
     constructor(ac?: BaseAudioContext, private readonly dest?: AudioNode) {
       this.ac = ac ?? null;
-      if (!ac && typeof document !== 'undefined') {
-        // Media elements preload local MP3s over file:// without fetch/decodeAudioData.
-        this.rumble = new Audio('assets/audio/sfx/rumble-bass.mp3');
-        this.rumble.preload = 'auto';
-        this.rumble.loop = true;
-        this.rumble.volume = 0;
+      this.withRumble = !ac && typeof document !== 'undefined';
+      if (this.withRumble) {
         document.addEventListener('visibilitychange', () => { if (document.hidden) this.stop(); });
         window.addEventListener('blur', () => this.stop());
       }
@@ -139,16 +162,11 @@ namespace SE {
 
     /** Pointer down with the brush. */
     start(sign: 1 | -1): void {
-      this.rumble?.pause();
       if (this.voice) this.release();
       if (SFX.volume() <= 0 || tfHidden()) return;
-      if (this.rumble) {
-        this.rumble.volume = tfClamp01(TF_RUMBLE_LEVEL * SFX.volume());
-        this.rumble.currentTime = 0;
-        this.rumble.play().catch(() => undefined);
-      }
       const ac = this.context();
       if (!ac) return;
+      if (this.withRumble) tfRumbleLoad(ac);
       try {
         this.voice = this.build(ac, sign);
         this.heardStage = -1;
@@ -164,11 +182,13 @@ namespace SE {
 
     /** Every dab: `dab` as terraformDab returned it, `work` 0..1 how hard the brush pushes this frame. */
     update(dab: TerraformDab, work: number): void {
-      if (this.rumble) this.rumble.volume = tfHidden() ? 0 : tfClamp01(TF_RUMBLE_LEVEL * SFX.volume());
       const v = this.voice;
       const ac = this.ac;
       if (!v || !ac) return;
       const t = ac.currentTime;
+      // Started here, not in start(): the first stroke's decode may still be running.
+      if (this.withRumble && !this.rumble && tfRumbleBuf) this.rumble = this.startRumble(ac, tfRumbleBuf, t);
+      this.rumble?.gain.gain.setTargetAtTime(tfHidden() ? 0 : TF_RUMBLE_LEVEL * SFX.volume(), t, TF_ATTACK);
       const dt = Math.min(0.1, Math.max(0, t - v.last));
       v.last = t;
       this.setBus(t);
@@ -217,8 +237,22 @@ namespace SE {
 
     /** Pointer up, or the tool changed. */
     stop(): void {
-      this.rumble?.pause();
       this.release();
+    }
+
+    /** The rumble loop, fading in from silence; update() sets its level. */
+    private startRumble(ac: BaseAudioContext, buffer: AudioBuffer, t: number): { src: AudioBufferSourceNode; gain: GainNode } {
+      const gain = ac.createGain();
+      gain.gain.value = 0;
+      gain.connect(this.dest ?? ac.destination);
+      const src = ac.createBufferSource();
+      src.buffer = buffer;
+      src.loop = true;
+      src.loopStart = tfRumbleLoop.start;
+      src.loopEnd = tfRumbleLoop.end;
+      src.connect(gain);
+      src.start(t, tfRumbleLoop.start);
+      return { src, gain };
     }
 
     /**
@@ -286,9 +320,17 @@ namespace SE {
     private release(): void {
       const v = this.voice;
       const ac = this.ac;
+      const r = this.rumble;
       this.voice = null;
+      this.rumble = null;
       if (!v || !ac) return;
       const t = ac.currentTime;
+      if (r) {
+        // A smooth exponential glide to silence, stopped only once inaudible: no click.
+        r.gain.gain.setTargetAtTime(0, t, TF_RUMBLE_FADE);
+        r.src.stop(t + TF_RUMBLE_FADE * 10);
+        r.src.onended = () => r.gain.disconnect();
+      }
       v.out.gain.setTargetAtTime(0, t, TF_RELEASE);
       for (const s of v.sources) s.stop(t + TF_RELEASE * 10);
       v.sources[0].onended = () => v.out.disconnect();

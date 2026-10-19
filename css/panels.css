@@ -100,7 +100,7 @@
 /* Everything fits, nothing scrolls: the stage gives up room and Gaia shrinks with it,
    down to the window's least height, below which her face would no longer fit her. */
 .win-gaia .win-body { overflow: hidden; user-select: none; }
-.win.win-gaia { min-height: 496px; }
+.win.win-gaia { min-height: 362px; }
 .gaia-layout { display: flex; flex-direction: column; gap: 8px; height: 100%; }
 /* The stage and its canvas lay themselves out in src/gaia.ts. */
 .gaia-face { cursor: pointer; }
@@ -151,22 +151,6 @@
   background: #f6f1df;
   box-shadow: 0 0 0 2px var(--ink-dark);
   transition: left 600ms steps(6);
-}
-.gaia-factors { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.gaia-factor { display: grid; grid-template-columns: 20px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 3px; align-items: center; font-size: 12.5px; }
-.gaia-factor .ico { grid-row: 1 / 3; width: 20px; height: 20px; }
-.gaia-factor-label { font-weight: 650; }
-/* The row she is talking about. */
-.gaia-factor.is-trouble .gaia-factor-label { color: var(--warn); }
-.gaia-factor-text { color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.gaia-meter { position: relative; grid-column: 2 / 4; height: 6px; background: var(--ink-dark); overflow: hidden; }
-.gaia-meter span { display: block; height: 100%; transition: width 600ms steps(6); }
-/* Ten cells. */
-.gaia-meter::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 2px), var(--ink-dark) calc(10% - 2px) 10%);
 }
 
 /* ---- History ---- */
