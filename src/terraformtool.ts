@@ -336,7 +336,7 @@ namespace SE {
     /** "Hügel · 1.240 m" in a dark pixel box beside the ring; it pops when the stage changes under a stroke. */
     private drawLabel(ctx: CanvasRenderingContext2D, cam: LandCamera, x: number, y: number, stage: number, elevation: number,
       now: number): void {
-      const meters = Math.round((elevation * ELEVATION_KM * 1000) / 10) * 10;
+      const meters = Math.round(elevationMeters(elevation) / 10) * 10;
       const text = `${TERRAFORM_STAGES[stage].name} · ${fmt.int(meters).replace('-', '−')} m`;
       const pop = Math.max(0, 1 - (now - this.popAt) / POP_MS);
       const scale = 1 + 0.3 * pop * pop;

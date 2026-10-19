@@ -263,32 +263,36 @@ test('a hurricane weakens over land and dies; its wet strip dries and the hazard
   let wet = 0;
   let surge = 0;
   const strength = [];
+  const thrown = new Set();
   run(SE, w, hz, 60, () => {
     strength.push(h.storm.strength);
     for (let i = 0; i < SE.TILE_COUNT; i++) {
       if (w.hazards.tile[i] === SE.HazardTile.Wet) wet++;
       if (w.hazards.tile[i] === SE.HazardTile.Flood) surge++;
+      if (w.hazards.scar[i] === SE.ScarKind.Windthrow) thrown.add(i);
     }
   });
   assert.equal(h.done, true, 'the hazard ended');
   assert.equal(h.storm.moving, false);
-  assert.ok(h.storm.path.length < 15, `died ${h.storm.path.length - 1} ticks in, ${strength.map((v) => v.toFixed(2)).join(' ')}`);
+  // It crosses a good stretch of land before it rains itself out, but dies on it.
+  assert.ok(h.storm.path.length > 10 && h.storm.path.length < 30, `died ${h.storm.path.length - 1} ticks in, ${strength.map((v) => v.toFixed(2)).join(' ')}`);
   for (let k = 1; k < strength.length && strength[k] > 0; k++) {
     const x = h.storm.path[k + 1] % SE.GRID_W;
     if (x < 92) assert.ok(strength[k] < strength[k - 1], 'weaker over land');
   }
   assert.ok(wet > 0, 'it soaked its strip');
   assert.ok(surge > 0, 'landfall at strength 3 pushed a surge onto the low coast');
-  let windthrow = 0;
   for (let i = 0; i < SE.TILE_COUNT; i++) {
     assert.notEqual(w.hazards.tile[i], SE.HazardTile.Wet, 'all dry again');
     assert.notEqual(w.hazards.tile[i], SE.HazardTile.Flood, 'the surge has run off');
-    if (w.hazards.scar[i] === SE.ScarKind.Windthrow) {
-      windthrow++;
-      assert.ok(Math.abs(Math.floor(i / SE.GRID_W) - 60) <= 4, 'windthrow only along the track');
-    }
   }
-  assert.ok(windthrow > 0, 'forest thrown');
+  // Counted while it ran: windthrow heals 10-16 ticks later, before a long storm is over. The track drifts poleward.
+  const rows = h.storm.path.map((i) => Math.floor(i / SE.GRID_W));
+  for (const i of thrown) {
+    const y = Math.floor(i / SE.GRID_W);
+    assert.ok(y >= Math.min(...rows) - 1 && y <= Math.max(...rows) + 1, 'windthrow only along the track');
+  }
+  assert.ok(thrown.size > 0, 'forest thrown');
 });
 
 test('from 8 directions the wave runs head-on into the facing coast and floods only below its remaining height', () => {
@@ -361,10 +365,12 @@ function stormWithTornadoes(SE, w) {
   const hz = new SE.HazardSystem();
   const h = hz.start(w, SE.EventKind.Hurricane, 97, 60, 'player');
   const paths = new Map();
+  const thrown = new Set();
   run(SE, w, hz, 60, () => {
     for (const t of h.storm.tornadoes) paths.set(t.path[0], t.path.slice());
+    for (let i = 0; i < SE.TILE_COUNT; i++) if (w.hazards.scar[i] === SE.ScarKind.Windthrow) thrown.add(i);
   });
-  return { h, paths: [...paths.values()] };
+  return { h, paths: [...paths.values()], thrown };
 }
 
 test('a strong landfall spins off one or two tornadoes; they run straight inland and stay within their reach', () => {
@@ -372,7 +378,7 @@ test('a strong landfall spins off one or two tornadoes; they run straight inland
   const { SE, world: w } = s;
   // Landscape level 3: too low for the hurricane's own windthrow, so every fallen tree is a tornado's.
   landfall(SE, w, 3);
-  const { h, paths } = stormWithTornadoes(SE, w);
+  const { h, paths, thrown } = stormWithTornadoes(SE, w);
   assert.equal(h.done, true, 'the hazard ended');
   assert.equal(h.storm.tornadoes.length, 0, 'every funnel has lifted');
   assert.ok(paths.length >= 1 && paths.length <= 2, `${paths.length} tornadoes`);
@@ -399,13 +405,9 @@ test('a strong landfall spins off one or two tornadoes; they run straight inland
       step = d;
     });
   }
-  let thrown = 0;
-  for (let i = 0; i < SE.TILE_COUNT; i++) {
-    if (w.hazards.scar[i] !== SE.ScarKind.Windthrow) continue;
-    thrown++;
-    assert.ok(on.has(i), 'windthrow only on a tornado path');
-  }
-  assert.ok(thrown >= 2, `${thrown} tiles of trees thrown`);
+  // Counted while the storm ran: windthrow heals 10-16 ticks later, before a long storm is over.
+  for (const i of thrown) assert.ok(on.has(i), 'windthrow only on a tornado path');
+  assert.ok(thrown.size >= 2, `${thrown.size} tiles of trees thrown`);
   w.tech.fill(0);
   w.cityPop.fill(0);
 });
@@ -509,7 +511,7 @@ test('on screen the wave is made of the sea: a round crest on its arrival line; 
   const fakeCtx = () => ({ createImageData: (cw, ch) => ({ data: new Uint8ClampedArray(cw * ch * 4) }), putImageData() {} });
   globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: fakeCtx }) };
   const m = SE.TERRAIN_MANIFEST;
-  const art = { manifest: m, water: m.ramps.water, rgba: new Uint32Array(256) };
+  const art = { manifest: m, water: m.ramps.water, waterWarm: m.ramps.waterWarm, rgba: new Uint32Array(256) };
   const sea = new Uint8Array((SE.LAND_CHUNK * 16) ** 2).fill(m.ramps.water[2]);
   const land = { art, ready: true, motion: () => ({ sea }) };
   const cam = { scrollX: CX - 12, scrollY: CY - 8, tilePx: 32, dpr: 1 };
@@ -569,7 +571,9 @@ test('on screen tornadoes stand on their paths', (t) => {
     hz.step(w);
     w.ticks++;
     now += 400;
-    for (const d of build(show, 88, 60, now).objects) {
+    // The funnel is drawn on the top layer, above the cloud's bands (fxstorm.ts).
+    const scene = build(show, 88, 60, now);
+    for (const d of [...scene.objects, ...scene.tops]) {
       if (d.id !== 'tornado') continue;
       seen++;
       const near = storm.storm.tornadoes.some((tw) => tw.path.some((i) => Math.abs((i % SE.GRID_W) * 16 + 8 - d.x) <= 16 && Math.abs(Math.floor(i / SE.GRID_W) * 16 + 15 - d.y) <= 16));

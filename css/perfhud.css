@@ -1,0 +1,18 @@
+/* Performance display (F3, src/perfhud.ts): top left, never in the way of the mouse. */
+.perf-hud {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 1000;
+  padding: 6px 8px;
+  background: var(--glass-strong);
+  border: 2px solid var(--glass-border);
+  color: var(--ink);
+  font: 12px/1.35 ui-monospace, Consolas, monospace;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.perf-hud[hidden] {
+  display: none;
+}

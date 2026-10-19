@@ -2,12 +2,10 @@
 
 namespace SE {
   const DENSITY_NAMES: readonly (readonly string[])[] = [[], [], ['licht', 'dicht'], ['spärlich', 'mittel', 'dicht']];
-  /** Hill country begins at about 500 m; mountains at ALPINE_MIN_ELEVATION. */
-  const UPLAND_ELEVATION = 0.11;
 
   /** "Höhe 2.340 m" or "Tiefe 1.200 m": a tile's mean height, to 10 m. */
   export function altitudeLabel(world: WorldState, i: number): string {
-    const m = Math.round((world.elevation[i] * ELEVATION_KM * 1000) / 10) * 10;
+    const m = Math.round(elevationMeters(world.elevation[i]) / 10) * 10;
     return m < 0 ? `Tiefe ${fmt.int(-m)} m` : `Höhe ${fmt.int(m)} m`;
   }
 
@@ -29,7 +27,6 @@ namespace SE {
   /** "Wiese (dicht) auf Erde": a land tile's landscape as the Examine window names it. */
   export function landscapeLabel(world: WorldState, i: number): string {
     if (world.isWater(i)) return BIOME_NAMES[world.biome[i]];
-    if (isBeach(world, i)) return 'Sandstrand';
     const ls = world.landscape[i] as Landscape;
     const dens = DENSITY_NAMES[LANDSCAPE_DENSITIES[ls]]?.[world.landscapeDensity[i]];
     const name = LANDSCAPE_NAMES[ls] + (dens ? ` (${dens})` : '');

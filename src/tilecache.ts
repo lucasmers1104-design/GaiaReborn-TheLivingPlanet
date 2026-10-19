@@ -70,13 +70,13 @@ namespace SE {
       return tile;
     }
 
-    /** Open water at a depth step (see depthStep) with its ripple. */
-    sea(depth: number, coast: boolean, variant: number): HTMLCanvasElement {
-      const k = (depth * 2 + (coast ? 1 : 0)) * 4 + variant;
+    /** Open water, coastal sea or open ocean in the main map's flat colours, with its ripple. */
+    sea(coast: boolean, variant: number): HTMLCanvasElement {
+      const k = (coast ? 1 : 0) * 4 + variant;
       let tile = this.seas[k];
       if (!tile) {
         const { canvas, ctx } = blank(8 * SCALE, 8 * SCALE);
-        ctx.fillStyle = depthStyleAt(depth);
+        ctx.fillStyle = rgbCss(BIOME_COLORS[coast ? Biome.Coast : Biome.Ocean]);
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.globalAlpha = coast ? RIPPLE_ALPHA.coast : RIPPLE_ALPHA.ocean;
         ctx.drawImage(drawPixelArt(GROUND_VARIANTS[coast ? Biome.Coast : Biome.Ocean][variant], SCALE), 0, 0);

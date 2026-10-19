@@ -28,6 +28,11 @@ namespace SE {
     host.appendChild(box);
   }
 
+  /** "−3.500 m": an elevation as a legend mark, to 10 m. */
+  function metersLabel(elevation: number): string {
+    return `${fmt.int(Math.round(elevationMeters(elevation) / 10) * 10).replace('-', '−')} m`;
+  }
+
   export function renderMapLegend(host: HTMLElement, world: WorldState, mode: MapMode, values: boolean): void {
     host.innerHTML = '';
     if (values) {
@@ -47,9 +52,15 @@ namespace SE {
     }
     switch (mode) {
       case MapMode.Terrain:
+        strip(host, -1, 1, (v) => sampleRamp(v < 0 ? DEPTH_RAMP : ELEV_RAMP, v), [-1, 0, 1].map(metersLabel));
+        swatch(host, 'Flüsse', RIVER_MAP_COLOR);
+        break;
       case MapMode.Oceans:
-        strip(host, -1, 1, (v) => sampleRamp(v < 0 ? DEPTH_RAMP : ELEV_RAMP, v), ['Tiefsee', 'Küste', 'Gipfel']);
-        swatch(host, 'Flüsse', [70, 150, 235]);
+        // Open sea and coastal sea get half the strip each, so the middle label sits on the shelf edge.
+        strip(host, 0, 1, (v) => sampleRamp(DEPTH_RAMP, v < 0.5 ? lerp(-1, COAST_DEPTH, v * 2) : lerp(COAST_DEPTH, 0, v * 2 - 1)),
+          [-1, COAST_DEPTH, 0].map(metersLabel));
+        swatch(host, 'Land', SEAFLOOR_LAND_COLOR);
+        swatch(host, 'Flüsse', RIVER_MAP_COLOR);
         break;
       case MapMode.Biomes:
         for (let b = 0; b < BIOME_COUNT; b++) if (world.biomeCounts[b] > 0) swatch(host, BIOME_NAMES[b], BIOME_COLORS[b]);

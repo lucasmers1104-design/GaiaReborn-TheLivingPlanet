@@ -44,6 +44,19 @@ const RAMPS = {
   violet:   ['#9a6aa8', '#c49ad0'],
   // --- reserved ---
   mask:     ['#ffffff'],
+  // --- appended after the mask, so every index above keeps its place ---
+  // Lagoon turquoise over reefs (src/reefs.ts), dark to light.
+  waterWarm: ['#1f9fb0', '#2fb8bf', '#49cfc8', '#7fe0d6'],
+  // Corals and their sand seen through a lagoon, mixed into its turquoise
+  // (waterWarm1): corals 55 % in lightness, their chroma down to 55 % and
+  // their hue 12 % towards it (OKLCH) — a stronger hue pull turns ochre into
+  // olive, violet into blue, yellow into lime; sand half into the lightest
+  // turquoise. Rugose brown, stony violet, rugose ochre, stony pink, stony
+  // orange, rugose light ochre, stony yellow, sand, sand light.
+  reefUnder: ['#7a6c5d', '#9d7bbd', '#a18c67', '#c58cb1', '#c89963', '#baaa76', '#bebd7a', '#9fd9c2', '#bfe8d2'],
+  // The fade over the first open-ocean tile beside coastal sea (src/landwater.ts):
+  // water2 towards water4 in sixths of 65 %, so the shelf edge keeps a step.
+  shelf: ['#1b548d', '#1d5b92', '#206196', '#22679b', '#256da0', '#2874a5'],
 };
 
 function hexToRgba(hex) {

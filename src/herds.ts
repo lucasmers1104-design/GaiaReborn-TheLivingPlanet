@@ -219,7 +219,9 @@ namespace SE {
         const m = ms[k];
         if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || (!m.pinned && this.crowded(k, cx, cy, gw, gap))) continue;
         grid[cy * gw + cx] = k + 1;
-        const pic = tiles.life(m.c, m.stage, animalSpecialist(regions, world, m.tile, m.c, m.stage), m.flip);
+        // Corals only in warm water: elsewhere the class shows its highest form that builds no reef.
+        const stage = reefShownStage(world, m.tile, m.c, m.stage);
+        const pic = tiles.life(m.c, stage, animalSpecialist(regions, world, m.tile, m.c, stage), m.flip);
         const py = Math.round(ys[k] * size);
         for (let x = xs[k]; x < cols; x += GRID_W) ctx.drawImage(pic, Math.round(x * size), py, big, big);
       }
@@ -294,7 +296,7 @@ namespace SE {
           if (dx === 0 && dy === 0) continue;
           const j = idx(wrapX(x + dx), y + dy);
           if (!this.fits(world, m.c, j, self)) continue;
-          if (m.pinned && world.lifeStage[j * LIFE_COUNT + m.c] !== m.stage) continue;
+          if (m.pinned && (world.lifeStage[j * LIFE_COUNT + m.c] !== m.stage || reefShownStage(world, j, m.c, m.stage) !== m.stage)) continue;
           seen++;
           if (rand() * seen < 1) {
             pick = j;
@@ -429,7 +431,10 @@ namespace SE {
      */
     pin(world: WorldState, c: Life, stage: number, rand: () => number = Math.random): number {
       const ms = this.markers;
-      const own = ms.find((m) => m.c === c && m.stage === stage && m.pinned) ?? ms.find((m) => m.c === c && m.stage === stage);
+      // Only where it shows as itself: a coral in cold water shows another form (reefShownStage).
+      const shows = (m: HerdMarker): boolean => reefShownStage(world, m.tile, c, stage) === stage;
+      for (const m of ms) if (m.c === c && m.stage === stage && m.pinned && !shows(m)) m.pinned = false;
+      const own = ms.find((m) => m.c === c && m.stage === stage && m.pinned) ?? ms.find((m) => m.c === c && m.stage === stage && shows(m));
       if (own) {
         own.pinned = true;
         return own.tile;
@@ -443,7 +448,9 @@ namespace SE {
         const a = this.at[i];
         if (a !== 0 && ms[a - 1].pinned) continue;
         const far = !nearCity(world, i);
-        const score = d + (far ? 2 : 0) + (far && this.free(i % GRID_W, (i / GRID_W) | 0, 0) ? 2 : 0);
+        // A tile where it shows as itself first; a coral only in cold water still gets its creature.
+        const shows = reefShownStage(world, i, c, stage) === stage ? 8 : 0;
+        const score = d + shows + (far ? 2 : 0) + (far && this.free(i % GRID_W, (i / GRID_W) | 0, 0) ? 2 : 0);
         if (score > bestScore) {
           best = i;
           bestScore = score;

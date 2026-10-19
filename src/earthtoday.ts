@@ -134,9 +134,22 @@ namespace SE {
     volcanicMantle(seed, magma);
   }
 
-  function seaElevation(depth: number): number {
+  export function seaElevation(depth: number): number {
     if (depth <= SHELF_DEPTH) return Math.min(-1e-3, COAST_DEPTH * (depth / SHELF_DEPTH));
     return COAST_DEPTH + (-1 - COAST_DEPTH) * Math.min(1, (depth - SHELF_DEPTH) / (ABYSS_DEPTH - SHELF_DEPTH));
+  }
+
+  /** Sea depth (m) of an elevation: the inverse of seaElevation, so every planet reads its depths on today's Earth's scale. */
+  export function seaDepthMeters(elevation: number): number {
+    const d = Math.max(0, -elevation);
+    const shelf = -COAST_DEPTH;
+    if (d <= shelf) return SHELF_DEPTH * (d / shelf);
+    return SHELF_DEPTH + (ABYSS_DEPTH - SHELF_DEPTH) * Math.min(1, (d - shelf) / (1 - shelf));
+  }
+
+  /** Height (m) of an elevation, negative below sea level: land linear in ELEVATION_KM, the sea by seaDepthMeters. */
+  export function elevationMeters(elevation: number): number {
+    return elevation < 0 ? -seaDepthMeters(elevation) : elevation * ELEVATION_KM * 1000;
   }
 
   function decodeBase64(text: string): Uint8Array {

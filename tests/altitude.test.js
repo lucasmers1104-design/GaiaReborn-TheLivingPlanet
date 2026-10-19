@@ -261,3 +261,29 @@ test('dry, warm bare ground is desert, weathered or not', () => {
   const cool = SE.landscapeZone(8, 0.4, 0.05, 0, SE.ZONE_NONE);
   assert.equal(SE.landscapeTarget(cool, 0, false), L.Rock, 'bare rock elsewhere until it weathers');
 });
+
+test('sea depth in metres: the inverse of the Earth map, land stays linear', () => {
+  assert.equal(SE.seaDepthMeters(0), 0);
+  assert.equal(SE.seaDepthMeters(SE.COAST_DEPTH), 3500);
+  assert.equal(SE.seaDepthMeters(-1), 6000);
+  for (let k = 1; k <= 100; k++) assert.ok(SE.seaDepthMeters(-k / 100) > SE.seaDepthMeters(-(k - 1) / 100), `deeper at ${-k / 100}`);
+  for (const m of [200, 1000, 3500, 4200, 6000]) assert.ok(Math.abs(SE.seaDepthMeters(SE.seaElevation(m)) - m) < 1e-6, `${m} m round trip`);
+  assert.equal(SE.elevationMeters(0.52), 0.52 * SE.ELEVATION_KM * 1000);
+  assert.equal(SE.elevationMeters(SE.COAST_DEPTH), -3500);
+});
+
+test('map legend: metre marks from the same conversion', () => {
+  const node = () => ({ style: {}, children: [], append(...n) { this.children.push(...n); }, appendChild(n) { this.children.push(n); } });
+  globalThis.document = { createElement: node };
+  const marks = (mode) => {
+    const host = node();
+    SE.renderMapLegend(host, {}, mode, false);
+    return host.children[0].children[1].children.map((s) => s.textContent);
+  };
+  try {
+    assert.deepEqual(marks(SE.MapMode.Terrain), ['−6.000 m', '0 m', '4.500 m']);
+    assert.deepEqual(marks(SE.MapMode.Oceans), ['−6.000 m', '−3.500 m', '0 m']);
+  } finally {
+    delete globalThis.document;
+  }
+});

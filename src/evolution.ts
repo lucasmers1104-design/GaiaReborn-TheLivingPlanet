@@ -989,6 +989,7 @@ namespace SE {
       if (!parentDeveloped) state = 'locked';
       else if (conds.every((c) => c.met)) state = 'available';
       else state = 'partial';
+      if (isDevMode()) state = 'available'; // DEVMODE: develop() still needs a founding site
       // A parent that was developed but has died out still leaves the node
       // visibly reachable: the condition says what to do about it.
       void lineage;
@@ -1096,7 +1097,7 @@ namespace SE {
           kind: 'cost',
           label: `Kosten: ${n.cost} Evolutionspunkte`,
           need: `${Math.ceil(n.cost - evo.ep)} weitere EP`,
-          met: evo.ep >= n.cost,
+          met: isDevMode() || evo.ep >= n.cost, // DEVMODE
           detail: `vorhanden: ${Math.floor(evo.ep)} EP`,
         });
       }
@@ -1118,6 +1119,8 @@ namespace SE {
 
     /** Every condition but the price holds: the step only waits to be paid for. */
     static isReady(status: NodeStatus): boolean {
+      // DEVMODE: the forced 'available' says nothing about nature; spontaneous steps keep the real conditions.
+      if (isDevMode()) return status.conds.every((c) => c.met || c.kind === 'cost'); // DEVMODE
       return status.state === 'available' ||
         (status.state === 'partial' && status.conds.every((c) => c.met || c.kind === 'cost'));
     }
@@ -1144,7 +1147,7 @@ namespace SE {
       const sites = this.foundingSites(world, params, n);
       if (sites.length === 0) return { ok: false, reason: 'Kein geeigneter Lebensraum gefunden.' };
 
-      if (!spontaneous) evo.ep -= n.cost;
+      if (!spontaneous && !isDevMode()) evo.ep -= n.cost; // DEVMODE
       evo.developed.set(id, { tick: world.ticks, years: world.absoluteYears, spontaneous: spontaneous || undefined });
       evo.extinct.delete(id);
       evo.readySince.delete(id);

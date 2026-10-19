@@ -70,19 +70,34 @@
 .fauna-toast-sub { font-size: 12.5px; color: var(--ink-2); }
 .fauna-toast .toast-timer { background: var(--animal); }
 .fauna-toast.is-held { visibility: hidden; }
-/* In the centre of the screen (#discoveries): picture on top, a bigger card. */
-.discoveries .fauna-toast { animation: discovery-in 320ms var(--ease); }
-.discoveries .fauna-toast.leaving { animation: discovery-out 240ms var(--ease) forwards; }
-@keyframes discovery-in { from { opacity: 0; transform: scale(0.92); } }
-@keyframes discovery-out { to { opacity: 0; transform: scale(0.96); } }
-.discoveries .fauna-toast-main { grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 14px; padding: 26px 44px 24px; text-align: center; }
-.discoveries .fauna-toast-text { align-items: center; gap: 4px; }
-.discoveries .fauna-toast-pic { width: 112px; height: 112px; padding: 8px; }
-.discoveries .fauna-toast-art.is-stack .fauna-toast-pic { width: 88px; height: 88px; }
-.discoveries .fauna-toast-art.is-stack .fauna-toast-pic + .fauna-toast-pic { margin-left: -32px; }
-.discoveries .fauna-toast-kicker { font-size: 12px; }
-.discoveries .fauna-toast-title { font-size: 22px; }
-.discoveries .fauna-toast-sub { font-size: 13.5px; }
+/*
+ * Under the top bar (#discoveries): a banner that drops in with a little
+ * overshoot, its picture popping, a sheen passing over it once; it fades
+ * away slowly upwards. The game runs on (discoverytoast.ts).
+ */
+.discoveries .fauna-toast { animation: discovery-in 620ms cubic-bezier(0.2, 1.35, 0.35, 1); }
+.discoveries .fauna-toast.leaving { animation: discovery-out 900ms ease-in forwards; pointer-events: none; }
+.discoveries .fauna-toast::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 32%, rgba(255, 244, 196, 0.2) 47%, rgba(255, 255, 255, 0.28) 50%, transparent 66%);
+  transform: translateX(-110%);
+  animation: discovery-sheen 1100ms 260ms ease-out forwards;
+  pointer-events: none;
+}
+.discoveries .fauna-toast-pic { animation: discovery-pop 560ms 110ms cubic-bezier(0.3, 1.6, 0.5, 1) both; }
+.discoveries .fauna-toast-pic + .fauna-toast-pic { animation-delay: 190ms; }
+.discoveries .fauna-toast-pic + .fauna-toast-pic + .fauna-toast-pic { animation-delay: 270ms; }
+.discoveries .fauna-toast-kicker { animation: discovery-kicker 900ms 160ms ease-out both; }
+@keyframes discovery-in { from { opacity: 0; transform: translateY(-22px) scale(0.97); } }
+@keyframes discovery-out {
+  40% { opacity: 0.85; }
+  to { opacity: 0; transform: translateY(-10px); filter: blur(1.5px); }
+}
+@keyframes discovery-sheen { to { transform: translateX(110%); } }
+@keyframes discovery-pop { from { opacity: 0; transform: scale(0.4) rotate(-8deg); } }
+@keyframes discovery-kicker { from { opacity: 0; letter-spacing: 0.24em; } }
 
 /* ---- lexicon ---- */
 .fauna-lex { display: flex; flex-direction: column; gap: 16px; }

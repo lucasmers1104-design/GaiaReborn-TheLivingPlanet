@@ -79,7 +79,9 @@ namespace SE {
   /* -------------------------------------------------------- shared colour -- */
 
   /** River water as the overview map draws it, over any land colour. */
-  const RIVER_MAP_COLOR: Rgb = [70, 150, 235];
+  export const RIVER_MAP_COLOR: Rgb = [70, 150, 235];
+  /** Land on the seafloor map: one flat ground colour, so the whole scale is spent on depth. */
+  export const SEAFLOOR_LAND_COLOR: Rgb = [110, 104, 94];
 
   /* --------------------------------------------------------- relief shading -- */
 
@@ -205,8 +207,8 @@ namespace SE {
       }
 
       case MapMode.Oceans:
-        // "Hide oceans" — show the bare crust under the sea.
-        return sampleRamp(ELEV_RAMP, water ? world.elevation[i] * 0.4 : world.elevation[i]);
+        // "Hide oceans" — the bare crust under the sea, coloured by its depth.
+        return water ? sampleRamp(DEPTH_RAMP, world.elevation[i]) : SEAFLOOR_LAND_COLOR;
 
       case MapMode.OceanTemp:
         return water ? sampleRamp(TEMP_RAMP, world.temperature[i]) : [40, 40, 40];
@@ -229,7 +231,8 @@ namespace SE {
       }
 
       case MapMode.Biomes:
-        return water && world.biome[i] !== Biome.Arctic ? sampleRamp(DEPTH_RAMP, world.elevation[i]) : BIOME_COLORS[world.biome[i]];
+        // The sea in the main map's two classes: no depth.
+        return BIOME_COLORS[world.biome[i]];
 
       case MapMode.LifeMap: {
         // The overview map stays area-filling on purpose: it answers "where is
@@ -394,11 +397,12 @@ namespace SE {
     creatureOn(world: WorldState, i: number): { key: string; draw: () => HTMLCanvasElement } | null {
       const m = this.layers.life ? this.herds.markerOn(i) : null;
       if (!m) return null;
-      const special = animalSpecialist(this.regions, world, i, m.c, m.stage);
+      const stage = reefShownStage(world, i, m.c, m.stage);
+      const special = animalSpecialist(this.regions, world, i, m.c, stage);
       const sp = SPECIES[m.c];
-      const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[m.stage]?.art;
+      const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[stage]?.art;
       if (!art) return null;
-      return { key: `${m.c}:${m.stage}:${special}:${+m.flip}`, draw: () => rasterArt(art, 32, CREATURE_LOOK, m.flip, true) };
+      return { key: `${m.c}:${stage}:${special}:${+m.flip}`, draw: () => rasterArt(art, 32, CREATURE_LOOK, m.flip, true) };
     }
 
     /** Force a full redraw on the next frame (after a tool changed the world). */
@@ -554,6 +558,7 @@ namespace SE {
           this.dirtyTiles = null;
           this.drawBase(world, dpr);
           this.drawCost = performance.now() - t0;
+          perfHud.drawBase(this.drawCost);
           this.baseKey = key;
           this.baseTick = world.ticks;
           this.baseTime = now;
@@ -701,6 +706,17 @@ namespace SE {
       return this.bubbles.presence() * zoom * zoom;
     }
 
+    /**
+     * How loud a hurricane's wind should be, 0..1: the strongest storm the
+     * effect layer drew in view (fxstorm.ts) in the last half second, softer
+     * zoomed out but still heard: a storm is a big sound.
+     */
+    stormPresence(now: number): number {
+      if (!this.layers.events || now - STORM_SOUND.at > 500) return 0;
+      const zoom = clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+      return STORM_SOUND.presence * (0.35 + 0.65 * zoom);
+    }
+
     /** The last full picture, scaled and moved to where the new zoom puts it. */
     private drawZoomPreview(dpr: number): void {
       const k = this.tilePx / this.baseTilePx;
@@ -846,10 +862,10 @@ namespace SE {
 
       // --- ground, with its relief shaded in ---
       if (water && !this.layers.oceans) {
-        ctx.fillStyle = rgbCss(sampleRamp(ELEV_RAMP, world.elevation[i] * 0.4));
+        ctx.fillStyle = depthStyleAt(depthStep(world.elevation[i]));
         ctx.fillRect(px, py, size, size);
       } else if (water && biome !== Biome.Arctic) {
-        ctx.drawImage(tiles.sea(depthStep(world.elevation[i]), biome === Biome.Coast, variant), px, py, size, size);
+        ctx.drawImage(tiles.sea(biome === Biome.Coast, variant), px, py, size, size);
         const shore = shoreMask(world, i % GRID_W, (i / GRID_W) | 0);
         if (shore !== 0) ctx.drawImage(tiles.surf(shore), px, py, size, size);
       } else if (this.layers.biomes) {

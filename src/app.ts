@@ -124,6 +124,8 @@ namespace SE {
     private surfTarget = 0;
     private readonly bubbling = new AmbientLoop('assets/audio/sfx/simmering-water.mp3', BUBBLE_VOLUME);
     private bubblingTarget = 0;
+    private readonly stormWind = new AmbientLoop('assets/audio/sfx/hurricane-wind.mp3', STORM_WIND_VOLUME);
+    private stormWindTarget = 0;
     private lastSurfCheck = 0;
     private canvas!: HTMLCanvasElement;
     private dock!: HTMLElement;
@@ -148,6 +150,7 @@ namespace SE {
       o2: HTMLElement; co2: HTMLElement; temp: HTMLElement; date: HTMLElement; scale: HTMLElement;
       play: HTMLButtonElement; evoBadge: HTMLElement; evoBtn: HTMLButtonElement;
       oceanO2: HTMLElement;
+      devTag: HTMLElement; // DEVMODE
     };
 
     /* ---- state ---- */
@@ -190,7 +193,6 @@ namespace SE {
     private speciesInfo!: SpeciesInfoPanel;
     private readonly discoveries: DiscoveryToasts;
     private screenHeld = false;
-    private discoveryPaused = false;
 
     private lastFrame = 0;
     private accumulator = 0;
@@ -231,8 +233,7 @@ namespace SE {
         open: (c, s) => { this.speciesInfo.show(c, s); this.windows.show('species'); },
         openLexicon: () => this.windows.show('lexicon'),
         held: () => this.screenHeld,
-        shown: (events) => { this.fauna.markAnnounced(events); this.onDiscovery(true); },
-        closed: (clicked) => this.onDiscovery(false, clicked),
+        shown: (events) => { this.fauna.markAnnounced(events); playDiscoveryChime(SFX.volume()); },
       });
 
       this.buildStage();
@@ -699,7 +700,7 @@ namespace SE {
 
     private buildInfoWindows(): void {
       // Gaia
-      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), x: -12, y: 424, width: 300, height: 470 });
+      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 424, width: 300, height: 530 });
       const gaiaWrap = make('div', 'gaia-layout');
       gaia.body.appendChild(gaiaWrap);
       this.gaiaPanel = new GaiaPanel(gaiaWrap);
@@ -827,6 +828,7 @@ namespace SE {
       const omega = chip(resIcon('energy'), 'Energie (Ω) für Werkzeuge – füllt sich, während die Zeit läuft', 'hud-omega');
       const omegaBar = make('span', 'hud-bar');
       omegaBar.appendChild(make('span'));
+      const devTag = omega.el.appendChild(make('span', 'hud-tag', 'DEV')); // DEVMODE
       omega.el.appendChild(omegaBar);
       const ep = chip(resIcon('ep'), 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', 'hud-ep');
       const epRate = make('span', 'hud-sub');
@@ -835,8 +837,8 @@ namespace SE {
       o2.el.appendChild(make('span', 'hud-tag', 'Luft'));
       const oceanO2 = chip(uiIcon('layer-oceans'), 'O₂ Meer: gelöster Sauerstoff, in Prozent der heutigen Sättigung. Er steigt erst, wenn das gelöste Eisen im Meer verbraucht ist.', 'hud-minor hud-o2');
       oceanO2.el.appendChild(make('span', 'hud-tag', 'Meer'));
-      const co2 = chip(resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor');
-      const temp = chip(resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor');
+      const co2 = chip(resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor hud-co2');
+      const temp = chip(resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor hud-temp');
       // The gas chips open the air composition window.
       for (const c of [o2, oceanO2, co2]) {
         c.el.setAttribute('role', 'button');
@@ -888,6 +890,7 @@ namespace SE {
         omega: omega.value, omegaBar: omegaBar.firstChild as HTMLElement, ep: ep.value, epRate,
         o2: o2.value, co2: co2.value, temp: temp.value, date, scale, play, evoBadge, evoBtn,
         oceanO2: oceanO2.value,
+        devTag, // DEVMODE
       };
       this.syncSpeedButtons();
     }
@@ -1049,6 +1052,11 @@ namespace SE {
       document.addEventListener('keydown', shift);
       document.addEventListener('keyup', shift);
       document.addEventListener('keyup', (e) => { this.panKeys.delete(e.code); });
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'F3') return;
+        e.preventDefault();
+        perfHud.toggle();
+      });
       // A key released outside the window never sends its keyup.
       window.addEventListener('blur', () => this.panKeys.clear());
       document.addEventListener('keydown', (e) => {
@@ -1218,14 +1226,14 @@ namespace SE {
 
         case Tool.PlantBiome: {
           const selected = nodeForFlora(s.flora);
-          if (!selected || !this.world.evo.isDeveloped(selected.id)) {
+          if (!selected || !(isDevMode() || this.world.evo.isDeveloped(selected.id))) { // DEVMODE
             const first = EVO_NODES.find((n) => n.flora !== undefined && this.world.evo.isDeveloped(n.id));
             if (first && first.flora !== undefined) s.flora = first.flora;
           }
           for (const n of EVO_NODES) {
             if (n.flora === undefined) continue;
             const g = n.flora;
-            const dev = this.world.evo.isDeveloped(n.id);
+            const dev = isDevMode() || this.world.evo.isDeveloped(n.id); // DEVMODE
             option({
               label: n.name, icon: evoIcon(n.id), cost: dev ? BIOME_COST : undefined,
               active: dev && !s.clearing && s.flora === g,
@@ -1243,7 +1251,7 @@ namespace SE {
             for (const n of EVO_NODES) {
               if (n.life === undefined) continue;
               const c = n.life;
-              const dev = this.world.evo.isDeveloped(n.id);
+              const dev = isDevMode() || this.world.evo.isDeveloped(n.id); // DEVMODE
               option({
                 label: n.name, icon: evoIcon(n.id), cost: dev ? LIFE[c].cost : undefined, active: s.life === c,
                 sub: n.habitat.text, locked: dev ? undefined : 'Erst im Evolutionsbaum entwickeln',
@@ -1321,6 +1329,7 @@ namespace SE {
 
     /** Charge the Ω pool, reporting failure. */
     private spend(cost: number): boolean {
+      if (isDevMode()) return true; // DEVMODE
       if (this.world.omega < cost) {
         this.notifier.message(`Zu wenig Energie – ${fmt.int(cost)} Ω benötigt, ${fmt.int(this.world.omega)} Ω vorhanden.`, 'warn');
         return false;
@@ -1356,6 +1365,7 @@ namespace SE {
       if (!tile) return;
       const w = this.world;
       const t = this.terraform;
+      if (isDevMode()) w.omega = OMEGA_MAX; // DEVMODE: the brush never runs dry
       // The brush slows down to what the energy left can pay, from what the last frame cost per second.
       const perSecond = t.perSecond * TERRAFORM_COST_PER_UNIT;
       if (w.omega < 1) {
@@ -1560,7 +1570,7 @@ namespace SE {
       }
 
       const n = nodeForFlora(s.flora);
-      if (!n || !w.evo.isDeveloped(n.id)) {
+      if (!n || !(isDevMode() || w.evo.isDeveloped(n.id))) { // DEVMODE
         this.notifier.message('Diese Pflanzengruppe ist noch nicht entwickelt.', 'warn');
         return;
       }
@@ -1592,7 +1602,7 @@ namespace SE {
       if (s.lifeMode === 'life') {
         const def = LIFE[s.life];
         const node = nodeForLife(s.life);
-        if (!node || !w.evo.isDeveloped(node.id)) {
+        if (!node || !(isDevMode() || w.evo.isDeveloped(node.id))) { // DEVMODE
           this.notifier.message(`${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`, 'warn');
           return;
         }
@@ -1869,17 +1879,6 @@ namespace SE {
       return true;
     }
 
-    /** Pause for a discovery notice; resume unless the player opened it. */
-    private onDiscovery(shown: boolean, clicked = false): void {
-      if (shown && this.speed !== 0) {
-        this.setSpeed(0, true);
-        this.discoveryPaused = true;
-      } else if (!shown && this.discoveryPaused) {
-        this.discoveryPaused = false;
-        if (!clicked && this.speed === 0) this.setSpeed(this.lastRunningSpeed, true);
-      }
-    }
-
     private onMilestone(open: boolean): void {
       if (!this.settings.pauseOnMilestone) return;
       if (open && this.speed !== 0) {
@@ -1990,7 +1989,7 @@ namespace SE {
       this.speed = i;
       // Keep the phase, so a speed change never throws a moving effect back.
       this.accumulator = this.editView.tickPhase * SPEED_TICK_MS[i];
-      if (i !== 0) this.milestonePaused = this.discoveryPaused = false;
+      if (i !== 0) this.milestonePaused = false;
       this.syncSpeedButtons();
       if (!quiet) this.notifier.message(i === 0 ? 'Pausiert.' : `Tempo: ${SPEED_NAMES[i]}`);
     }
@@ -2037,6 +2036,8 @@ namespace SE {
       this.advanceTimeScale();
       this.history.sample(w);
       this.recordCiv();
+      // First reef and first white beach: from the map's own derivation (reefs.ts), not from the simulation.
+      for (const e of reefMilestones(w)) this.evolution.record(w, e);
     }
 
     /** Hand the civilization's news to the chronicle, or else to the message bar. */
@@ -2118,6 +2119,8 @@ namespace SE {
       h.omega.textContent = fmt.int(w.omega);
       h.omegaBar.style.width = `${Math.round((w.omega / OMEGA_MAX) * 100)}%`;
       h.ep.textContent = fmt.int(w.evo.ep);
+      if (isDevMode()) { h.omega.textContent = h.ep.textContent = '∞'; h.omegaBar.style.width = '100%'; } // DEVMODE
+      h.devTag.hidden = !isDevMode(); // DEVMODE
       const rate = this.evolution.epRate(w, this.params);
       h.epRate.textContent = rate > 0 ? `+${fmt.two(rate)}` : '';
       h.o2.textContent = `${fmt.one(w.o2)} %`;
@@ -2175,19 +2178,26 @@ namespace SE {
     }
 
     private frame = (now: number): void => {
-      const delta = Math.min(250, now - this.lastFrame);
+      const start = performance.now();
+      const gap = now - this.lastFrame;
+      const delta = Math.min(250, gap);
       this.lastFrame = now;
 
       const tickMs = SPEED_TICK_MS[this.speed];
       if (tickMs > 0) {
         this.accumulator += delta;
         let steps = 0;
-        while (this.accumulator >= tickMs && steps < MAX_TICKS_PER_FRAME) {
+        // The first due tick always runs, more only within the frame's budget.
+        while (this.accumulator >= tickMs && steps < MAX_TICKS_PER_FRAME && (steps === 0 || performance.now() - start < SIM_BUDGET_MS)) {
+          const t0 = performance.now();
           this.tick();
+          perfHud.tick(performance.now() - t0);
           this.accumulator -= tickMs;
           steps++;
         }
-        if (this.accumulator > tickMs * MAX_TICKS_PER_FRAME) this.accumulator = 0;
+        // Too slow a machine runs the planet slower than set instead of freezing on ticks it can never catch up on.
+        this.accumulator = Math.min(this.accumulator, tickMs * SIM_BACKLOG_TICKS);
+        perfHud.ticksInFrame(steps);
         // Effects play between two ticks by this; paused, it stays where it was.
         // A pause from inside a tick (milestone) leaves the accumulator below 0.
         this.editView.tickPhase = clamp(this.accumulator / tickMs, 0, 0.999);
@@ -2209,9 +2219,11 @@ namespace SE {
         this.lastSurfCheck = now;
         this.surfTarget = this.title || !this.settings.ambient ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
         this.bubblingTarget = this.title || !this.settings.ambient ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
+        this.stormWindTarget = this.title || !this.settings.ambient ? 0 : this.editView.stormPresence(now) * this.settings.ambientVolume;
       }
       this.surf.update(this.surfTarget, delta, now);
       this.bubbling.update(this.bubblingTarget, delta, now);
+      this.stormWind.update(this.stormWindTarget, delta, now);
       if (this.windows.isVisible('map')) {
         if (this.mapView.globe) {
           if (now - this.lastMapRender > 50) {
@@ -2223,7 +2235,7 @@ namespace SE {
           this.mapView.render(this.world);
         }
       }
-      if (this.windows.isVisible('gaia')) this.gaiaPanel.render(this.world, now);
+      if (this.windows.isVisible('gaia')) this.gaiaPanel.render(this.world, now, this.settings.reduceEffects, this.speed === 0);
 
       if (now - this.lastUi > 100) {
         this.lastUi = now;
@@ -2234,6 +2246,7 @@ namespace SE {
         this.lastAutosave = now;
         void this.writeSave(AUTOSAVE_KEY, true);
       }
+      perfHud.frame(gap, performance.now() - start);
       window.requestAnimationFrame(this.frame);
     };
 
@@ -2366,6 +2379,7 @@ namespace SE {
     }
 
     private afterLoad(): void {
+      PixelTerrain.shared().field.forget();
       this.notifier.clear();
       this.discoveries.clear();
       this.evolution.pending.length = 0;
@@ -2376,6 +2390,11 @@ namespace SE {
       this.windows.hide('examine');
       this.sliderPanels.forEach((p) => p.sync());
       this.evolution.refresh(this.world, this.params, true);
+      // Reefs and white beaches the planet already has are history, not news.
+      for (const e of reefMilestones(this.world)) {
+        this.world.evo.chronicle.push(e);
+        this.world.evo.reported.add(e.key);
+      }
       this.editView.markDirty();
       this.examinePanel.invalidate();
       this.chroniclePanel.update(this.world, true);

@@ -51,6 +51,10 @@ namespace SE {
 
   /** Safety valve so a backgrounded tab cannot spiral on catch-up ticks. */
   export const MAX_TICKS_PER_FRAME = 64;
+  /** A frame runs further due ticks only while it has spent less than this, ms (the first always runs). */
+  export const SIM_BUDGET_MS = 8;
+  /** Tick intervals the game loop may still owe after a frame; beyond that the planet runs slower than set. */
+  export const SIM_BACKLOG_TICKS = 2;
 
   /* --------------------------------------------------------------- colour -- */
 
@@ -126,8 +130,8 @@ namespace SE {
 
   /** Base colour per biome, used by the Map window and legends. */
   export const BIOME_COLORS: readonly Rgb[] = [
-    [48, 146, 182],  // Coast
-    [24, 78, 136],   // Ocean
+    [48, 136, 180],  // Coast: the pixel map's coastal sea (water4)
+    [24, 78, 136],   // Ocean: its open ocean (water2)
     [160, 155, 142], // Rock
     [232, 240, 240], // Arctic
     [36, 98, 78],    // Boreal
@@ -196,6 +200,8 @@ namespace SE {
    * meadow and rock belt are about 0.9 km each.
    */
   export const ALPINE_MIN_ELEVATION = 0.2;
+  /** Hill country ("Bergland") begins at about 500 m: no beach from here up. */
+  export const UPLAND_ELEVATION = 0.11;
   export const TREELINE_TEMP = -3;
   export const ROCKBELT_TEMP = -9;
   export const SNOW_TEMP = -15;
@@ -1018,19 +1024,54 @@ namespace SE {
   /** Share of savanna trees that are baobabs; the others are Schirmbäume. */
   export const SAVANNA_BAOBAB_SHARE = 1 / 8;
 
-  /* ------------------------------------------------------ beaches, palms -- */
-  // src/beaches.ts: tropical sandy beaches and coconut palms, drawn only.
+  /* ---------------------------------------- reefs, lagoons, beaches, palms -- */
+  // src/reefs.ts: derived from the simulation's state when drawing, never saved.
 
-  /** Land below this elevation can be beach (higher coasts are cliffs). */
-  export const BEACH_MAX_ELEVATION = 0.06;
-  /** Threshold of the coast noise (0..1) under which a warm coast is beach: stretches, not every tile. */
-  export const BEACH_SHARE = 0.55;
-  /** Years after the flowering plants until palms show (first palms ~85 Ma). */
-  export const PALM_DELAY_YEARS = 45e6;
-  /** Share of tropical and of warm beach tiles that show palms, and of those a pair. */
-  export const PALM_SHARE_TROPICAL = 0.6;
-  export const PALM_SHARE_WARM = 0.3;
-  export const PALM_PAIR_SHARE = 0.3;
+  /** Water temperature (°C) from which reef builders build reefs: warm shallow sea only. */
+  export const CORAL_MIN_TEMP = 20;
+  /**
+   * Densities are read in levels of this size (0..3): the picture changes only when a population
+   * crosses one. Settled corals and fish hold about 0.5, mid-level, away from the thresholds.
+   */
+  export const REEF_DENSITY_STEP = 0.2;
+  /** Grazing fish count from this density, as a class counts as living on a tile for the map (HERD_MIN_DENSITY). */
+  export const REEF_GRAZER_MIN = 0.05;
+  /**
+   * Reef builders living on or within REEF_LARVA_REACH tiles (density from REEF_BUILDER_MIN, as a
+   * class counts as living on a tile for the map) build a reef; from density level REEF_WIDE_LEVEL
+   * (REEF_DENSITY_STEP each) a larger one. Settled cnidarians hold 0.1–0.2 on random planets, ~0.5 on today's Earth.
+   */
+  export const REEF_BUILDER_MIN = 0.05;
+  export const REEF_WIDE_LEVEL = 2;
+  export const REEF_LARVA_REACH = 2;
+  /** Reefs grow at most this many tiles from land: in shallow water along the coast, not on far shelves and ridges. */
+  export const REEF_SHORE_REACH = 3;
+  /** A river carrying this much (riverFlow; on today's Earth the mouths carry 100–430) muddies the sea within REEF_RIVER_REACH tiles of its mouth: no reef, no beach. */
+  export const REEF_RIVER_FLOW = 200;
+  export const REEF_RIVER_REACH = 2;
+  /** Reef centres: at most one per cell of this many tiles (grid offset by the seed), at least REEF_SPACING tiles apart. */
+  export const REEF_CELL = 8;
+  export const REEF_SPACING = 5;
+  /** Coral patches per reef tile, and the share of them grazing fish grind to sand at full fish level. */
+  export const REEF_PATCHES = 3;
+  export const REEF_FISH_SAND = 0.3;
+  /** Land tiles up to this many tiles from a grazed reef carry its white beach. */
+  export const BEACH_REACH = 2;
+  /** Share of that coast with a beach; small islands (≤ BEACH_ISLAND_TILES) get an almost closed ring. */
+  export const BEACH_SHARE = 0.8;
+  export const BEACH_ISLAND_TILES = 6;
+  export const BEACH_ISLAND_SHARE = 0.95;
+  /** Shell beaches: share of warm coast tiles beside molluscs (density level ≥ SHELL_MIN_LEVEL). */
+  export const SHELL_BEACH_SHARE = 0.12;
+  export const SHELL_MIN_LEVEL = 1;
+  /**
+   * Palms show only from this many years before the present: the oldest palm
+   * fossils, Sabalites from the Late Cretaceous, are about 86–84 million years old.
+   */
+  export const PALM_FIRST_YEARS_AGO = 86e6;
+  /** Palms per beach tile by hash: none below PALM_ONE, one below PALM_PAIR, else a pair (60 / 30 / 10 %). */
+  export const PALM_ONE = 0.6;
+  export const PALM_PAIR = 0.9;
 
   /* ----------------------------------------------------------- time scale -- */
 
@@ -1285,11 +1326,14 @@ namespace SE {
   /** Strength per tick: gained over warm sea, lost over cooler sea and over land. */
   export const HURRICANE_GAIN = 0.25;
   export const HURRICANE_SEA_LOSS = 0.3;
-  export const HURRICANE_LAND_LOSS = 0.8;
+  /** Slow enough that a strong storm crosses a good stretch of a continent, raining itself out (4 → 0 in 20 ticks). */
+  export const HURRICANE_LAND_LOSS = 0.2;
   /** Ticks a storm moves at most. */
-  export const HURRICANE_TRACK_MAX = 24;
+  export const HURRICANE_TRACK_MAX = 40;
   /** Below this latitude it moves west with the trade winds, beyond it recurves east. */
   export const HURRICANE_RECURVE_LAT = 30;
+  /** How much its east–west speed (tiles per tick) may change per tick: it recurves in a bend over ~8 ticks, never a U-turn. */
+  export const HURRICANE_TURN = 0.25;
   /** Poleward drift in tiles per tick, with a hashed jitter of ± half HURRICANE_DRIFT_JITTER. */
   export const HURRICANE_DRIFT = 0.3;
   export const HURRICANE_DRIFT_JITTER = 0.2;
@@ -1319,6 +1363,25 @@ namespace SE {
   export const TORNADO_VEGETATION_KEEP = 0.5;
   export const TORNADO_LIFE_LOSS = 0.3;
   export const TORNADO_CITY_LOSS = 0.2;
+  /** Lightning bolts per tick, hashed from MIN to MAX by strength band: below 2, 2 to 3, from 3 on (hazardstorm.ts). */
+  export const STORM_STRIKES_MIN: readonly number[] = [0, 1, 2];
+  export const STORM_STRIKES_MAX: readonly number[] = [1, 2, 4];
+  /** Share of the bolts in ring 1, 2 and 3 of the eye (the eyewall and the bands); none in the calm eye. */
+  export const STORM_STRIKE_RINGS: readonly number[] = [0.3, 0.3, 0.4];
+  /** A bolt on land scorches the ground, kills this much life and costs a city this share. */
+  export const STORM_STRIKE_LIFE_LOSS = 0.15;
+  export const STORM_STRIKE_CITY_LOSS = 0.05;
+  /** Plant cover from which a bolt leaves scorched ground. */
+  export const STORM_SCORCH_COVER = 0.2;
+  /** Chance that a bolt on dry plants (CHAIN_FIRE_COVER, CHAIN_FIRE_MOISTURE, not soaked) sets them on fire. */
+  export const STORM_FIRE_CHANCE = 0.5;
+  /** Over land from this strength on, rain floods the eye and ring 1 where land lies below STORM_FLOOD_LOW or carries a river. */
+  export const STORM_FLOOD_MIN = 2;
+  export const STORM_FLOOD_LOW = 0.08;
+  /** The rain water stands this deep (shallow) and runs off after STORM_FLOOD_TICKS plus a hashed 0..STORM_FLOOD_SPAN ticks. */
+  export const STORM_FLOOD_DEPTH = 0.008;
+  export const STORM_FLOOD_TICKS = 4;
+  export const STORM_FLOOD_SPAN = 3;
 
   /* Earthquake (hazardquake.ts). */
   /** Magnitude within QUAKE_PLATE_ROWS rows of a plate boundary, and elsewhere; the fissure is 2·M + 1 tiles long. */

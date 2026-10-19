@@ -26,7 +26,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'earth', 'fauna'];
+const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna'];
 
 const SPRITES = [
   { id: 'smoke_puff', name: 'Rauchwölkchen', family: 'smoke', w: 8, h: 8, frames: 4, fps: 8, anchor: 'center', layer: 'top' },
@@ -64,13 +64,27 @@ const SPRITES = [
   // Water and wind (Flutwelle, Wirbelsturm).
   // Directed sprites hold 8 directions one after another (HAZARD_NX/NY order), each with its own frames.
   { id: 'wave_break', name: 'Brechende Welle: 8 Richtungen × 6 Frames', family: 'water', w: 16, h: 16, frames: 48, fps: 10, anchor: 'foot', layer: 'object', mirror: 'generator', directions: 8 },
-  { id: 'hurricane', name: 'Wirbelsturm, Nordhalbkugel', family: 'water', w: 48, h: 48, frames: 8, fps: 8, anchor: 'center', layer: 'top', mirror: 'generator' },
-  { id: 'hurricane_south', name: 'Wirbelsturm, Südhalbkugel', family: 'water', w: 48, h: 48, frames: 8, fps: 8, anchor: 'center', layer: 'top', mirror: 'generator' },
-  { id: 'tornado', name: 'Tornado-Trichter', family: 'water', w: 16, h: 32, frames: 6, fps: 10, anchor: 'foot', layer: 'object' },
-  { id: 'storm_small', name: 'Sich formender Sturm, Nordhalbkugel', family: 'water', w: 32, h: 32, frames: 2, fps: 4, anchor: 'center', layer: 'top', mirror: 'generator' },
-  { id: 'storm_small_south', name: 'Sich formender Sturm, Südhalbkugel', family: 'water', w: 32, h: 32, frames: 2, fps: 4, anchor: 'center', layer: 'top', mirror: 'generator' },
   { id: 'fallen_tree', name: 'Umgestürzter Baum', family: 'water', w: 16, h: 8, frames: 3, fps: 0, anchor: 'foot', layer: 'object' },
   { id: 'driftwood', name: 'Treibgut', family: 'water', w: 8, h: 8, frames: 3, fps: 0, anchor: 'foot', layer: 'object' },
+
+  // The hurricane (Wirbelsturm) and its weather (src/fxstorm.ts). The cloud is seen from above, rotating; everything
+  // that rises (bolts, funnels, debris) stands upright like the rest of the map's objects.
+  // storm: frames 0–7 one turn step each (counterclockwise in the north, the south set its own, lit afresh);
+  // frames 8–15 the same steps with lightning glowing inside the cloud, swapped in for a flash. `loop` 8.
+  { id: 'hurricane', name: 'Wirbelsturm, Nordhalbkugel: 8 Drehframes, 8 mit Wetterleuchten', family: 'storm', w: 96, h: 96, frames: 16, loop: 8, fps: 8, anchor: 'center', layer: 'top', mirror: 'generator' },
+  { id: 'hurricane_south', name: 'Wirbelsturm, Südhalbkugel: 8 Drehframes, 8 mit Wetterleuchten', family: 'storm', w: 96, h: 96, frames: 16, loop: 8, fps: 8, anchor: 'center', layer: 'top', mirror: 'generator' },
+  { id: 'storm_small', name: 'Sich formender Sturm, Nordhalbkugel', family: 'storm', w: 48, h: 48, frames: 4, fps: 6, anchor: 'center', layer: 'top', mirror: 'generator' },
+  { id: 'storm_small_south', name: 'Sich formender Sturm, Südhalbkugel', family: 'storm', w: 48, h: 48, frames: 4, fps: 6, anchor: 'center', layer: 'top', mirror: 'generator' },
+  // bolt: a lightning strike from the cloud to the ground, two shapes × 6 frames (leader, strike, strike, afterglow,
+  // re-strike, fade), played once; the ground glow where it hits; rain curtains under the bands, slanting left (0–3)
+  // or right (4–7), looped per slant.
+  { id: 'lightning', name: 'Blitzeinschlag: 2 Formen × 6 Frames', family: 'bolt', w: 24, h: 64, frames: 12, fps: 15, anchor: 'foot', layer: 'top' },
+  { id: 'lightning_glow', name: 'Glühen am Einschlag', family: 'bolt', w: 32, h: 16, frames: 4, fps: 12, anchor: 'center', layer: 'object' },
+  { id: 'rain_veil', name: 'Regenvorhang: schräg nach links (0–3), nach rechts (4–7)', family: 'bolt', w: 32, h: 32, frames: 8, loop: 4, fps: 12, anchor: 'center', layer: 'top' },
+  // twister: the tornado funnel from the cloud base to the ground with its debris collar, looped; the debris it lifts,
+  // four kinds × 2 tumble frames (clod, rock, branch, plank), placed and turned by the runtime.
+  { id: 'tornado', name: 'Tornado-Trichter mit Trümmerkragen', family: 'twister', w: 32, h: 64, frames: 8, fps: 12, anchor: 'foot', layer: 'object' },
+  { id: 'tornado_debris', name: 'Trümmer im Tornado: 4 Arten × 2 Frames', family: 'twister', w: 8, h: 8, frames: 8, fps: 0, anchor: 'center', layer: 'object' },
 
   // Earth (Erdbeben), and the ruins every disaster can leave.
   { id: 'dust_puff', name: 'Staubwölkchen', family: 'earth', w: 16, h: 16, frames: 5, fps: 10, anchor: 'center', layer: 'top' },
@@ -118,7 +132,8 @@ const TEXTURES = [
   { id: 'flood_shallow', name: 'Flutwasser, flach und trüb', family: 'water', size: 64, frames: 2, fps: 4, rim: 'water7' },
   { id: 'flood_water', name: 'Flutwasser', family: 'water', size: 64, frames: 2, fps: 4, rim: 'water7' },
   { id: 'flood_deep', name: 'Flutwasser, tief', family: 'water', size: 64, frames: 2, fps: 4, rim: 'water7' },
-  { id: 'wet_ground', name: 'Nasser Boden (Pfützen)', family: 'water', size: 64, frames: 1, fps: 0, rim: null },
+  // 128 px: a hurricane soaks wide strips, and a 64-px puddle pattern repeated every 4 tiles read as a grid.
+  { id: 'wet_ground', name: 'Nasser Boden (Pfützen)', family: 'water', size: 128, frames: 1, fps: 0, rim: null },
 ];
 
 /** Colours one sprite frame or texture frame may use, shading included. */

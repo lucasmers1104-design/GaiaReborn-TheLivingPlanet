@@ -792,7 +792,6 @@ test('hillshade: light from the upper left, stronger in the mountains, no steps 
     const key = SE.LandTables.shared().groundKey(L.Rock, SE.Substrate.Rock, 0);
     for (let i = 0; i < SE.TILE_COUNT; i++) {
       g.key[i] = key;
-      g.depth[i] = SE.LAND_SHALLOW;
       g.shade[i] = ((i % SE.GRID_W) - 56) * slope;
       g.scene[i] = SE.LAND_SCENE_NONE;
     }
@@ -832,7 +831,8 @@ test('examine: height to 10 m, depth below the sea, altitude belt in German', ()
     return [SE.altitudeLabel(w, 0), SE.altitudeBelt(w, 0)];
   };
   assert.deepEqual(at(0.52), ['Höhe 2.340 m', 'Montan (Bergwald)']);
-  assert.deepEqual(at(-0.1), ['Tiefe 450 m', '']);
+  assert.deepEqual(at(-0.1), ['Tiefe 1.940 m', '']);
+  assert.deepEqual(at(SE.COAST_DEPTH), ['Tiefe 3.500 m', '']);
   assert.deepEqual(at(0.02), ['Höhe 90 m', 'Tiefland']);
   assert.deepEqual(at(0.15)[1], 'Bergland');
   assert.equal(at(0.5, SE.ZONE_TREELINE, L.Alpine)[1], 'Alpin (Matten)');

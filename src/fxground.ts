@@ -37,6 +37,28 @@ namespace SE {
 
   const scarGround = (kind: ScarKind) => (w: WorldState, i: number): boolean => w.hazards.scar[i] === kind && scarShowsGround(w, i);
   const tileIs = (t: HazardTile) => (w: WorldState, i: number): boolean => w.hazards.tile[i] === t;
+  /** Share of the other soaked tiles that show puddles too. */
+  const PUDDLE_EXTRA = 0.2;
+  /**
+   * Soaked ground shows puddles where water gathers: in hollows (lower than
+   * its four neighbours on average), along rivers and in a few other spots.
+   * The edge masks fray these tiles into patches, so a storm's wet strip is
+   * no even carpet of puddles.
+   */
+  const puddled = (w: WorldState, i: number): boolean => {
+    if (w.hazards.tile[i] !== HazardTile.Wet) return false;
+    if (w.riverLevel[i] > 0 || landHash(i, 0, 91) < PUDDLE_EXTRA) return true;
+    const x = i % GRID_W;
+    const y = (i / GRID_W) | 0;
+    let sum = 0;
+    let n = 0;
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+      if (y + dy < 0 || y + dy >= GRID_H) continue;
+      sum += w.elevation[idx(wrapX(x + dx), y + dy)];
+      n++;
+    }
+    return w.elevation[i] <= sum / n;
+  };
   const lavaAt = (stage: number) => (w: WorldState, i: number): boolean =>
     w.hazards.tile[i] === HazardTile.Lava && lavaStage(w.hazards.level[i]) === stage;
   /**
@@ -69,7 +91,7 @@ namespace SE {
     { tex: 'ground_scorched', has: scarGround(ScarKind.Scorched) },
     { tex: 'ground_burnt', has: scarGround(ScarKind.Burnt) },
     { tex: 'ground_crater', has: scarGround(ScarKind.Crater) },
-    { tex: 'wet_ground', has: tileIs(HazardTile.Wet) },
+    { tex: 'wet_ground', has: puddled },
     { tex: 'flood_shallow', has: floodIs(FloodLook.Shallow) },
     { tex: 'flood_water', has: floodIs(FloodLook.Water) },
     { tex: 'flood_deep', has: floodIs(FloodLook.Deep) },

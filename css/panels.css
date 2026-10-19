@@ -97,37 +97,77 @@
 .tech-road.dormant { opacity: 0.6; }
 
 /* ---- Gaia ---- */
-.gaia-layout { display: flex; flex-direction: column; gap: 10px; height: 100%; }
-.gaia-face { display: block; width: 100%; flex: 1 1 auto; min-height: 150px; }
-.gaia-mood { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 6px 8px; }
+/* Everything fits, nothing scrolls: the stage gives up room and Gaia shrinks with it,
+   down to the window's least height, below which her face would no longer fit her. */
+.win-gaia .win-body { overflow: hidden; user-select: none; }
+.win.win-gaia { min-height: 496px; }
+.gaia-layout { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+/* The stage and its canvas lay themselves out in src/gaia.ts. */
+.gaia-face { cursor: pointer; }
+/* What she says, in a pixel game's dialogue box: typed out, then a bobbing arrow. */
+.gaia-say {
+  position: relative;
+  min-height: calc(2 * 1.35em + 18px);
+  padding: 7px 22px 7px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  background: var(--bg-0);
+  border: 2px solid var(--line-2);
+  clip-path: var(--px-clip);
+}
+.gaia-say-rest { color: transparent; }
+.gaia-say.done::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  width: 8px;
+  height: 4px;
+  background: var(--ink-2);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  animation: gaia-caret 1s linear infinite;
+}
+@keyframes gaia-caret { 50%, 100% { transform: translateY(2px); } }
+.gaia-mood { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 8px; }
 .gaia-mood-label { font-family: var(--font-display); font-size: 18px; font-weight: 800; }
 .gaia-mood-value { font-weight: 700; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .gaia-mood-bar {
   position: relative;
   grid-column: 1 / -1;
-  height: 8px;
-  border-radius: 0;
-  background: linear-gradient(90deg, #ff6a55, #ffb347 45%, #6fd38f);
+  height: 10px;
+  margin: 2px 2px 4px;
+  /* Her six moods as bands (src/gaia.ts, moodLevel), in cells like a pixel game's gauge. */
+  background:
+    repeating-linear-gradient(90deg, transparent 0 calc(5% - 2px), var(--ink-dark) calc(5% - 2px) 5%),
+    linear-gradient(90deg, #c4453f 0 18%, #df8a3a 18% 34%, #f0c64a 34% 50%, #adb24c 50% 68%, #78a83e 68% 85%, #a2c759 85%);
+  box-shadow: 0 0 0 2px var(--ink-dark);
 }
 .gaia-mood-mark {
   position: absolute;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
-  border-radius: 0;
+  top: -4px;
+  width: 6px;
+  height: 18px;
+  margin-left: -3px;
   background: #f6f1df;
-  border: 2px solid var(--bg-0);
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
-  transition: left 600ms var(--ease);
+  box-shadow: 0 0 0 2px var(--ink-dark);
+  transition: left 600ms steps(6);
 }
 .gaia-factors { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.gaia-factor { display: grid; grid-template-columns: 20px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; font-size: 12.5px; }
+.gaia-factor { display: grid; grid-template-columns: 20px 1fr auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 3px; align-items: center; font-size: 12.5px; }
 .gaia-factor .ico { grid-row: 1 / 3; width: 20px; height: 20px; }
 .gaia-factor-label { font-weight: 650; }
+/* The row she is talking about. */
+.gaia-factor.is-trouble .gaia-factor-label { color: var(--warn); }
 .gaia-factor-text { color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.gaia-meter { grid-column: 2 / 4; height: 4px; border-radius: 0; background: #0a0f17; overflow: hidden; }
-.gaia-meter span { display: block; height: 100%; border-radius: 0; transition: width 600ms var(--ease); }
+.gaia-meter { position: relative; grid-column: 2 / 4; height: 6px; background: var(--ink-dark); overflow: hidden; }
+.gaia-meter span { display: block; height: 100%; transition: width 600ms steps(6); }
+/* Ten cells. */
+.gaia-meter::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, transparent 0 calc(10% - 2px), var(--ink-dark) calc(10% - 2px) 10%);
+}
 
 /* ---- History ---- */
 .hist-layout { display: flex; flex-direction: column; gap: 10px; height: 100%; }

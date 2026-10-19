@@ -11,3 +11,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-17 v0.8.4 feat(world): Earth land bridges, active volcanoes, whales and beaches
 - 2026-10-18 v0.9.0 feat(game): cinematic intro, terraform brush, tool rail UI and WASD camera
 - 2026-10-18 v0.9.1 feat(world): dolphin pods, oxygen bubbles, coastal tidal waves, river ice
+- 2026-10-19 v0.9.2 feat(world): reefs, coastal scenery, storms and UI improvements

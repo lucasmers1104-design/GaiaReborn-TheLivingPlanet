@@ -12,6 +12,14 @@
  * ========================================================================== */
 
 namespace SE {
+  /** A sea pixel's colour beside buffer pixel k that is not foam, or null. */
+  function seaBeside(px: Uint8Array, water: Uint8Array, k: number, w: number, foam: number): number | null {
+    for (const o of [k - 1, k + 1, k - w, k + w, k - 2, k + 2, k - 2 * w, k + 2 * w]) {
+      if (o >= 0 && o < px.length && water[o] === 1 && px[o] !== foam) return px[o];
+    }
+    return null;
+  }
+
   let dist = new Float32Array(0);
   let seg = new Int32Array(0);
 
@@ -55,8 +63,8 @@ namespace SE {
         const wx = ox + x;
         const wy = oy + y;
         if (water[k] === 1) {
-          // The mouth opens the shore's foam line.
-          if (d <= 0 && px[k] === foam) px[k] = ramp[5];
+          // The mouth opens the shore's foam line, in the colour of the sea beside it (a lagoon's turquoise too).
+          if (d <= 0 && px[k] === foam) px[k] = seaBeside(px, water, k, w, foam) ?? ramp[5];
           continue;
         }
         const id = seg[k];

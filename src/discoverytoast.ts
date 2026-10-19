@@ -1,14 +1,18 @@
 /* =============================================================================
  * SimEarth 2.0 — discovery notices
  * -----------------------------------------------------------------------------
- * A small card in the corner whenever the planet produces a sub-species the
- * lexicon has not seen before. One at a time and never on top of a film or
- * milestone; when several wait, they are announced together, so a burst of
- * discoveries (a loaded planet, fast play) never floods the screen.
+ * A banner under the top bar whenever the planet produces a sub-species the
+ * lexicon has not seen before: it drops in with a soft chime, stays a few
+ * seconds (longer while the pointer rests on it) and fades away; the game
+ * runs on. One at a time and never on top of a film or milestone; when
+ * several wait, they are announced together, so a burst of discoveries (a
+ * loaded planet, fast play) never floods the screen.
  * ========================================================================== */
 
 namespace SE {
-  const DISCOVERY_MS = 5000;
+  const DISCOVERY_MS = 4000;
+  /** How long the banner takes to fade away (css/fauna.css `discovery-out`). */
+  const DISCOVERY_FADE_MS = 900;
   /** From this many waiting discoveries on, all of them share one notice. */
   const DISCOVERY_BUNDLE = 3;
   /** Names a shared notice spells out before "und n weitere". */
@@ -25,13 +29,13 @@ namespace SE {
     held(): boolean;
     /** These discoveries are on screen now. */
     shown(events: readonly FaunaEvent[]): void;
-    /** `clicked`: the player opened it rather than letting it go. */
-    closed(clicked: boolean): void;
   }
 
   export class DiscoveryToasts {
     private readonly queue: FaunaEvent[] = [];
     private card: HTMLElement | null = null;
+    /** The last banner is still fading: the next one waits for it. */
+    private fading = false;
     /** Re-reads what holds the notice on screen (hover, focus, a film). */
     private resync: (() => void) | null = null;
     private pumpHandle = 0;
@@ -76,12 +80,11 @@ namespace SE {
       if (this.card) {
         this.card.remove();
         this.card = null;
-        this.hooks.closed(false);
       }
     }
 
     private showNext(): void {
-      if (this.card || this.queue.length === 0 || this.hooks.held()) return;
+      if (this.card || this.fading || this.queue.length === 0 || this.hooks.held()) return;
       if (this.queue.length >= DISCOVERY_BUNDLE) this.showBundle(this.queue.splice(0));
       else this.showOne(this.queue.shift() as FaunaEvent);
     }
@@ -153,10 +156,10 @@ namespace SE {
         this.resync = null;
         const hadFocus = card.contains(document.activeElement);
         card.classList.add('leaving');
-        window.setTimeout(() => card.remove(), 260);
+        window.setTimeout(() => card.remove(), DISCOVERY_FADE_MS);
         if (hadFocus && !clicked) document.querySelector<HTMLElement>('.world-canvas')?.focus({ preventScroll: true });
-        this.hooks.closed(clicked);
-        this.pump();
+        this.fading = true;
+        window.setTimeout(() => { this.fading = false; this.pump(); }, DISCOVERY_FADE_MS);
       };
       const expire = (): void => {
         // Under a film the notice would run out unseen.

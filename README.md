@@ -73,6 +73,13 @@ Eine Natur- und Evolutions-Sandbox im Browser, als moderner Nachfolger von *SimE
 ### Neuer Planet
 - Ein Regler bestimmt, wie viel des Planeten unter Wasser liegt („58 % Meer · 42 % Land“). Eine Markierung zeigt, wo eine erdähnliche Welt liegt.
 
+## Entwicklermodus vor Release entfernen
+
+Im Startbildschirm schaltet „Entwicklermodus“ unendliche Energie und EP frei und öffnet alle Schritte im Evolutionsbaum sowie alle Tiere und Pflanzen in der Werkzeugleiste. Er wird nicht im Spielstand gespeichert. Vor dem Release eine der beiden Varianten:
+
+- **Schnell:** In `src/devmode.ts` `DEV_MODE_AVAILABLE` auf `false` setzen und neu bauen. Der Schalter verschwindet, das Spiel läuft wie ohne Modus.
+- **Restlos:** `src/devmode.ts` löschen und aus `files` in `tsconfig.json` austragen. Dann `grep -rn DEVMODE src css` ausführen: reine DEVMODE-Zeilen löschen, in geänderten Zeilen den Teil `isDevMode() ||` bzw. `&& !isDevMode()` streichen (z. B. `!(isDevMode() || w.evo.isDeveloped(n.id))` → `!w.evo.isDeveloped(n.id)`). `npm run typecheck` findet jeden vergessenen Rest.
+
 ## Bekannte Einschränkungen
 
 - Geprüft wurde bisher nur in headless Chrome. Andere Browser und echte Touch-Geräte sind ungetestet.

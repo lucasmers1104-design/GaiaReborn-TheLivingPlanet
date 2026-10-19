@@ -1,10 +1,12 @@
 /* =============================================================================
  * SimEarth 2.0 — terrain recipes, family "coast"
  * -----------------------------------------------------------------------------
- * The beach (calm pale sand with faint wind ripples and a few shells) and the
- * coconut palm that grows on it. Ids are fixed in catalog.js.
+ * The beach sand (calm pale sand with faint wind ripples and a few shells),
+ * drawn as a strip along the shore; the coconut palm that grows on it; and
+ * the coral and sand patches seen through a lagoon's water. Ids are fixed in
+ * catalog.js.
  *
- *   materials[id](t, d)   paint the seamless texture `t` (Tex, wraps) for density d
+ *   overlays[id](t)       paint the seamless texture `t` (Tex, wraps)
  *   objects[id](v)        return a sprite; v = { index, size, form }
  * ========================================================================== */
 'use strict';
@@ -13,10 +15,10 @@ const k = require('./kit');
 
 const c = k.c;
 
-/* ------------------------------------------------------------- materials -- */
+/* -------------------------------------------------------------- overlays -- */
 
 /**
- * Beach: flat sand3 with soft, brighter dry patches in sand4, short sand2
+ * Beach sand: flat sand3 with soft, brighter dry patches in sand4, short sand2
  * ripple dashes and now and then a 2 px shell. The texture is rolled so that
  * pixel (0,0) is sand3: the zoomed-out map shows each ground by that pixel.
  */
@@ -73,8 +75,8 @@ function rollToCalm(t, v) {
   }
 }
 
-const materials = {
-  beach: (t) => beach(t),
+const overlays = {
+  beach_sand: (t) => beach(t),
 };
 
 /* --------------------------------------------------------------- objects -- */
@@ -205,8 +207,73 @@ const PALM = {
   ],
 };
 
+/*
+ * Reef patches (kind 'reef'), seen from above through the lagoon: only the
+ * reefUnder colours, which are mixed half into its turquoise already; lit
+ * from the upper left; the outer ring dithered 50 % (ordered) so a patch
+ * fades into the water. The renderer draws the water's ripples over them.
+ */
+const RU = (n) => c(`reefUnder${n}`);
+
+/** A patch w × h: `paint(x, y, light)` colours each pixel inside; light -1 (upper left) .. 1 (lower right). */
+function patch(w, h, seed, paint) {
+  const t = new k.Tex(w, h);
+  const cx = (w - 1) / 2;
+  const cy = (h - 1) / 2;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const nx = (x - cx) / (w / 2);
+      const ny = (y - cy) / (h / 2);
+      const r = nx * nx + ny * ny + (k.hash(x, y, seed) - 0.5) * 0.3;
+      if (r > 1 || (r > 0.6 && (x + y) % 2 === 1)) continue;
+      t.set(x, y, paint(x, y, Math.max(-1, Math.min(1, (nx + ny) / 1.4))));
+    }
+  }
+  // Every object stands on its last row.
+  if (![...Array(w).keys()].some((x) => t.get(x, h - 1) !== 0)) t.set(Math.floor(cx), h - 1, paint(Math.floor(cx), h - 1, 1));
+  return t;
+}
+
+/** Rugose corals: horn cups, light rims round dark mouths, in a mottled ochre field. */
+const RUGOSE = [[7, 6], [9, 7], [10, 8], [8, 7]];
+function rugose(v) {
+  const [w, h] = RUGOSE[v.index];
+  const seed = 1700 + v.index;
+  const cup = (x, y) => (x + (y >> 1)) % 3 === 1 && y % 2 === 1 && k.hash(x, y, seed + 9) < 0.7;
+  return patch(w, h, seed, (x, y, light) => {
+    if (cup(x, y)) return RU(0);
+    if (cup(x, y + 1) || cup(x + 1, y + 1)) return RU(5);
+    return light < -0.35 ? RU(5) : light > 0.45 ? RU(0) : RU(2);
+  });
+}
+
+/** Stony corals: two colours each, as staghorn branches, a brain coral's meanders, a table or knobs. */
+const STONY = [
+  { size: [9, 7], base: 3, mark: 1, form: (x, y) => (x + y) % 4 < 2 },
+  { size: [12, 10], base: 6, mark: 4, form: (x, y) => Math.floor(Math.hypot(x - 5.5, (y - 4.5) * 1.3) + Math.sin(x * 1.3) * 0.7) % 3 === 0 },
+  { size: [11, 8], base: 6, mark: 3, form: (x, y) => y % 3 === 0 },
+  { size: [10, 9], base: 4, mark: 1, form: (x, y) => k.hash(Math.floor((x + (Math.floor(y / 2) % 2)) / 2), Math.floor(y / 2), 1714) < 0.4 },
+];
+function stony(v) {
+  const s = STONY[v.index];
+  const [w, h] = s.size;
+  return patch(w, h, 1710 + v.index, (x, y, light) => (light > 0.55 ? RU(1) : s.form(x, y) ? RU(s.mark) : RU(s.base)));
+}
+
+/** Sand the fish ground out of the reef: pale, lighter in the middle. */
+const SAND = [[8, 6], [12, 9], [10, 7]];
+function reefSand(v) {
+  const [w, h] = SAND[v.index];
+  const cx = (w - 1) / 2;
+  const cy = (h - 1) / 2;
+  return patch(w, h, 1720 + v.index, (x, y) => (((x - cx) / w) ** 2 + ((y - cy) / h) ** 2 < 0.06 ? RU(8) : RU(7)));
+}
+
 const objects = {
   coconut_palm: (v) => sprite(PALM[`${v.size}${v.form}`], PALM_KEY),
+  coral_rugose: (v) => rugose(v),
+  coral_stony: (v) => stony(v),
+  reef_sand: (v) => reefSand(v),
 };
 
-module.exports = { materials, objects };
+module.exports = { overlays, objects };

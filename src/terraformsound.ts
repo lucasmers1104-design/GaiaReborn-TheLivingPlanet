@@ -19,6 +19,7 @@
 namespace SE {
   /** Overall level (times SFX.volume()). */
   const TF_LEVEL = 0.1;
+  const TF_RUMBLE_LEVEL = 1;
   /** Time constant of every parameter glide, s. */
   const TF_GLIDE = 0.07;
   const TF_ATTACK = 0.05;
@@ -101,6 +102,7 @@ namespace SE {
   let tfRealtime: AudioContext | null = null;
 
   export class TerraformSound {
+    private rumble: HTMLAudioElement | null = null;
     private ac: BaseAudioContext | null;
     private bus: GainNode | null = null;
     private voice: TfVoice | null = null;
@@ -124,12 +126,27 @@ namespace SE {
      */
     constructor(ac?: BaseAudioContext, private readonly dest?: AudioNode) {
       this.ac = ac ?? null;
+      if (!ac && typeof document !== 'undefined') {
+        // Media elements preload local MP3s over file:// without fetch/decodeAudioData.
+        this.rumble = new Audio('assets/audio/sfx/rumble-bass.mp3');
+        this.rumble.preload = 'auto';
+        this.rumble.loop = true;
+        this.rumble.volume = 0;
+        document.addEventListener('visibilitychange', () => { if (document.hidden) this.stop(); });
+        window.addEventListener('blur', () => this.stop());
+      }
     }
 
     /** Pointer down with the brush. */
     start(sign: 1 | -1): void {
+      this.rumble?.pause();
       if (this.voice) this.release();
       if (SFX.volume() <= 0 || tfHidden()) return;
+      if (this.rumble) {
+        this.rumble.volume = tfClamp01(TF_RUMBLE_LEVEL * SFX.volume());
+        this.rumble.currentTime = 0;
+        this.rumble.play().catch(() => undefined);
+      }
       const ac = this.context();
       if (!ac) return;
       try {
@@ -147,6 +164,7 @@ namespace SE {
 
     /** Every dab: `dab` as terraformDab returned it, `work` 0..1 how hard the brush pushes this frame. */
     update(dab: TerraformDab, work: number): void {
+      if (this.rumble) this.rumble.volume = tfHidden() ? 0 : tfClamp01(TF_RUMBLE_LEVEL * SFX.volume());
       const v = this.voice;
       const ac = this.ac;
       if (!v || !ac) return;
@@ -199,6 +217,7 @@ namespace SE {
 
     /** Pointer up, or the tool changed. */
     stop(): void {
+      this.rumble?.pause();
       this.release();
     }
 

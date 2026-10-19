@@ -92,7 +92,8 @@ function build(only = null) {
     if (!recipe) { problems.push(`${ov.id}: no overlay recipe in ${ov.family}.js`); continue; }
     const t = new Tex(ov.size, ov.size, true);
     recipe(t);
-    if (colorCount(t) > MAX_COLORS.overlay) problems.push(`${ov.id}: ${colorCount(t)} colours, at most ${MAX_COLORS.overlay}`);
+    const most = ov.colors ?? MAX_COLORS.overlay;
+    if (colorCount(t) > most) problems.push(`${ov.id}: ${colorCount(t)} colours, at most ${most}`);
     overlays[ov.id] = t;
   }
 

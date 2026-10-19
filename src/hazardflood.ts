@@ -183,6 +183,31 @@ namespace SE {
     if (run.tiles.length > 0) runs.push(run);
   }
 
+  /**
+   * Water standing on the land tiles `tiles` where it falls, not running up
+   * from the sea (rain): tile m floods `depth` deep at hazard age at[m] and
+   * runs off at off[m], at least FLOOD_HOLD_TICKS later. Land under standing
+   * water or another hazard stays as it is. The water rises at the next
+   * hazardStepFloods whose tick holds at[m].
+   */
+  export function hazardStandWater(world: WorldState, h: Hazard, tiles: readonly number[], depth: number, at: readonly number[], off: readonly number[]): void {
+    const runs = h.wave?.runs ?? h.storm?.runs;
+    if (!runs) return;
+    const hz = world.hazards;
+    const taken = new Set<number>();
+    for (const r of runs) r.tiles.forEach((i, m) => { if (floodDryTick(r.off[m]) >= h.age) taken.add(i); });
+    const run: FloodRun = { front: [], height: [], steps: 0, born: h.age, tiles: [], reach: [], at: [], off: [], depth: [] };
+    tiles.forEach((i, m) => {
+      if (world.elevation[i] < 0 || taken.has(i) || (hz.tile[i] !== HazardTile.None && hz.tile[i] !== HazardTile.Wet)) return;
+      run.tiles.push(i);
+      run.reach.push(1);
+      run.at.push(at[m]);
+      run.off.push(off[m]);
+      run.depth.push(depth);
+    });
+    if (run.tiles.length > 0) runs.push(run);
+  }
+
   /** One tick of every run; finished runs drop out. */
   export function hazardStepFloods(world: WorldState, runs: FloodRun[]): void {
     let n = 0;

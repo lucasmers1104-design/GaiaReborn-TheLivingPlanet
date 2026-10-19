@@ -29,7 +29,8 @@ namespace SE {
       const river = world.riverLevel[i] > 0 ? `Fluss · ${fmt.int(RiverSystem.discharge(world, i))} m³/s` : '';
       const event = world.eventTtl[i] > 0 ? `Ereignis: ${EVENT_NAMES[world.eventKind[i]]}` : '';
       const scar = hazardLabel(world, i);
-      const sig = [tileSig, fmt.pct(world.vegetation[i]), city, river, event, scar,
+      const reef = reefNotes(world, i);
+      const sig = [tileSig, fmt.pct(world.vegetation[i]), city, river, event, scar, ...reef,
         species.map(c => `${c}:${world.stage(i, c)}:${fmt.int(world.density(i, c) * 100)}:${LifeSystem.habitatLabel(world.density(i, c))}:${fmt.pct(world.lifeCounts[c] / TILE_COUNT)}:${examineAge(world, world.lifeFirstSeen[c])}`).join(','),
         plants.map(g => `${g}:${fmt.pct(world.floraCounts[g] / TILE_COUNT)}:${examineAge(world, world.evo.developed.get(FLORA[g].id)?.years ?? -1)}`).join(','),
         world.floraTop[i], growsAsCacti(world, i) ? 'cacti' : '',
@@ -63,6 +64,7 @@ namespace SE {
       }
       const notes = make('div', 'ex-notes');
       if (river) notes.append(make('p', undefined, river));
+      for (const line of reef) notes.append(make('p', undefined, line));
       if (city) {
         const line = make('p', undefined, city);
         const tribe = cityTribeColor(world, i);
@@ -95,7 +97,7 @@ namespace SE {
       if (canvas) picture.append(canvas);
       else picture.append(img(habitatAsset(BIOME_ICONS[world.biome[i]]), 'ex-picture-fallback'));
       const meta = make('div', 'ex-meta');
-      const name = world.isWater(i) ? BIOME_NAMES[world.biome[i]] : isBeach(world, i) ? 'Sandstrand' : LANDSCAPE_NAMES[world.landscape[i]];
+      const name = world.isWater(i) ? BIOME_NAMES[world.biome[i]] : LANDSCAPE_NAMES[world.landscape[i]];
       const heading = make('h3', 'ex-place', name);
       heading.title = [landscapeLabel(world, i), altitudeBelt(world, i)].filter(Boolean).join(' · ');
       meta.append(heading, make('div', 'ex-state', `· ${state.toLocaleLowerCase('de')}`));

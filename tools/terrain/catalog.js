@@ -8,7 +8,7 @@
  * docs/landschaft-2026-10/stil.md).
  *
  * Families (one recipe file each under tools/terrain/):
- *   cold · temperate · warm · wet · mountain (docs/hoehe-spec.md) · coast (beaches)
+ *   cold · temperate · warm · wet · mountain (docs/hoehe-spec.md) · coast (beaches, reefs)
  * ========================================================================== */
 'use strict';
 
@@ -25,7 +25,6 @@ const MATERIALS = [
   { id: 'scree', name: 'Schutt', family: 'mountain', size: 64, densities: 1 },
   { id: 'stony_desert', name: 'Felswüste', family: 'warm', size: 64, densities: 1 },
   { id: 'sand', name: 'Sand', family: 'warm', size: 128, densities: 1 },
-  { id: 'beach', name: 'Strand', family: 'coast', size: 64, densities: 1 },
   { id: 'barren', name: 'Rohboden', family: 'temperate', size: 64, densities: 1 },
   { id: 'mud', name: 'Schlamm', family: 'wet', size: 64, densities: 1 },
   { id: 'semidesert_rock', name: 'Halbwüste auf Fels', family: 'warm', size: 64, densities: 3 },
@@ -51,13 +50,16 @@ const MATERIALS = [
 ];
 
 /**
- * Overlays: drawn over water by the renderer, transparent where nothing is.
- * Not ranked and never masked.
+ * Overlays: drawn by the renderer over water, transparent where nothing is,
+ * or along the shore. Not ranked and never masked. `colors`: more than the
+ * overlay limit allows.
  */
 const OVERLAYS = [
   { id: 'ripple_coast', name: 'Rippel Küstenmeer', family: 'wet', size: 128 },
   { id: 'ripple_ocean', name: 'Rippel Hochsee', family: 'wet', size: 128 },
   { id: 'algae_film', name: 'Algenfilm', family: 'wet', size: 64 },
+  // Opaque: the strip of a beach along the shore (src/landshore.ts), no ground of its own.
+  { id: 'beach_sand', name: 'Strandsand', family: 'coast', size: 64, colors: 9 },
 ];
 
 /**
@@ -151,7 +153,8 @@ function m(all, except = {}) {
  * Plant and rock objects. kind: tree (≤ 16×20, 3 sizes × 2 forms), bush and
  * low (≤ 16×16, 3 variants), rock (≤ 16×16), water (≤ 16×16, drawn in the
  * sea), cactus (≤ 16×20, 3 variants; no slot of its own: the renderer sets
- * one on some desert tiles once cacti exist, src/cacti.ts). Anchored bottom
+ * one on some desert tiles once cacti exist, src/cacti.ts), reef (≤ 12×10,
+ * patches under the lagoon's water, set by src/reefs.ts). Anchored bottom
  * centre; a tree may reach 4 px into the tile above.
  * `group` is the flora id the object belongs to (null for rocks and ice).
  */
@@ -167,7 +170,7 @@ const OBJECTS = [
   { id: 'acacia', name: 'Schirmbaum', group: 'broadleaf', kind: 'tree', family: 'warm' },
   // In no group's list: only the savanna-tree rule (src/savannatrees.ts) sets it, beside the Schirmbaum.
   { id: 'baobab', name: 'Affenbrotbaum', group: 'flowering', kind: 'tree', family: 'warm' },
-  // In no group's list either: only the beach rule (src/beaches.ts) sets it on beach tiles.
+  // In no group's list either: only the beach rule (src/reefs.ts) sets it on beach tiles.
   // Form 0 curves left, form 1 curves right.
   { id: 'coconut_palm', name: 'Kokospalme', group: 'flowering', kind: 'tree', family: 'coast' },
   // --- bushes ---
@@ -195,6 +198,10 @@ const OBJECTS = [
   { id: 'cactus_opuntia', name: 'Feigenkaktus', group: 'flowering', kind: 'cactus', family: 'warm' },
   // --- water ---
   { id: 'kelp', name: 'Tang', group: 'marineAlgae', kind: 'water', family: 'wet' },
+  // --- reefs: in no group's list, src/reefs.ts sets them ---
+  { id: 'coral_rugose', name: 'Runzelkorallen', group: null, kind: 'reef', family: 'coast', variants: 4 },
+  { id: 'coral_stony', name: 'Steinkorallen', group: null, kind: 'reef', family: 'coast', variants: 4 },
+  { id: 'reef_sand', name: 'Riffsand', group: null, kind: 'reef', family: 'coast', variants: 3 },
   // --- rocks and ice ---
   { id: 'boulder', name: 'Felsbrocken', group: null, kind: 'rock', family: 'cold', variants: 3 },
   { id: 'scree', name: 'Geröll', group: null, kind: 'rock', family: 'cold', variants: 2 },
@@ -207,7 +214,7 @@ const OBJECTS = [
 const TREE_SIZES = { s: [10, 13], m: [13, 17], l: [16, 20] };
 const TREE_FORMS = 2;
 /** Largest box per kind, [w, h]. */
-const KIND_BOX = { tree: [16, 20], bush: [16, 16], low: [16, 16], water: [16, 16], rock: [16, 16],cactus: [16, 20] };
+const KIND_BOX = { tree: [16, 20], bush: [16, 16], low: [16, 16], water: [16, 16], rock: [16, 16], cactus: [16, 20], reef: [12, 10] };
 
 /**
  * Which object a plant group shows where. A slot of one kind goes to one of

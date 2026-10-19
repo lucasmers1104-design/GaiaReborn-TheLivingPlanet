@@ -178,7 +178,7 @@ function partMasks(art) {
 
 /** A typical ground for an object, from where its group shows it. */
 function groundFor(art, ob) {
-  if (ob.kind === 'water') return null;
+  if (ob.kind === 'water' || ob.kind === 'reef') return null;
   const entry = ob.group ? C.GROUPS[ob.group].objects.find((o) => o.id === ob.id) : null;
   let wanted = ['meadow'];
   if (entry && entry.where !== '*') wanted = entry.where.filter((w) => w !== 'sea');
@@ -208,7 +208,7 @@ function partObjects(art, bg) {
           const cx = x + n * step;
           const cell = new Tex(boxW, boxH);
           if (ground) cell.each((px, py) => ground.get(px % ground.w, (py + 4) % ground.h));
-          else cell.fill(P.c('water4'));
+          else cell.fill(P.c(ob.kind === 'reef' ? 'waterWarm1' : 'water4'));
           cell.stamp(v.tex, Math.floor((boxW - v.tex.w) / 2), boxH - v.tex.h);
           s.blit(cell, cx, y + LABEL, 3);
           s.blit(cell, cx + step - 6 - boxW, y + LABEL + boxH * 3 + 6, 1);

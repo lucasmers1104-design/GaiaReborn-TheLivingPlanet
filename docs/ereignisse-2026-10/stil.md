@@ -78,6 +78,23 @@ oder anders ist. Referenz für alle Ereignisse ist der Vulkanausbruch (`tools/fx
 - **„Effekte reduzieren“** schaltet Wackeln und Blitze ab (`FxScene.shake` macht dann nichts). Wer einen Blitz baut,
   braucht einen Ersatz-Frame ohne Weiß.
 
+## Wirbelsturm
+
+- **Wolke von oben** (`tools/fx/storm.js`, 96×96): Höhenfeld aus dichter Zentralwolke mit klarem Auge, vier
+  Spiralbändern aus Quellwolken-Ketten und Zirrusfransen am Rand. Licht nach Neigung von oben links, höhere Wolke
+  beschattet tiefere: die Schattenseiten in `rock0`/`rock1` geben die Wucht. Nach außen Lücken zwischen den Bändern,
+  damit Blitze und Regen darunter sichtbar bleiben. Bodenschatten `water0` im Bayer-Raster, +5/+5 px.
+- **Drehung:** 8 Frames = 90° (vier Arme), nahtlos; Süden gespiegelt und neu belichtet. Frames 8–15 sind dieselben
+  Frames mit drei von innen leuchtenden Türmen (Wetterleuchten), nur zum kurzen Austauschen.
+- **Blitz** (`tools/fx/bolt.js`, 24×64, Fuß = Einschlag): 1 px weißer Kern, gebrochener hellblauer Rand, sparsam
+  Violett, Äste verlöschen nach außen. Weiß nur in den Frames 1, 2, 4 je Form; 0, 3, 5 sind der Ersatz bei „Effekte
+  reduzieren“. Das Glühen am Boden geht von Gelb über Orange zu Glut und Brandfleck.
+- **Regenvorhang:** spärliche Schlieren 2–3 px und ein Hauch Grau, zur Mitte dichter, zum Rand nichts, damit sich
+  viele Vorhänge ohne Kanten überlagern.
+- **Tornado** (`tools/fx/twister.js`, 32×64): dunkle Wolkenbasis mit Wolkenkragen, Trichter zum 5 px dünnen Schlauch,
+  diagonale Schlieren wandern 1 px je Frame (er dreht sichtbar), Staubkragen am Fuß. Trümmer (8×8): Erdklumpen,
+  Stein, Ast mit Laub, Brett, je zwei Taumelframes; nie zur Laufzeit spiegeln (Licht einseitig).
+
 ## Wale
 
 Wale auf offener See sind ab 16 px pro Kachel Effekt-Sprites der Familie `fauna` (`tools/fx/fauna.js`), weiter

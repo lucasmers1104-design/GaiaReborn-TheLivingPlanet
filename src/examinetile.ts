@@ -2,6 +2,7 @@
 namespace SE {
   const EMPTY_SCENE = new Uint8Array(TILE_COUNT).fill(LAND_SCENE_NONE);
   const EMPTY_VOLCANO = new Uint8Array(TILE_COUNT);
+  const EMPTY = new Uint8Array(TILE_COUNT);
 
   export interface ExaminedTile {
     readonly width: number;
@@ -13,7 +14,7 @@ namespace SE {
 
   export function composeExaminedTile(art: LandArt, field: TerrainField, x: number, y: number): ExaminedTile {
     // Share terrain inputs, but suppress all objects while composing the field's ground.
-    const bare = Object.assign(Object.create(TerrainField.prototype) as TerrainField, field, { scene: EMPTY_SCENE, volcano: EMPTY_VOLCANO });
+    const bare = Object.assign(Object.create(TerrainField.prototype) as TerrainField, field, { scene: EMPTY_SCENE, volcano: EMPTY_VOLCANO, reef: EMPTY, palm: EMPTY });
     const ground = new Uint32Array(16 * 16);
     new LandComposer(art).compose(bare, x, y, 1, 1, 0, ground, null);
     const placed: LandPlacement[] = [];
@@ -21,6 +22,7 @@ namespace SE {
     const objects: LandPlacement[] = [];
     for (const p of placed) {
       if (!p.water && field.paths.near(p.fx + 0.5, p.fy + 0.5, RIVER_CLEARANCE)) continue;
+      if (landObjectOnBeach(field, art, p)) continue;
       const rise = p.water ? { z: 0, seg: -1 } : footRise(field.ridges, p.fx, p.fy);
       if (rise.z > 0 && landObjectAboveLine(art, p.sprite, field.ridges, rise.seg, rise.z)) continue;
       objects.push({ ...p, fy: p.fy - Math.round(rise.z) });

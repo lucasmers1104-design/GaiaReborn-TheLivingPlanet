@@ -113,6 +113,7 @@
 
 /* ---- buttons: one primary way in, two secondary actions under it ---- */
 .title-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.title-dev { grid-column: 1 / -1; } /* DEVMODE */
 .title-screen .title-btn {
   justify-content: flex-start;
   gap: 16px;

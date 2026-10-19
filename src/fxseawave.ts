@@ -50,6 +50,8 @@ namespace SE {
   const SLOW_STEP = 4 * TIME_STEP;
   const CHUNK_PX = LAND_CHUNK * 16;
   const WORLD_PX = GRID_W * 16;
+  /** Ladder position of each lagoon turquoise (waterWarm), by lightness. */
+  const LAGOON_LADDER = [5, 6, 6, 7];
   /** Ladder positions above the water ramp. */
   const P_ICE2 = 8;
   const P_ICE3 = 9;
@@ -169,6 +171,8 @@ namespace SE {
         this.ladderOf = art;
         const ice = art.manifest.ramps.ice;
         art.water.forEach((p, k) => { this.ladder[k] = p; this.pos[p] = k; });
+        // Lagoon turquoise climbs the ladder from the water step of its lightness.
+        art.waterWarm.forEach((p, k) => { if (art.water.indexOf(p) < 0) this.pos[p] = LAGOON_LADDER[k]; });
         this.ladder[P_ICE2] = ice[2];
         this.ladder[P_ICE3] = ice[3];
         this.ladder[P_ICE4] = ice[4];

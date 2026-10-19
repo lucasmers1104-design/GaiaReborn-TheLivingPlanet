@@ -11,7 +11,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 
 ## Palette
 
-- **Eine Quelle:** Es gibt eine einzige Palette, `tools/terrain/palette.js`, mit 75 Farben in Rampen von dunkel nach hell.
+- **Eine Quelle:** Es gibt eine einzige Palette, `tools/terrain/palette.js`, mit 88 Farben in Rampen von dunkel nach hell. Neue Rampen kommen nur ans Ende, damit vorhandene Indizes bleiben (fx- und Stadt-Atlas enthalten die Palette).
 - **Namen:** `<rampe><stufe>`, Stufe 0 ist die dunkelste. Beispiele: `leaf2`, `sand4`, `red0`.
 - **Keine freien Farben:** keine Hexwerte in Rezepten, keine Farben außerhalb der Palette, keine Halbtransparenz.
 - **Neue Farbe:** Wer eine Farbe vermisst, schlägt sie vor. Ändern darf die Palette nur der Lead.
@@ -32,10 +32,12 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 | `jungle` | Regenwald (satt) |
 | `lichen` | blasse Flechtenkrusten |
 | `ice` | Eis, Schnee, Meereis |
-| `water` | Wassertiefe, 8 Stufen (Rippel, Flüsse, Schaum) |
+| `water` | 8 Stufen: Hochsee (`water2`), Küstenmeer (`water4`), Rippel, Flüsse, Schaum (`water7`) |
 | `bark` | Stämme, Äste |
 | `blossom`, `yellow`, `white`, `red`, `orange`, `violet` | Akzente: Blüten, Sonnentau, Gelbflechte, Heide |
 | `mask` | reserviert für Randmasken |
+| `waterWarm` | Lagunen-Türkis über Riffen |
+| `reefUnder` | Korallen und Riffsand unter Wasser, vorgemischt ins Lagunen-Türkis |
 
 ## Licht und Perspektive
 
@@ -62,7 +64,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 - **Dichtestufen** (spärlich, mittel, dicht) sind eigene Texturen desselben Materials. Sie unterscheiden sich im Bedeckungsgrad, nicht im Farbcharakter. Die dichte Stufe zeichnet sich über die spärliche, also müssen sie zueinander passen.
 - **Untergrund bleibt erkennbar:** Flechten auf Fels zeigen grauen Stein mit Krusten, Moosteppich zeigt Erde mit Polstern, Halbwüste auf Sand ist hell und körnig, auf Fels steinig.
 - **Waldböden** sind vor allem zwischen den Bäumen zu sehen: dunkel, mit Streu, Moos und Farnflecken.
-- **Strand** (`beach`) ist ruhiger, heller Sand (sand3/sand4) mit feinen Windrippeln und seltenen Muscheln, ohne Dünenbänder wie die Wüste. Pixel (0,0) ist sand3, die Farbe der Fernansicht.
+- **Strandsand** (Overlay `beach_sand`) ist ruhiger, heller Sand (sand3/sand4) mit feinen Windrippeln und seltenen Muscheln, ohne Dünenbänder wie die Wüste. Kein Boden: Der Renderer legt ihn als 1–5 px schmalen Streifen an die Küste (`src/landshore.ts`).
 - **Savanne** ist Grasland von Rand zu Rand: goldgelbes bis olivgrünes Gras mit Büscheln, kein offener roter Boden. Die spärliche Stufe ist trockener, mit dunkleren Trockenstellen im Gras, die dichte grüner und dichter mit Büscheln.
 
 ## Objekte
@@ -119,7 +121,8 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 Bei Zweifeln gilt `docs/ueberarbeitung-2026-10/quellenpruefung.md`.
 
 - **Kakteen** sind Blütenpflanzen, aber keine eigene Gruppe: Sie sind deren Form auf Wüsten- und Halbwüstenfeldern und erscheinen erst 95 Mio. Jahre nach ihnen (`src/cacti.ts`). Vorher zeigen diese Felder keine Blütenpflanzen-Objekte, die Halbwüste also Samenpflanzen-Büsche und Gräser.
-- **Palmen** sind ebenso keine eigene Gruppe: Die Kokospalme ist die Form der Blütenpflanzen am Strand (`src/beaches.ts`).
+- **Palmen** sind ebenso keine eigene Gruppe: Die Kokospalme ist die Form der Blütenpflanzen am Strand (`src/reefs.ts`).
+- **Korallen** sind Unterwasser-Objekte (Art `reef`, höchstens 12 × 10): Flecken in den `reefUnder`-Farben, der äußere Ring zu 50 % geordnet gedithert. Runzelkorallen ocker und braun, Steinkorallen rosa, orange, violett und gelb, Riffsand hell. Die Rippel des Wassers zeichnet der Renderer darüber.
 - **Savannenbäume** sind ebenso keine eigene Gruppe: Sie sind die Form der Blütenpflanzen auf Savannenfeldern, sobald es Laubbäume gibt (`src/savannatrees.ts`), meist ein Schirmbaum, etwa jeder achte ein Affenbrotbaum.
 - **Schilf** ist ein Gras, **Sumpfzypresse** ein Nadelbaum, **Schirmbaum** und Tropenriese sind Laubbäume (Bedecktsamer).
 - **Offenland vor den Gräsern** ist Farnflur, keine Wiese.

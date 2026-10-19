@@ -31,7 +31,7 @@ namespace SE {
    * Composing stops after this long in one draw; the rest follows on the next
    * frames, so a first zoom-out (90+ chunks) never freezes the game.
    */
-  const COMPOSE_BUDGET_MS = 60;
+  const COMPOSE_BUDGET_MS = 8;
   /** A chunk recomposed this long after a brush last changed tiles near it dissolves into its new picture (landfade.ts). */
   const FADE_WINDOW_MS = 1500;
   /** Tiles around the brushed box whose pictures a brush changes: ridge lines and cones (refreshBox) plus SIGNATURE_REACH. */
@@ -81,6 +81,8 @@ namespace SE {
     private brushAt = -Infinity;
     /** Chunk number → chunk, while it dissolves. */
     private readonly fading = new Map<number, Chunk>();
+    /** Chunk number → when it was first seen out of date (-Infinity: never composed), until composed. */
+    private readonly waiting = new Map<number, number>();
 
     get ready(): boolean {
       return this.state === 'ready';
@@ -115,7 +117,9 @@ namespace SE {
       if (key === this.fieldKey && world === this.fieldWorld) return;
       this.fieldKey = key;
       this.fieldWorld = world;
+      const t0 = performance.now();
       this.field.refresh(world);
+      perfHud.field(performance.now() - t0, this.field.lastRead);
       this.flatFresh = false;
       if (oceans) {
         this.seaColor = null;
@@ -124,7 +128,7 @@ namespace SE {
         const bytes = new Uint8Array(4);
         const word = new Uint32Array(bytes.buffer);
         for (let i = 0; i < TILE_COUNT; i++) {
-          const c = sampleRamp(ELEV_RAMP, Math.min(-0.01, world.elevation[i]) * 0.4);
+          const c = sampleRamp(DEPTH_RAMP, world.elevation[i]);
           bytes[0] = c[0]; bytes[1] = c[1]; bytes[2] = c[2]; bytes[3] = 255;
           sea[i] = word[0];
         }
@@ -213,6 +217,7 @@ namespace SE {
         }
         c.motion = composer.motion;
         c.sig = sig;
+        this.waiting.delete(n);
         this.composed++;
       } else if (c.fade) {
         const now = performance.now();
@@ -289,6 +294,7 @@ namespace SE {
       const tyA = Math.max(0, Math.floor(cam.scrollY + y0 / T));
       const tyB = Math.min(GRID_H, Math.ceil(cam.scrollY + y1 / T));
       if (txB <= txA || tyB <= tyA) return;
+      this.composeDue(txA, txB, tyA, tyB);
       ctx.save();
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);
@@ -331,9 +337,34 @@ namespace SE {
         }
       }
       ctx.restore();
+      perfHud.chunks(this.composed, this.pending);
     }
 
-    /** A chunk not composed yet: one flat colour per tile, from its ground or water depth. */
+    /**
+     * Compose the changed chunks over tiles [txA, txB) × [tyA, tyB) within
+     * the budget: missing ones first, then the longest waiting. In screen
+     * order, a running planet changes the first chunks on every tick and the
+     * last ones would never get their turn.
+     */
+    private composeDue(txA: number, txB: number, tyA: number, tyB: number): void {
+      const due: number[] = [];
+      for (let cy = Math.floor(tyA / LAND_CHUNK); cy <= Math.floor((tyB - 1) / LAND_CHUNK); cy++) {
+        for (let cu = Math.floor(txA / LAND_CHUNK); cu <= Math.floor((txB - 1) / LAND_CHUNK); cu++) {
+          const n = cy * CHUNKS_X + (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X);
+          const c = this.chunks.get(n);
+          if (due.includes(n) || (c && c.sig === this.field.signature((n % CHUNKS_X) * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0))) continue;
+          due.push(n);
+          if (!this.waiting.has(n)) this.waiting.set(n, c && c.sig !== -1 ? performance.now() : -Infinity);
+        }
+      }
+      due.sort((a, b) => (this.waiting.get(a) ?? 0) - (this.waiting.get(b) ?? 0));
+      for (const n of due) {
+        this.chunk(n % CHUNKS_X, Math.floor(n / CHUNKS_X));
+        if (this.pending) return;
+      }
+    }
+
+    /** A chunk not composed yet: one flat colour per tile, from its ground or sea class. */
     private drawFlat(ctx: CanvasRenderingContext2D, cu: number, cy: number, cam: LandCamera): void {
       const flat = this.overview();
       if (!flat) return;
@@ -346,7 +377,8 @@ namespace SE {
 
     /**
      * The whole planet at one pixel per tile, one flat colour each from its
-     * ground or water depth: what shows where no chunk has been composed yet.
+     * ground or sea class (lagoons turquoise): what shows where no chunk has
+     * been composed yet.
      */
     overview(): HTMLCanvasElement | null {
       const art = this.art;
@@ -362,9 +394,9 @@ namespace SE {
       const f = this.field;
       for (let i = 0; i < TILE_COUNT; i++) {
         const key = f.key[i];
-        words[i] = art.rgba[key === 0
-          ? art.water[Math.min(LAND_SHALLOW, Math.round(f.depth[i]))]
-          : art.ground[landKeyRank(key)][landKeyDensity(key)].px[0]];
+        words[i] = art.rgba[key !== 0 ? art.ground[landKeyRank(key)][landKeyDensity(key)].px[0]
+          : f.lagoon[i] >= 2 ? art.waterWarm[SEA_LAGOON_STEP]
+            : art.water[f.sea[i] === 1 ? SEA_COAST_STEP : SEA_OCEAN_STEP]];
       }
       fctx.putImageData(image, 0, 0);
       this.flatFresh = true;

@@ -165,16 +165,23 @@ namespace SE {
   let audio: AudioContext | null = null;
 
   /**
-   * A short, bright arpeggio. Browsers only allow sound after the player has
-   * interacted with the page; until then this stays silent rather than fail.
+   * The shared audio context, resumed. Browsers only allow sound after the
+   * player has interacted with the page; until then the chimes stay silent
+   * rather than fail. Null without Web Audio.
    */
-  export function playChime(spontaneous: boolean, volume = 1): void {
+  function audioContext(): AudioContext | null {
     const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!Ctor) return;
+    if (!Ctor) return null;
+    audio ??= new Ctor();
+    if (audio.state === 'suspended') void audio.resume();
+    return audio;
+  }
+
+  /** A short, bright arpeggio. */
+  export function playChime(spontaneous: boolean, volume = 1): void {
     try {
-      audio ??= new Ctor();
-      if (audio.state === 'suspended') void audio.resume();
-      const ac = audio;
+      const ac = audioContext();
+      if (!ac) return;
       const start = ac.currentTime + 0.03;
       // A major arpeggio; a step that arose on its own rings a third higher.
       const notes = spontaneous ? [659.25, 830.61, 987.77, 1318.51] : [523.25, 659.25, 783.99, 1046.5];
@@ -196,6 +203,61 @@ namespace SE {
       });
     } catch {
       // No audio device or a blocked context: the moment works without sound.
+    }
+  }
+
+  /**
+   * A new species: two soft mallet notes rising a fourth (G5, C6) and a quiet
+   * sparkle of the C major triad two octaves up, in a small filtered echo.
+   * Gentler than a step's chime, so frequent discoveries never nag. Sine
+   * tones only, with a short bright overtone for the strike (a marimba's
+   * fourth partial), so nothing sounds harsh at any volume.
+   */
+  export function playDiscoveryChime(volume: number): void {
+    if (volume <= 0 || document.hidden) return;
+    try {
+      const ac = audioContext();
+      if (!ac) return;
+      const t0 = ac.currentTime + 0.02;
+      const out = ac.createGain();
+      out.gain.value = volume;
+      out.connect(ac.destination);
+      // The room: an echo after 190 ms, darker and softer each time.
+      const delay = ac.createDelay(1);
+      delay.delayTime.value = 0.19;
+      const damp = ac.createBiquadFilter();
+      damp.type = 'lowpass';
+      damp.frequency.value = 2600;
+      const feedback = ac.createGain();
+      feedback.gain.value = 0.3;
+      const wet = ac.createGain();
+      wet.gain.value = 0.32;
+      out.connect(delay);
+      delay.connect(damp);
+      damp.connect(feedback).connect(delay);
+      damp.connect(wet).connect(ac.destination);
+      const tone = (freq: number, t: number, peak: number, attack: number, decay: number): void => {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(peak, t + attack);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+        osc.connect(gain).connect(out);
+        osc.start(t);
+        osc.stop(t + attack + decay + 0.05);
+      };
+      const mallet = (freq: number, t: number, peak: number, decay: number): void => {
+        tone(freq, t, peak, 0.005, decay);
+        tone(freq * 2, t, peak * 0.12, 0.005, decay * 0.45);
+        tone(freq * 4, t, peak * 0.22, 0.003, 0.07);
+      };
+      mallet(783.99, t0, 0.15, 0.9);
+      mallet(1046.5, t0 + 0.11, 0.14, 1.3);
+      [2093, 2637.02, 3135.96].forEach((freq, k) => tone(freq, t0 + 0.2 + k * 0.07, 0.022, 0.03, 0.55));
+    } catch {
+      // No audio device or a blocked context: the notice works without sound.
     }
   }
 }

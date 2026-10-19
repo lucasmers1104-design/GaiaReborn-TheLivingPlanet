@@ -274,10 +274,10 @@ namespace SE {
    * own pixel takes it, the pixels between average their two or four), cut
    * the gullies, flatten the far foot, and note each column's lifted rows.
    * Open water stays flat: the pixels `water` marks 1 in its first
-   * `waterRows` rows, below them the pixels of sea tiles (`depth`, when
-   * given). False when nothing rises.
+   * `waterRows` rows, below them the pixels of sea tiles (`seaTiles`, when
+   * given: TerrainField.seaTile). False when nothing rises.
    */
-  function fill(ridges: RidgePaths, ox: number, oy: number, w: number, h: number, water: Uint8Array, waterRows: number, depth: Float32Array | null): boolean {
+  function fill(ridges: RidgePaths, ox: number, oy: number, w: number, h: number, water: Uint8Array, waterRows: number, seaTiles: Uint8Array | null): boolean {
     const gw = (w >> 1) + 1;
     const gh = (h >> 1) + 1;
     allocate(w, h);
@@ -325,7 +325,7 @@ namespace SE {
           const v0 = xo === 0 ? (yo === 0 ? a : (a + c) / 2) : (yo === 0 ? (a + b) / 2 : (a + b + c + d) / 4);
           if (v0 <= 0) continue;
           const k = y * w + x;
-          if (y < waterRows ? water[k] === 1 : depth !== null && seaTile(depth, ox + x, oy + y)) continue;
+          if (y < waterRows ? water[k] === 1 : seaTiles !== null && seaTile(seaTiles, ox + x, oy + y)) continue;
           // The thresholds of the strongest sample the pixel reads.
           let s = ra + i;
           let top = a;
@@ -513,15 +513,15 @@ namespace SE {
     const hh = h + LIFT_BELOW;
     const ids = ridges.query(ox, oy, ox + w, oy + hh);
     if (ids.length === 0 || !sample(ridges, ids, ox, oy, w, hh)) return null;
-    if (!fill(ridges, ox, oy, w, hh, sea ?? NO_WATER, sea ? h : 0, field.depth)) return null;
+    if (!fill(ridges, ox, oy, w, hh, sea ?? NO_WATER, sea ? h : 0, field.seaTile)) return null;
     colTop.fill(hh, 0, w);
     lift(ridges, { px: new Uint8Array(0), water: new Uint8Array(0), w, h: hh }, null, ox, oy, false, h);
     return { ridges, z: zBuf, seg: segBuf, depth: depthBuf, top: colTop, bottom: colHi };
   }
 
-  /** Whether world art pixel (wx, wy) lies on a sea tile (the field's water depth below the shallowest). */
-  function seaTile(depth: Float32Array, wx: number, wy: number): boolean {
-    return depth[clampY(Math.floor(wy / 16)) * GRID_W + wrapX(Math.floor(wx / 16))] < LAND_SHALLOW;
+  /** Whether world art pixel (wx, wy) lies on a sea tile (TerrainField.seaTile). */
+  function seaTile(seaTiles: Uint8Array, wx: number, wy: number): boolean {
+    return seaTiles[clampY(Math.floor(wy / 16)) * GRID_W + wrapX(Math.floor(wx / 16))] === 1;
   }
 
   /**
@@ -532,7 +532,7 @@ namespace SE {
    * everywhere but on the frayed coast and in rivers (water stays flat).
    */
   export function landRiseAt(field: TerrainField, wx: number, wy: number): number {
-    return seaTile(field.depth, wx, wy) ? 0 : footRise(field.ridges, wx, wy).z;
+    return seaTile(field.seaTile, wx, wy) ? 0 : footRise(field.ridges, wx, wy).z;
   }
 
   /** What footRise found: the lift of the ground point and the segment it comes from (−1 where flat). */

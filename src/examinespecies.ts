@@ -36,7 +36,8 @@ namespace SE {
   }
 
   export function examineAnimal(world: WorldState, i: number, c: Life, actions: ExamineActions): HTMLDetailsElement {
-    const stage = world.stage(i, c);
+    // Corals only in warm water: elsewhere the class's highest form that builds no reef, as on the map.
+    const stage = reefShownStage(world, i, c, world.stage(i, c));
     const density = world.density(i, c);
     const { el, body } = entry(`life:${c}`, faunaPicture(c, stage, true, ''), subspeciesName(c, stage), `${fmt.int(density * 100)} %`);
     body.append(make('div', 'ex-group', `${LIFE[c].name} · ${faunaStageLabel(stage)}`));

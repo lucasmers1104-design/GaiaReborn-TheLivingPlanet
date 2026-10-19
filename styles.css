@@ -31,6 +31,7 @@
 @import url("css/examine-land.css");
 @import url("css/pixelart.css");
 @import url("css/terraform.css");
+@import url("css/perfhud.css");
 
 :root {
   --bg-0: #08101a;
@@ -517,6 +518,15 @@ p { margin: 0; }
 }
 .hud-value { font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; }
 .hud-sub { font-size: 11px; color: var(--ok); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* Pixelify Sans has no tabular figures, so tabular-nums changes nothing: each
+   running value sits in a box as wide as its longest value (measured in the
+   pixel font), so the bar never shifts while the numbers change. */
+.hud-value, .hud-sub { display: inline-block; text-align: right; }
+.hud-omega .hud-value, .hud-ep .hud-value { min-width: 46px; }
+.hud-ep .hud-sub { min-width: 34px; text-align: left; }
+.hud-o2 .hud-value { min-width: 50px; }
+.hud-co2 .hud-value { min-width: 74px; }
+.hud-temp .hud-value { min-width: 48px; }
 .hud-omega .hud-value { color: var(--energy); }
 .hud-ep .hud-value { color: #d2bcff; }
 .hud-minor .hud-value { font-weight: 600; font-size: 14px; color: var(--ink); }
@@ -535,7 +545,9 @@ p { margin: 0; }
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-width: 112px;
+  /* Fixed, not grown by its text: the date runs long ("vor 4.123,4 Mio. J. · Paläoproterozoikum") and ellipsizes. */
+  flex: none;
+  width: 240px;
   height: 38px;
   padding: 0 11px;
   line-height: 1.15;
@@ -1586,10 +1598,10 @@ p { margin: 0; }
 .discoveries {
   position: fixed;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  top: calc(var(--topbar-h) + 10px);
+  transform: translateX(-50%);
   z-index: 555;
-  width: min(420px, calc(100vw - 24px));
+  width: min(460px, calc(100vw - 24px));
   pointer-events: none;
   filter: var(--lift);
 }
@@ -1697,7 +1709,7 @@ p { margin: 0; }
 @media (max-width: 1420px) {
   .hud-minor { display: none; }
   .hud-scale { display: none; }
-  .hud-time { min-width: 96px; }
+  .hud-time { width: 190px; }
   /* Centred, the goal bar would shrink to 100% - 880 px and wrap its subline
      into a tall column, or slide under the tool card (12 + 64 + 8 + 340 px); sit
      it between the card and the map controls instead. */

@@ -159,7 +159,7 @@ namespace SE {
   /** Globe pixels across the canvas; each is drawn as a whole number of device pixels. */
   const GLOBE_PX = 144;
   /** Disc radius as a share of the canvas side; the CSS glows around it assume 0.46. */
-  const DISC = 0.46;
+  export const GLOBE_DISC = 0.46;
   /** Sunlight from the upper left, a little toward the viewer (screen y points down). */
   const SUN = [-0.62, -0.5, 0.6].map((c, _, v) => c / Math.hypot(...v));
   /** 4×4 ordered dither, 0..1: the terminator and the haze step in pixel patterns. */
@@ -169,6 +169,16 @@ namespace SE {
   const AIR: Rgb = [126, 206, 255];
   /** Clouds turn this much faster than the ground below them. */
   const CLOUD_DRIFT = 1.25;
+
+  /** A sea tile seen from space: coastal sea or open ocean as the map shows them, a lagoon mixed towards turquoise by its level. */
+  function seaFromSpace(world: WorldState, reefs: ReefMap, i: number): Rgb {
+    const b = world.biome[i];
+    const sea = BIOME_COLORS[b === Biome.Ocean || (b === Biome.Arctic && world.elevation[i] <= COAST_DEPTH) ? Biome.Ocean : Biome.Coast];
+    const g = reefs.lagoon[i];
+    if (g === 0) return sea;
+    const t = g === 1 ? 0.25 : g === 2 ? 0.5 : 1;
+    return [lerp(sea[0], LAGOON_RGB[0], t), lerp(sea[1], LAGOON_RGB[1], t), lerp(sea[2], LAGOON_RGB[2], t)];
+  }
 
   /** Smooth value noise over the grid, 0..1, wrapping east–west. */
   function smoothNoise(rng: Rng): Float32Array {
@@ -223,6 +233,8 @@ namespace SE {
   export class TitleGlobe {
     /** Longitude offset in radians. */
     spin = 2.4;
+    /** Pixels across, for a globe that is only copied onto other canvases (drawTo); 0 fits it to its box on screen. */
+    size = 0;
     private readonly ctx: CanvasRenderingContext2D;
     private texture: Uint8ClampedArray | null = null;
     private clouds: Uint8Array | null = null;
@@ -238,15 +250,16 @@ namespace SE {
     /** Per canvas pixel: share of haze at the lit limb. */
     private haze = new Float32Array(0);
 
-    constructor(private readonly canvas: HTMLCanvasElement) {
+    /** `bare`: the disc alone, without its rim of air and the haze on its limb (Gaia's body). */
+    constructor(private readonly canvas: HTMLCanvasElement, private readonly bare = false) {
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('SimEarth: 2D context unavailable for the title globe');
       this.ctx = ctx;
     }
 
-    render(world: WorldState): void {
+    /** `key`: the surface is repainted only when it changes; a running game passes a slower one than every tick. */
+    render(world: WorldState, key = `${world.ticks}|${world.revision}|${world.seed}`): void {
       if (!this.fit()) return;
-      const key = `${world.ticks}|${world.revision}|${world.seed}`;
       if (key !== this.textureKey) {
         this.textureKey = key;
         this.texture = this.paintTexture(world);
@@ -289,7 +302,7 @@ namespace SE {
     /** Paint the last render onto another canvas: the disc centred on (cx, cy) with radius r, pixels kept sharp. */
     drawTo(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number): void {
       if (!this.side) return;
-      const size = (2 * r) / (2 * DISC);
+      const size = (2 * r) / (2 * GLOBE_DISC);
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(this.canvas, cx - size / 2, cy - size / 2, size, size);
     }
@@ -300,11 +313,16 @@ namespace SE {
       return [((Math.round(turn) % GRID_W) + GRID_W) % GRID_W, GRID_H >> 1];
     }
 
-    /** Terrain colours; rivers mixed into the land beside them, which at this size reads better than bright lines. */
+    /**
+     * Terrain colours on land; the sea as seen from space, coastal sea and
+     * open ocean flat with the lagoons turquoise, no depth. Rivers mixed into
+     * the land beside them, which at this size reads better than bright lines.
+     */
     private paintTexture(world: WorldState): Uint8ClampedArray {
       const tex = new Uint8ClampedArray(TILE_COUNT * 4);
+      const reefs = reefMap(world);
       for (let i = 0; i < TILE_COUNT; i++) {
-        const [r, g, b] = mapColor(world, i, MapMode.Terrain);
+        const [r, g, b] = world.isWater(i) ? seaFromSpace(world, reefs, i) : mapColor(world, i, MapMode.Terrain);
         tex[i * 4] = r; tex[i * 4 + 1] = g; tex[i * 4 + 2] = b;
       }
       for (let i = 0; i < TILE_COUNT; i++) {
@@ -317,14 +335,17 @@ namespace SE {
 
     /** Size the canvas to whole device pixels per globe pixel; false while it has no room. */
     private fit(): boolean {
-      const box = this.canvas.parentElement?.getBoundingClientRect();
-      if (!box || box.width <= 0 || box.height <= 0) return false;
-      const dpr = window.devicePixelRatio || 1;
-      const device = Math.min(box.width, box.height) * dpr;
-      const scale = Math.max(1, Math.round(device / GLOBE_PX));
-      const side = Math.max(16, Math.floor(device / scale));
-      const css = `${(side * scale) / dpr}px`;
-      if (this.canvas.style.width !== css) this.canvas.style.width = this.canvas.style.height = css;
+      let side = this.size;
+      if (!side) {
+        const box = this.canvas.parentElement?.getBoundingClientRect();
+        if (!box || box.width <= 0 || box.height <= 0) return false;
+        const dpr = window.devicePixelRatio || 1;
+        const device = Math.min(box.width, box.height) * dpr;
+        const scale = Math.max(1, Math.round(device / GLOBE_PX));
+        side = Math.max(16, Math.floor(device / scale));
+        const css = `${(side * scale) / dpr}px`;
+        if (this.canvas.style.width !== css) this.canvas.style.width = this.canvas.style.height = css;
+      }
       if (side === this.side) return true;
       this.side = this.canvas.width = this.canvas.height = side;
       this.image = this.ctx.createImageData(side, side);
@@ -339,7 +360,7 @@ namespace SE {
       this.col = new Float32Array(count);
       this.light = new Float32Array(count);
       this.haze = new Float32Array(count);
-      const r = n * DISC;
+      const r = n * GLOBE_DISC;
       const c = n / 2;
       for (let py = 0; py < n; py++) {
         for (let px = 0; px < n; px++) {
@@ -349,6 +370,10 @@ namespace SE {
           const d2 = nx * nx + ny * ny;
           const dither = BAYER[(py & 3) * 4 + (px & 3)] - 0.5;
           if (d2 > 1) {
+            if (this.bare) {
+              this.row[p] = -1;
+              continue;
+            }
             // Two pixels of air around the disc, bright on the sunny side.
             const out = (Math.sqrt(d2) - 1) * r;
             const lit = clamp((nx * SUN[0] + ny * SUN[1]) / Math.sqrt(d2) + 0.25, 0, 1);
@@ -365,7 +390,7 @@ namespace SE {
           this.light[p] = BANDS.find(([lo]) => sun > lo)![1];
           // Haze on the limb, thicker toward the edge, only where the sun shines.
           const edge = 1 - nz;
-          this.haze[p] = sun > 0 ? (edge + dither * 0.1 > 0.8 ? 0.4 : edge + dither * 0.1 > 0.62 ? 0.18 : 0) : 0;
+          this.haze[p] = sun > 0 && !this.bare ? (edge + dither * 0.1 > 0.8 ? 0.4 : edge + dither * 0.1 > 0.62 ? 0.18 : 0) : 0;
         }
       }
     }

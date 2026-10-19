@@ -17,6 +17,7 @@
  * warm sea and losing it over cool sea and land. It soaks a strip five tiles
  * wide, throws forests and, making landfall strong, pushes a storm surge up
  * the coast through the same run-up, spinning off tornadoes (hazardtornado.ts).
+ * Its lightning and its rain floods over land are in hazardstorm.ts.
  * The hazard lasts until its strip dries.
  * ========================================================================== */
 
@@ -52,9 +53,16 @@ namespace SE {
   export interface StormTrack {
     /** The eye's tile at every tick so far, the current one last. */
     readonly path: number[];
+    /** Its strength at every tick so far, beside path (0 where it died). */
+    readonly strengths: number[];
     strength: number;
     /** Poleward drift gathered towards the next row, in tiles. */
     drift: number;
+    /** East–west speed in tiles per tick (turning gradually), and the part of a tile gathered towards the next column. */
+    vx: number;
+    ax: number;
+    /** Where between tiles the eye really is at every tick, beside path: x, y pairs in tiles off the tile's centre; the screen glides along these. */
+    readonly offsets: number[];
     /** False once the storm has died out; its strip may still be drying. */
     moving: boolean;
     /** Tiles it soaked, drying out. */
@@ -408,12 +416,35 @@ namespace SE {
     st.wet.length = n;
   }
 
-  /** One tile on: west in the tropics, east beyond, drifting poleward; strength follows the sea below. */
+  /** East–west course at row y: west with the trade winds in the tropics, east beyond. */
+  function course(y: number): number {
+    return Math.abs(latitudeDeg(y)) < HURRICANE_RECURVE_LAT ? windDirection(y) : 1;
+  }
+
+  /**
+   * The eye's offset off its tile's centre (tiles): the part of a step it has gathered, and poleward its drift.
+   * Each grows by exactly what the tile loses when it steps, so the screen's eye moves on evenly; the drift is
+   * counted from half a tile, so the eye stays within half a tile of its tile.
+   */
+  function pushOffset(st: StormTrack, y: number): void {
+    st.offsets.push(st.ax, (latitudeDeg(y) >= 0 ? -1 : 1) * (st.drift - 0.5));
+  }
+
+  /** On along its course, turning gradually, drifting poleward; strength follows the sea below. */
   function move(world: WorldState, h: Hazard, st: StormTrack): void {
     const from = st.path[st.path.length - 1];
     const y = (from / GRID_W) | 0;
     const lat = latitudeDeg(y);
-    const dx = Math.abs(lat) < HURRICANE_RECURVE_LAT ? windDirection(y) : 1;
+    st.vx += clamp(course(y) - st.vx, -HURRICANE_TURN, HURRICANE_TURN);
+    st.ax += st.vx;
+    let dx = 0;
+    if (st.ax >= 1) {
+      st.ax -= 1;
+      dx = 1;
+    } else if (st.ax <= -1) {
+      st.ax += 1;
+      dx = -1;
+    }
     st.drift += HURRICANE_DRIFT + (hazardRoll(world.seed ^ h.id, h.age, 0xd21f7) - 0.5) * HURRICANE_DRIFT_JITTER;
     let dy = 0;
     if (st.drift >= 1) {
@@ -424,13 +455,15 @@ namespace SE {
     const ny = clamp(y + dy, 1, GRID_H - 2);
     const to = idx(nx, ny);
     st.path.push(to);
+    pushOffset(st, ny);
     const sea = world.elevation[to] < 0;
     if (world.elevation[from] < 0 && !sea && st.strength >= HURRICANE_SURGE_MIN) surge(world, h, st, to);
     if (world.elevation[from] < 0 && !sea && st.strength >= TORNADO_MIN_STRENGTH) hazardSpawnTornadoes(world, h, st.tornadoes, from, to);
+    if (!sea && st.strength >= STORM_FLOOD_MIN) hazardStormRain(world, h, to);
     const warm = world.temperature[to] >= HURRICANE_WARM_SEA;
-    st.strength = Math.min(HURRICANE_MAX, st.strength + (!sea ? -HURRICANE_LAND_LOSS : warm ? HURRICANE_GAIN : -HURRICANE_SEA_LOSS));
+    st.strength = Math.max(0, Math.min(HURRICANE_MAX, st.strength + (!sea ? -HURRICANE_LAND_LOSS : warm ? HURRICANE_GAIN : -HURRICANE_SEA_LOSS)));
+    st.strengths.push(st.strength);
     if (st.strength <= 0) {
-      st.strength = 0;
       st.moving = false;
       return;
     }
@@ -462,9 +495,12 @@ namespace SE {
 
     start(world: WorldState, h: Hazard): void {
       const i = idx(h.x, h.y);
+      const strength = stormStrength(world, i);
       const st: StormTrack = {
-        path: [i], strength: stormStrength(world, i), drift: hazardRoll(world.seed ^ h.id, i, 0xd21f), moving: true, wet: [], runs: [], tornadoes: [],
+        path: [i], strengths: [strength], strength, drift: hazardRoll(world.seed ^ h.id, i, 0xd21f), vx: course(h.y), ax: 0, offsets: [],
+        moving: true, wet: [], runs: [], tornadoes: [],
       };
+      pushOffset(st, h.y);
       h.storm = st;
       lash(world, h, st);
     },
@@ -474,6 +510,7 @@ namespace SE {
       if (!st) return false;
       dry(world, st);
       hazardStepTornadoes(world, st.tornadoes);
+      hazardStormStrike(world, h);
       if (st.moving) move(world, h, st);
       hazardStepFloods(world, st.runs);
       return st.moving || st.wet.length > 0 || st.runs.length > 0 || st.tornadoes.length > 0;

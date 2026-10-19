@@ -14,6 +14,8 @@
  * lifted mountain range (landridgedraw.ts) an object stands as high as the
  * ground under its foot and hides behind nearer ground; plants stop at the
  * crest's tree line. Volcanic cones are relief, not objects (landridges.ts).
+ * Reefs show coral and sand patches under the water's ripples; on a beach
+ * only palms stand, on the dry sand, their crowns leaning over the sea.
  * ========================================================================== */
 
 namespace SE {
@@ -22,7 +24,7 @@ namespace SE {
     /** Foot in world pixels (x unwrapped, as the caller's tiles were). */
     readonly fx: number;
     readonly fy: number;
-    /** Kelp: drawn on sea water only, without a shadow. */
+    /** Kelp, corals: drawn on sea water only, without a shadow. */
     readonly water: boolean;
     /** World-stable tie-break for objects with the same foot. */
     readonly seq: number;
@@ -49,8 +51,6 @@ namespace SE {
   const CACTUS_SLOT = 10;
   /** A savanna tree's slot: the quarter the first three slots (the rock's and a cactus's among them) leave free. */
   const SAVANNA_TREE_SLOT = 11;
-  /** Coconut palms' slots 12–13 (beach tiles carry no other plants). */
-  const PALM_SLOT = 12;
   /** Ground rows a shadow may lie from its object's foot on lifted ground. */
   const SHADOW_DEPTH = 2;
   /** Ground rows in front of its foot that still leave an object in view. */
@@ -68,8 +68,12 @@ namespace SE {
   function placeTile(f: TerrainField, art: LandArt, x: number, y: number, out: LandPlacement[]): void {
     const xw = wrapX(x);
     const i = y * GRID_W + xw;
+    if (f.reef[i] !== CoralKind.None) {
+      placeLandReef(f, art, xw, x, y, out);
+      return;
+    }
     const palms = f.palm[i];
-    if (palms > 0 && art.sprites.coconut_palm) placePalms(f, art, xw, x, y, palms, out);
+    if (palms > 0 && art.sprites.coconut_palm) placeLandPalms(f, art, xw, x, y, palms, out);
     const scene = f.scene[i];
     if (scene === LAND_SCENE_NONE) return;
     const T = LandTables.shared();
@@ -101,39 +105,6 @@ namespace SE {
     if (rate > 0 && !cone && landHash(xw, y, 800) < rate) {
       const ids = T.abioticIds[scene];
       if (ids.length > 0) out.push(spot(art, ids[Math.floor(landHash(xw, y, 801) * ids.length)], xw, x, y, 9, 2, false));
-    }
-  }
-
-  /**
-   * Coconut palms on a beach tile: feet set back from the sea onto the dry
-   * sand, a pair spread along the shore (a tall one, a younger one), crowns
-   * curving toward the sea (form 0 curves left, 1 right).
-   */
-  function placePalms(f: TerrainField, art: LandArt, xw: number, x: number, y: number, n: number, out: LandPlacement[]): void {
-    let sx = 0;
-    let sy = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      const ny = y + dy;
-      if (ny < 0 || ny >= GRID_H) continue;
-      for (let dx = -1; dx <= 1; dx++) {
-        if (f.key[ny * GRID_W + wrapX(xw + dx)] === 0) { sx += dx; sy += dy; }
-      }
-    }
-    sx = Math.sign(sx);
-    sy = Math.sign(sy);
-    // Along the shore: across the way to the sea.
-    const ax = sx === 0 && sy === 0 ? 1 : -sy;
-    const ay = sx;
-    const vars = art.sprites.coconut_palm;
-    for (let s = 0; s < n; s++) {
-      const slot = PALM_SLOT + s;
-      const p = spot(art, 'coconut_palm', xw, x, y, slot, s === 0 ? 2 : 1, false);
-      const side = n === 1 ? 0 : s === 0 ? -1 : 1;
-      const jitter = Math.floor((landHash(xw, y, 960 + slot) - 0.5) * 3);
-      const fx = clamp(x * 16 + 8 - sx * 4 + side * ax * 4 + jitter, x * 16 + 2, x * 16 + 14);
-      const fy = clamp(y * 16 + 10 - sy * 4 + side * ay * 3, y * 16 + 4, y * 16 + 14);
-      const sprite = sx === 0 ? p.sprite : vars.find((v) => v.size === p.sprite.size && v.form === (sx > 0 ? 1 : 0)) ?? p.sprite;
-      out.push({ ...p, sprite, fx, fy });
     }
   }
 
@@ -196,6 +167,8 @@ namespace SE {
     rise: LandRise | null = null, lifts: Float32Array | null = null, shade: Float32Array | null = null,
   ): void {
     const shadow = art.shift[LAND_SHIFT_MAX + SHADOW_SHIFT];
+    const rip = art.rippleCoast;
+    const rw = rip.size - 1;
     const top = rise ? rise.top : null;
     const bottom = rise ? rise.bottom : null;
     const depth = rise ? rise.depth : null;
@@ -257,6 +230,8 @@ namespace SE {
           const k = base + uy[n] * w + ux[n];
           px[k] = tone ? tone[uv[n]] : uv[n];
           occupied[k] = 1;
+          // Over the sea a crown hides the water: no surf or wave is drawn on it.
+          if (water[k] === 1) water[k] = 0;
         }
         continue;
       }
@@ -266,10 +241,15 @@ namespace SE {
         if (y < 0 || y >= h || x < 0 || x >= w) continue;
         const k = y * w + x;
         if (p.water && water[k] !== 1) continue;
+        // Corals lie under the water: its ripples and the shore's foam and lighter band show over them.
+        if (look.under && (rip.px[((oy + y) & rw) * rip.size + ((ox + x) & rw)] !== 0 || x < 2 || y < 2 || x >= w - 2 || y >= h - 2 ||
+          water[k - 1] !== 1 || water[k + 1] !== 1 || water[k - w] !== 1 || water[k + w] !== 1 ||
+          water[k - 2] !== 1 || water[k + 2] !== 1 || water[k - 2 * w] !== 1 || water[k + 2 * w] !== 1)) continue;
         // Nearer ground shows here (riseDepth, inlined: this runs for every sprite pixel).
         if (depth && y >= (top as Int16Array)[x] && y <= (bottom as Int32Array)[x] && depth[k] > ground + DEPTH_SLACK) continue;
         px[k] = tone ? tone[uv[n]] : uv[n];
         occupied[k] = 1;
+        if (!p.water && water[k] === 1) water[k] = 0;
       }
     }
   }
@@ -290,6 +270,8 @@ namespace SE {
     readonly x: Uint8Array; readonly y: Uint8Array; readonly v: Uint8Array;
     readonly shadowX: Int8Array; readonly shadowY: Int8Array;
     readonly plant: boolean; readonly tree: boolean;
+    /** Lies under the water's surface (corals): drawn below its ripples. */
+    readonly under: boolean;
   }
   const LOOKS = new WeakMap<LandSprite, SpriteLook>();
 
@@ -321,7 +303,7 @@ namespace SE {
     const look: SpriteLook = {
       x: Uint8Array.from(xs), y: Uint8Array.from(ys), v: Uint8Array.from(vs),
       shadowX: Int8Array.from(dxs), shadowY: Int8Array.from(dys),
-      plant: ob.group !== null, tree: ob.kind === 'tree',
+      plant: ob.group !== null, tree: ob.kind === 'tree', under: ob.kind === 'reef',
     };
     LOOKS.set(t, look);
     return look;

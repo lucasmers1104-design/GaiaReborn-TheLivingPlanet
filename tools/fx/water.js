@@ -1,117 +1,17 @@
 /* =============================================================================
- * SimEarth 2.0 — tidal wave and hurricane art
+ * SimEarth 2.0 — tidal wave art
  * -----------------------------------------------------------------------------
- * The hurricane's spiral cloud with its eye (one set per hemisphere), the
- * small forming storm, the tornado, fallen trees and driftwood, and the
- * ground textures: flood water by depth, its muddy backwash and wet ground.
- * The breaking wave lives in water-waves.js.
- * Light from the upper left. The spiral is a height field of cloud — arms on
- * a logarithmic spiral round a dense core — lit by its slope, so its bands
- * get a light edge on their upper-left flank and the eyewall's far side
- * catches the light. The southern set mirrors the height field, never the
- * finished pixels, and lights it again (docs/ereignisse-2026-10/stil.md).
- * Rotation loops: each frame turns the spiral by 1/frames of the angle
- * between two arms, and the cloud's texture lives in spiral coordinates,
- * so the last frame leads back into the first.
+ * Fallen trees and driftwood, and the ground textures: flood water by depth,
+ * its muddy backwash and wet ground. The breaking wave lives in
+ * water-waves.js; the hurricane, its weather and its tornadoes in storm.js,
+ * bolt.js and twister.js. Light from the upper left.
  * Style: docs/ereignisse-2026-10/stil.md · contract: tools/fx/catalog.js.
  * ========================================================================== */
 'use strict';
 
 const k = require('../terrain/kit');
 const P = require('../terrain/palette');
-const fx = require('./kit');
 const waves = require('./water-waves');
-
-/* ------------------------------------------------------------- storm -- */
-
-/**
- * The cloud puffs of a spiral storm that turns anticlockwise (north). Its
- * arms ({ angle, twist, from, to, size }, radii as shares of the half box)
- * wind clockwise outwards; puffs flow inwards along them by 1/frames of
- * their spacing a frame and depend on their radius only, so the loop
- * closes. The rings of towers round the eye turn by 1/frames of the gap
- * between two towers.
- */
-function stormPuffs(size, f, frames, o) {
-  const c = size / 2;
-  const turn = f / frames;
-  const puffs = [];
-  const put = (rho, theta, r) => puffs.push({ x: c + Math.cos(theta) * rho * c, y: c - Math.sin(theta) * rho * c, r });
-  for (const ring of o.rings) {
-    for (let n = 0; n < ring.count; n++) put(ring.rho, ring.angle + ((n + turn) / ring.count) * Math.PI * 2, ring.r);
-  }
-  for (const arm of o.arms) {
-    // Spaced along the arc, not the radius: a tight spiral needs more puffs.
-    const step = (arm.size * 0.7) / (c * Math.hypot(1, arm.twist));
-    for (let j = 0; ; j++) {
-      const rho = arm.from + (j - turn) * step;
-      if (rho > arm.to) break;
-      if (rho < arm.from) continue;
-      const along = (rho - arm.from) / (arm.to - arm.from);
-      const r = arm.size * (1 - along * along);
-      if (r < 0.8) continue;
-      const theta = arm.angle - arm.twist * Math.log(rho / arm.from) + Math.sin(rho * 23) * 0.06;
-      put(rho, theta, r);
-      // A smaller row along the outside of the band makes it lumpy.
-      put(rho + (r * 0.5) / c, theta - 0.1, r * 0.62);
-    }
-  }
-  return puffs;
-}
-
-/** Mirror the puffs left-right: the southern storm turns the other way, and is lit afresh. */
-function mirrored(size, puffs) {
-  return puffs.map((p) => ({ x: size - p.x, y: p.y, r: p.r }));
-}
-
-const CLOUD = ['ice0', 'ice1', 'ice2', 'ice3', 'ice4', 'white0'];
-
-/** Light the puffs from the upper left and open the eye: its far wall catches the light, its near wall lies in shadow. */
-function storm(size, puffs, eye) {
-  const t = fx.billow(new k.Tex(size, size), puffs, CLOUD);
-  if (eye <= 0) return t;
-  const c = size / 2;
-  const hole = (x, y) => Math.hypot(x + 0.5 - c, y + 0.5 - c) < eye;
-  t.each((x, y) => (hole(x, y) ? 0 : undefined));
-  return t.each((x, y) => {
-    if (hole(x, y) || t.get(x, y) === 0) return undefined;
-    if (hole(x + 1, y) || hole(x, y + 1)) return P.c(CLOUD[0]);
-    if (hole(x - 1, y) || hole(x, y - 1)) return P.c(CLOUD[CLOUD.length - 1]);
-    return undefined;
-  });
-}
-
-const HURRICANE = {
-  rings: [{ rho: 0.17, count: 6, r: 3.3, angle: 0 }, { rho: 0.36, count: 7, r: 4.8, angle: 0.4 }],
-  arms: [
-    { angle: 0.3, twist: 2.1, from: 0.3, to: 0.98, size: 4.2 },
-    { angle: 2.5, twist: 1.9, from: 0.3, to: 0.84, size: 3.6 },
-    { angle: 4.3, twist: 2.3, from: 0.3, to: 0.92, size: 3.9 },
-  ],
-};
-const SMALL = {
-  rings: [{ rho: 0, count: 1, r: 3.6, angle: 0 }, { rho: 0.26, count: 5, r: 3.0, angle: 0.2 }],
-  arms: [
-    { angle: 0.5, twist: 1.7, from: 0.26, to: 0.9, size: 2.8 },
-    { angle: 3.6, twist: 1.7, from: 0.26, to: 0.8, size: 2.5 },
-  ],
-};
-
-function hurricane(f) {
-  return storm(48, stormPuffs(48, f, 8, HURRICANE), 2.2);
-}
-
-function hurricaneSouth(f) {
-  return storm(48, mirrored(48, stormPuffs(48, f, 8, HURRICANE)), 2.2);
-}
-
-function stormSmall(f) {
-  return storm(32, stormPuffs(32, f, 2, SMALL), 0);
-}
-
-function stormSmallSouth(f) {
-  return storm(32, mirrored(32, stormPuffs(32, f, 2, SMALL)), 0);
-}
 
 /* -------------------------------------------------------- wind and wood -- */
 
@@ -189,61 +89,6 @@ function driftwood(v) {
   return t;
 }
 
-/* ----------------------------------------------------------- tornado -- */
-
-/** Rows of the funnel: it hangs from the cloud base and narrows to a point above the dust. */
-const FUNNEL_TOP = 3;
-const FUNNEL_FOOT = 28;
-const TORNADO_FRAMES = 6;
-
-/**
- * The tornado: a funnel swaying from a cloud base, banded by striations
- * that climb a pixel a frame six pixels apart (so the loop closes), a dust
- * whirl turning round its foot and debris flying round it. Lit as a
- * cylinder from the upper left.
- */
-function tornado(f) {
-  const t = new k.Tex(16, 32);
-  const turn = (f / TORNADO_FRAMES) * Math.PI * 2;
-  const cx = (y) => 8 + Math.sin(turn + y * 0.18) * 1.6 * Math.pow(Math.max(0, y - FUNNEL_TOP) / (FUNNEL_FOOT - FUNNEL_TOP), 1.2);
-  const half = (y) => 0.8 + 5.2 * Math.pow(Math.max(0, 1 - (y - FUNNEL_TOP) / (FUNNEL_FOOT - FUNNEL_TOP)), 1.8);
-  // Five dust puffs turn round the foot by a fifth of a turn over the loop.
-  const dust = (front) => {
-    const puffs = [];
-    for (let n = 0; n < 5; n++) {
-      const a = (n / 5) * Math.PI * 2 + turn / 5;
-      if ((Math.sin(a) >= 0) !== front) continue;
-      puffs.push({ x: 8 + Math.cos(a) * 4.6, y: 27.6 + Math.sin(a) * 1.5, r: 2 + Math.sin(a) * 0.5 });
-    }
-    if (front) puffs.push({ x: 8, y: 29.6, r: 2.4 });
-    return fx.billow(new k.Tex(16, 32), puffs, ['soil0', 'soil1', 'soil2', 'sand1']);
-  };
-  t.stamp(dust(false), 0, 0);
-  fx.billow(t, [{ x: 4, y: 2.5, r: 3.6 }, { x: 9, y: 1.8, r: 4.2 }, { x: 13, y: 3, r: 3.4 }, { x: 8, y: 4.4, r: 2.6 }], ['rock0', 'rock1', 'rock2', 'rock3']);
-  for (let y = FUNNEL_TOP; y <= FUNNEL_FOOT; y++) {
-    const c = cx(y);
-    const w = half(y);
-    for (let x = 0; x < 16; x++) {
-      const nx = (x + 0.5 - c) / w;
-      if (Math.abs(nx) > 1) continue;
-      const band = (((y + f + Math.round(nx * 2.5)) % TORNADO_FRAMES) + TORNADO_FRAMES) % TORNADO_FRAMES;
-      let light = -nx * 0.75 + 0.1 + (band === 0 ? 0.35 : band === 3 ? -0.3 : 0);
-      if (nx > 0.7) light = -1;
-      else if (nx < -0.7) light = 0.9;
-      t.set(x, y, P.c(light > 0.8 ? 'rock4' : light > 0.35 ? 'rock3' : light > -0.15 ? 'rock2' : light > -0.6 ? 'rock1' : 'rock0'));
-    }
-  }
-  // Debris on orbits round the funnel, one turn over the loop; only the near half of each orbit shows.
-  for (let n = 0; n < 5; n++) {
-    const y = 11 + n * 3.4;
-    const a = turn + n * 1.3;
-    if (Math.sin(a) < -0.2) continue;
-    t.set(Math.round(cx(y) + Math.cos(a) * (half(y) + 2)), Math.round(y + Math.sin(a)), P.c(n % 2 ? 'bark0' : 'soil0'));
-  }
-  t.stamp(dust(true), 0, 0);
-  return t;
-}
-
 /* ---------------------------------------------------------- textures -- */
 
 /**
@@ -296,46 +141,141 @@ function floodWater(f, look = FLOOD_LOOKS.water) {
   return t;
 }
 
-/** Puddles after the rain and a few damp dark pixels; transparent everywhere else. */
+/**
+ * Puddles after the rain, each one different: hollows gather where a coarse
+ * noise field dips, big lobed ones few and small ones many, with emptier
+ * stretches between, and curved runnels drain downhill; their banks fray
+ * with noise. Dark water, the far lower-right side reflecting the sky, a
+ * dark damp rim on the near upper-left bank and a dithered damp halo around
+ * the bigger ones; transparent everywhere else.
+ */
+const PUDDLE_RUNNELS = [ // quadratic curves [x0, y0, cx, cy, x1, y1, half width, meander]
+  [70, 4, 72, 22, 56, 30, 1.05, 0.9], // long and bending
+  [8, 98, 20, 106, 36, 101, 0.9, 0.4], // a shallow rut
+  [104, 62, 110, 70, 108, 80, 0.85, 0.5], // short
+];
+
 function wetGround() {
-  const t = new k.Tex(64, 64, true);
-  const body = P.c('water3');
-  const shine = P.c('water4');
-  const damp = P.c('mud0');
-  for (let by = 0; by < 64; by += 16) {
-    for (let bx = 0; bx < 64; bx += 16) {
-      if (k.hash(bx, by, 71) > 0.62) continue;
-      const cx = bx + 3 + k.hash(bx, by, 72) * 10;
-      const cy = by + 3 + k.hash(bx, by, 73) * 10;
-      const rx = 1.6 + k.hash(bx, by, 74) * 2.2;
-      const ry = 0.9 + k.hash(bx, by, 75) * 0.8;
-      const inside = (x, y) => ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2 <= 1;
-      for (let y = Math.floor(cy - ry - 1); y <= Math.ceil(cy + ry + 1); y++) {
-        for (let x = Math.floor(cx - rx - 1); x <= Math.ceil(cx + rx + 1); x++) {
-          if (inside(x, y)) {
-            // A puddle is a hollow: its far, lower-right side reflects the sky.
-            t.set(x, y, !inside(x + 1, y) || !inside(x, y + 1) ? shine : body);
-          } else if (inside(x + 1, y) || inside(x, y + 1)) {
-            t.set(x, y, damp);
-          }
-        }
+  const S = 128;
+  const t = new k.Tex(S, S, true);
+  const wrap = (d) => (((d % S) + S * 1.5) % S) - S / 2;
+  const wobble = k.fbm(S, 16, 2, 63);
+  const hollows = k.fbm(S, 4, 2, 74);
+  const curves = PUDDLE_RUNNELS.map(([x0, y0, cx, cy, x1, y1, hw, wind]) => Array.from({ length: 33 }, (_, i) => {
+    const s = i / 32;
+    const a = (1 - s) ** 2;
+    const b = 2 * s * (1 - s);
+    // It winds across its course and narrows at both ends.
+    const tx = (1 - s) * (cx - x0) + s * (x1 - cx);
+    const ty = (1 - s) * (cy - y0) + s * (y1 - cy);
+    const off = (wind * Math.sin(s * Math.PI * 2)) / Math.hypot(tx, ty);
+    return [a * x0 + b * cx + s * s * x1 - ty * off, a * y0 + b * cy + s * s * y1 + tx * off, hw * (0.45 + 0.55 * Math.sin(Math.PI * s) ** 0.5)];
+  }));
+
+  // Hollows where the ground dips, apart from each other and the runnels,
+  // biggest first; big and medium ones get side lobes so no two look alike,
+  // small ones only lie beside a bigger one. [cx, cy, rx, ry, angle]
+  const taken = curves.flat().map(([x, y]) => [x, y, 2]);
+  const lobes = [];
+  [8, 18, 14].forEach((want, kind) => {
+    for (let i = 0, n = 0; n < want && i < 8000; i++) {
+      const h = (m) => k.hash(i, m, 72 + kind);
+      const cx = h(1) * S;
+      const cy = h(2) * S;
+      if (h(3) > (hollows(cx | 0, cy | 0) - 0.4) * 4.5) continue;
+      const long = kind === 1 && h(8) < 0.35;
+      const rx = [7 + h(5) * 2.5, 3.2 + h(5) * 2.8, 2 + h(5) * 1.1][kind] * (long ? 1.6 : 1);
+      const ry = Math.max(1.5, long ? rx * 0.3 : rx * (kind === 0 ? 0.45 + h(6) * 0.15 : 0.4 + h(6) * 0.45));
+      const angle = (h(7) - 0.5) * 1.4;
+      const sides = kind === 0 ? 2 : kind === 1 && !long && h(9) < 0.5 ? 1 : 0;
+      const reach = rx * (sides ? 1.4 : 1);
+      const gap = (x, y, r) => Math.hypot(wrap(cx - x), wrap(cy - y)) - r - reach;
+      if (taken.some(([x, y, r]) => gap(x, y, r) < 2 + reach * 0.25)) continue;
+      if (kind === 2 && !taken.some(([x, y, r]) => r >= 3 && gap(x, y, r) < 8)) continue;
+      taken.push([cx, cy, reach]);
+      lobes.push([cx, cy, rx, ry, angle]);
+      for (let j = 0; j < sides; j++) {
+        const turn = h(10 + j) * Math.PI * 2;
+        lobes.push([cx + Math.cos(turn) * rx * 0.7, cy + Math.sin(turn) * ry * 0.8,
+          rx * (0.45 + h(12 + j) * 0.2), Math.max(1.3, ry * (0.6 + h(14 + j) * 0.3)), angle + (h(16 + j) - 0.5)]);
+      }
+      n++;
+    }
+  });
+
+  const water = new Uint8Array(S * S);
+  t.each((x, y) => {
+    // Small puddles fray less, so they keep a shape.
+    const fray = (wobble(x, y) - 0.5) * 0.7;
+    let p = -1;
+    for (const [cx, cy, rx, ry, a] of lobes) {
+      const dx = wrap(x + 0.5 - cx);
+      const dy = wrap(y + 0.5 - cy);
+      const u = (dx * Math.cos(a) + dy * Math.sin(a)) / rx;
+      const v = (dy * Math.cos(a) - dx * Math.sin(a)) / ry;
+      p = Math.max(p, 1 - Math.hypot(u, v) + fray * Math.min(1, ry / 3));
+    }
+    let q = -1;
+    for (const pts of curves) {
+      for (const [px, py, hw] of pts) q = Math.max(q, 1 - Math.hypot(wrap(x + 0.5 - px), wrap(y + 0.5 - py)) / hw);
+    }
+    water[y * S + x] = p > 0 || q > 0 ? 1 : 0;
+  });
+  const idx = (x, y) => (((y % S) + S) % S) * S + (((x % S) + S) % S);
+  const W = (x, y) => water[idx(x, y)] === 1;
+
+  // Pieces of water or dry land under 5 px read as noise: fill or drop them.
+  const seen = new Uint8Array(S * S);
+  for (let i = 0; i < S * S; i++) {
+    if (seen[i]) continue;
+    const kind = water[i];
+    const part = [i];
+    seen[i] = 1;
+    for (let j = 0; j < part.length; j++) {
+      const x = part[j] % S;
+      const y = (part[j] - x) / S;
+      for (const n of [idx(x + 1, y), idx(x - 1, y), idx(x, y + 1), idx(x, y - 1)]) {
+        if (!seen[n] && water[n] === kind) { seen[n] = 1; part.push(n); }
       }
     }
+    if (part.length < 5) for (const j of part) water[j] = 1 - kind;
   }
-  for (let y = 0; y < 64; y++) {
-    for (let x = 0; x < 64; x++) if (t.get(x, y) === 0 && k.hash(x, y, 77) < 0.025) t.set(x, y, damp);
-  }
+
+  const rim = P.c('mud0');
+  t.each((x, y) => {
+    if (W(x, y)) {
+      // Steps to the bank towards the light (near) and away from it (far).
+      const run = (sx, sy) => { let d = 1; while (d < 8 && W(x + sx * d, y + sy * d)) d++; return d; };
+      const far = Math.min(run(1, 0), run(0, 1));
+      const near = Math.min(run(-1, 0), run(0, -1));
+      const wide = near + far >= 6;
+      if (far === 1) return P.c(wide ? 'water5' : 'water4');
+      if (far === 2 && wide) return P.c(near > 2 && k.hash(x, y, 64) < 0.07 ? 'white0' : 'water4');
+      if (near === 1) return P.c(wide ? 'water1' : 'water2');
+      return P.c(near / (near + far) > 0.5 ? 'water3' : 'water2');
+    }
+    if (W(x + 1, y) || W(x, y + 1)) return rim;
+    // The bank is soaked, the wider the more water is near.
+    let wet = 0;
+    let d = 9;
+    for (let oy = -4; oy <= 4; oy++) {
+      for (let ox = -4; ox <= 4; ox++) {
+        if (!water[idx(x + ox, y + oy)]) continue;
+        wet++;
+        d = Math.min(d, Math.hypot(ox, oy));
+      }
+    }
+    const reach = 1 + (wet / 81) * 7;
+    const dense = 0.7 * (1 - (d - 1) / reach) + (wobble(x + 31, y + 17) - 0.5) * 0.3;
+    if (d > reach || k.BAYER4[y & 3][x & 3] >= dense * 16) return undefined;
+    return P.c(d < 1.5 ? 'mud1' : 'mud2');
+  });
   return t;
 }
 
 module.exports = {
   sprites: {
     wave_break: waves.waveBreak,
-    hurricane,
-    hurricane_south: hurricaneSouth,
-    tornado,
-    storm_small: stormSmall,
-    storm_small_south: stormSmallSouth,
     fallen_tree: fallenTree,
     driftwood,
   },

@@ -722,7 +722,7 @@ namespace SE {
 
     /** Altitude in metres, as the Examine window reports it. */
     altitudeMeters(i: number): number {
-      return Math.round(this.elevation[i] * ELEVATION_KM * 1000);
+      return Math.round(elevationMeters(this.elevation[i]));
     }
 
     /** Rainfall in cm/year, as the Examine window reports it. */

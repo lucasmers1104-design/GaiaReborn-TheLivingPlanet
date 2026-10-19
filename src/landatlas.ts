@@ -42,6 +42,8 @@ namespace SE {
     readonly rippleCoast: LandTex;
     readonly rippleOcean: LandTex;
     readonly algae: LandTex;
+    /** Beach sand along the shores reefs.ts marks (landshore.ts). */
+    readonly beach: LandTex;
     readonly sprites: Readonly<Record<string, readonly LandSprite[]>>;
     /** shift[by + LAND_SHIFT_MAX][index] → index moved `by` steps along its ramp. */
     readonly shift: Uint8Array[] = [];
@@ -49,7 +51,11 @@ namespace SE {
     readonly rgba: Uint32Array;
     /** Water ramp, deep to shallow; the last step is the foam. */
     readonly water: readonly number[];
-    /** 1 where a palette index belongs to the water ramp. */
+    /** Lagoon turquoise, dark to light (reefs.ts). */
+    readonly waterWarm: readonly number[];
+    /** Fade over the first open-ocean tile beside coastal sea, from the ocean outwards to the shelf edge (landwater.ts). */
+    readonly shelf: readonly number[];
+    /** 1 where a palette index belongs to the water, lagoon or shelf ramp. */
     readonly isWater: Uint8Array;
 
     private constructor(px: Uint8Array, m: TerrainManifest) {
@@ -71,6 +77,7 @@ namespace SE {
       this.rippleCoast = tex(ov.ripple_coast.rect, ov.ripple_coast.size);
       this.rippleOcean = tex(ov.ripple_ocean.rect, ov.ripple_ocean.size);
       this.algae = tex(ov.algae_film.rect, ov.algae_film.size);
+      this.beach = tex(ov.beach_sand.rect, ov.beach_sand.size);
 
       const sprites: Record<string, LandSprite[]> = {};
       for (const id of Object.keys(m.objects)) {
@@ -97,8 +104,10 @@ namespace SE {
       this.rgba = new Uint32Array(256);
       m.palette.forEach((c, i) => { this.rgba[i] = rgbaWord(c); });
       this.water = m.ramps.water;
+      this.waterWarm = m.ramps.waterWarm;
+      this.shelf = m.ramps.shelf;
       this.isWater = new Uint8Array(256);
-      for (const i of this.water) this.isWater[i] = 1;
+      for (const i of [...this.water, ...this.waterWarm, ...this.shelf]) this.isWater[i] = 1;
     }
 
     /** Art from atlas pixels already turned into palette indices (row-major, manifest width). */

@@ -15,7 +15,7 @@
  *   stages       a land tile that crosses into another TERRAFORM_STAGES band
  *                (with a band of hysteresis at the edges) takes that stage's
  *                look, from the succession ladder of its climate and plants:
- *                  Küste        sand (Strand on warm coasts), bare
+ *                  Küste        sand, bare
  *                  Tiefland,    soil, and the climax of its climate with the
  *                  Hügel        plants of the land around it: meadow, steppe,
  *                               savanna, forest, marsh … (bare Rohboden on a

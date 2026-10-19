@@ -1,15 +1,19 @@
 /* =============================================================================
  * SimEarth 2.0 — ground and sea art for the Edit window
  * -----------------------------------------------------------------------------
- * The sea is shaded continuously by depth instead of being two flat tiles, so
- * shelves, trenches and lagoons read at a glance; the old Coast and Ocean
- * sprites stay on top as a sparse ripple texture, which keeps it pixel art.
+ * The sea shows two flat classes, coastal sea and open ocean, like the pixel
+ * map; the old Coast and Ocean sprites stay on top as a sparse ripple
+ * texture. Depth (DEPTH_RAMP) only shows with the Oceans layer off and in the
+ * overview's depth maps.
  * Every coast gets a line of surf, every ground one of four mirrored variants
  * picked per tile, so large plains no longer show a repeating stamp.
  * ========================================================================== */
 
 namespace SE {
-  /** Sea colour by elevation below sea level: from the abyss to the lagoon. */
+  /** Lagoon turquoise as the pixel map draws it (waterWarm), for the maps that show the sea flat. */
+  export const LAGOON_RGB: Rgb = ((c) => [c[0], c[1], c[2]] as Rgb)(TERRAIN_MANIFEST.palette[TERRAIN_MANIFEST.ramps.waterWarm[SEA_LAGOON_STEP]]);
+
+  /** Sea colour by elevation below sea level: from the abyss to the shore. */
   export const DEPTH_RAMP: readonly (readonly [number, Rgb])[] = [
     [-1.0, [10, 32, 72]],
     [-0.6, [16, 52, 104]],

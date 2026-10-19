@@ -1,6 +1,6 @@
 {
   "name": "simearth-2-0",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "private": true,
   "description": "Ein Natur- und Evolutionsspiel als moderner Nachfolger von SimEarth: The Living Planet (Maxis, 1990).",
   "scripts": {
@@ -8,7 +8,7 @@
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:full",
-    "test:quick": "node --test --test-reporter=dot tests/sim.test.js tests/tectonics.test.js tests/altitude.test.js tests/landrender.test.js tests/terrain.test.js tests/ocean.test.js tests/oceanchem.test.js tests/oxygen.test.js tests/civ.test.js tests/civart.test.js tests/conflict.test.js tests/hazards.test.js tests/hazard-fire.test.js tests/hazard-quake.test.js tests/hazard-water.test.js tests/fxatlas.test.js tests/epochs.test.js tests/calendar.test.js tests/species.test.js tests/portraits.test.js tests/films.test.js tests/faunalore.test.js tests/coal.test.js tests/lycopsids.test.js tests/cacti.test.js tests/savannatrees.test.js tests/version.test.js",
+    "test:quick": "node --test --test-reporter=dot tests/sim.test.js tests/tectonics.test.js tests/altitude.test.js tests/landrender.test.js tests/terrain.test.js tests/ocean.test.js tests/oceanchem.test.js tests/oxygen.test.js tests/civ.test.js tests/civart.test.js tests/conflict.test.js tests/hazards.test.js tests/hazard-fire.test.js tests/hazard-quake.test.js tests/hazard-water.test.js tests/fxatlas.test.js tests/epochs.test.js tests/calendar.test.js tests/species.test.js tests/portraits.test.js tests/films.test.js tests/faunalore.test.js tests/coal.test.js tests/lycopsids.test.js tests/cacti.test.js tests/savannatrees.test.js tests/reefs.test.js tests/version.test.js",
     "test:full": "npm run build && node --test --test-reporter=dot \"tests/*.test.js\"",
     "probe": "node tools/headless.js 2000 12345 777 --life",
     "version": "npm run build"

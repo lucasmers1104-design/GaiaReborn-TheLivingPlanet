@@ -46,6 +46,10 @@ var SE;
     SE.SNOW_LINE = 0.78;
     /** Safety valve so a backgrounded tab cannot spiral on catch-up ticks. */
     SE.MAX_TICKS_PER_FRAME = 64;
+    /** A frame runs further due ticks only while it has spent less than this, ms (the first always runs). */
+    SE.SIM_BUDGET_MS = 8;
+    /** Tick intervals the game loop may still owe after a frame; beyond that the planet runs slower than set. */
+    SE.SIM_BACKLOG_TICKS = 2;
     /**
      * The standard 16-colour EGA palette, kept for the few UI colours that still
      * name it. The tile view's own palette is SPRITE_PALETTE in sprites.ts.
@@ -112,8 +116,8 @@ var SE;
     ];
     /** Base colour per biome, used by the Map window and legends. */
     SE.BIOME_COLORS = [
-        [48, 146, 182], // Coast
-        [24, 78, 136], // Ocean
+        [48, 136, 180], // Coast: the pixel map's coastal sea (water4)
+        [24, 78, 136], // Ocean: its open ocean (water2)
         [160, 155, 142], // Rock
         [232, 240, 240], // Arctic
         [36, 98, 78], // Boreal
@@ -180,6 +184,8 @@ var SE;
      * meadow and rock belt are about 0.9 km each.
      */
     SE.ALPINE_MIN_ELEVATION = 0.2;
+    /** Hill country ("Bergland") begins at about 500 m: no beach from here up. */
+    SE.UPLAND_ELEVATION = 0.11;
     SE.TREELINE_TEMP = -3;
     SE.ROCKBELT_TEMP = -9;
     SE.SNOW_TEMP = -15;
@@ -890,18 +896,53 @@ var SE;
     SE.SAVANNA_TREE_REACH = 6;
     /** Share of savanna trees that are baobabs; the others are Schirmbäume. */
     SE.SAVANNA_BAOBAB_SHARE = 1 / 8;
-    /* ------------------------------------------------------ beaches, palms -- */
-    // src/beaches.ts: tropical sandy beaches and coconut palms, drawn only.
-    /** Land below this elevation can be beach (higher coasts are cliffs). */
-    SE.BEACH_MAX_ELEVATION = 0.06;
-    /** Threshold of the coast noise (0..1) under which a warm coast is beach: stretches, not every tile. */
-    SE.BEACH_SHARE = 0.55;
-    /** Years after the flowering plants until palms show (first palms ~85 Ma). */
-    SE.PALM_DELAY_YEARS = 45e6;
-    /** Share of tropical and of warm beach tiles that show palms, and of those a pair. */
-    SE.PALM_SHARE_TROPICAL = 0.6;
-    SE.PALM_SHARE_WARM = 0.3;
-    SE.PALM_PAIR_SHARE = 0.3;
+    /* ---------------------------------------- reefs, lagoons, beaches, palms -- */
+    // src/reefs.ts: derived from the simulation's state when drawing, never saved.
+    /** Water temperature (°C) from which reef builders build reefs: warm shallow sea only. */
+    SE.CORAL_MIN_TEMP = 20;
+    /**
+     * Densities are read in levels of this size (0..3): the picture changes only when a population
+     * crosses one. Settled corals and fish hold about 0.5, mid-level, away from the thresholds.
+     */
+    SE.REEF_DENSITY_STEP = 0.2;
+    /** Grazing fish count from this density, as a class counts as living on a tile for the map (HERD_MIN_DENSITY). */
+    SE.REEF_GRAZER_MIN = 0.05;
+    /**
+     * Reef builders living on or within REEF_LARVA_REACH tiles (density from REEF_BUILDER_MIN, as a
+     * class counts as living on a tile for the map) build a reef; from density level REEF_WIDE_LEVEL
+     * (REEF_DENSITY_STEP each) a larger one. Settled cnidarians hold 0.1–0.2 on random planets, ~0.5 on today's Earth.
+     */
+    SE.REEF_BUILDER_MIN = 0.05;
+    SE.REEF_WIDE_LEVEL = 2;
+    SE.REEF_LARVA_REACH = 2;
+    /** Reefs grow at most this many tiles from land: in shallow water along the coast, not on far shelves and ridges. */
+    SE.REEF_SHORE_REACH = 3;
+    /** A river carrying this much (riverFlow; on today's Earth the mouths carry 100–430) muddies the sea within REEF_RIVER_REACH tiles of its mouth: no reef, no beach. */
+    SE.REEF_RIVER_FLOW = 200;
+    SE.REEF_RIVER_REACH = 2;
+    /** Reef centres: at most one per cell of this many tiles (grid offset by the seed), at least REEF_SPACING tiles apart. */
+    SE.REEF_CELL = 8;
+    SE.REEF_SPACING = 5;
+    /** Coral patches per reef tile, and the share of them grazing fish grind to sand at full fish level. */
+    SE.REEF_PATCHES = 3;
+    SE.REEF_FISH_SAND = 0.3;
+    /** Land tiles up to this many tiles from a grazed reef carry its white beach. */
+    SE.BEACH_REACH = 2;
+    /** Share of that coast with a beach; small islands (≤ BEACH_ISLAND_TILES) get an almost closed ring. */
+    SE.BEACH_SHARE = 0.8;
+    SE.BEACH_ISLAND_TILES = 6;
+    SE.BEACH_ISLAND_SHARE = 0.95;
+    /** Shell beaches: share of warm coast tiles beside molluscs (density level ≥ SHELL_MIN_LEVEL). */
+    SE.SHELL_BEACH_SHARE = 0.12;
+    SE.SHELL_MIN_LEVEL = 1;
+    /**
+     * Palms show only from this many years before the present: the oldest palm
+     * fossils, Sabalites from the Late Cretaceous, are about 86–84 million years old.
+     */
+    SE.PALM_FIRST_YEARS_AGO = 86e6;
+    /** Palms per beach tile by hash: none below PALM_ONE, one below PALM_PAIR, else a pair (60 / 30 / 10 %). */
+    SE.PALM_ONE = 0.6;
+    SE.PALM_PAIR = 0.9;
     /* ----------------------------------------------------------- time scale -- */
     let TimeScale;
     (function (TimeScale) {
@@ -1141,11 +1182,14 @@ var SE;
     /** Strength per tick: gained over warm sea, lost over cooler sea and over land. */
     SE.HURRICANE_GAIN = 0.25;
     SE.HURRICANE_SEA_LOSS = 0.3;
-    SE.HURRICANE_LAND_LOSS = 0.8;
+    /** Slow enough that a strong storm crosses a good stretch of a continent, raining itself out (4 → 0 in 20 ticks). */
+    SE.HURRICANE_LAND_LOSS = 0.2;
     /** Ticks a storm moves at most. */
-    SE.HURRICANE_TRACK_MAX = 24;
+    SE.HURRICANE_TRACK_MAX = 40;
     /** Below this latitude it moves west with the trade winds, beyond it recurves east. */
     SE.HURRICANE_RECURVE_LAT = 30;
+    /** How much its east–west speed (tiles per tick) may change per tick: it recurves in a bend over ~8 ticks, never a U-turn. */
+    SE.HURRICANE_TURN = 0.25;
     /** Poleward drift in tiles per tick, with a hashed jitter of ± half HURRICANE_DRIFT_JITTER. */
     SE.HURRICANE_DRIFT = 0.3;
     SE.HURRICANE_DRIFT_JITTER = 0.2;
@@ -1175,6 +1219,25 @@ var SE;
     SE.TORNADO_VEGETATION_KEEP = 0.5;
     SE.TORNADO_LIFE_LOSS = 0.3;
     SE.TORNADO_CITY_LOSS = 0.2;
+    /** Lightning bolts per tick, hashed from MIN to MAX by strength band: below 2, 2 to 3, from 3 on (hazardstorm.ts). */
+    SE.STORM_STRIKES_MIN = [0, 1, 2];
+    SE.STORM_STRIKES_MAX = [1, 2, 4];
+    /** Share of the bolts in ring 1, 2 and 3 of the eye (the eyewall and the bands); none in the calm eye. */
+    SE.STORM_STRIKE_RINGS = [0.3, 0.3, 0.4];
+    /** A bolt on land scorches the ground, kills this much life and costs a city this share. */
+    SE.STORM_STRIKE_LIFE_LOSS = 0.15;
+    SE.STORM_STRIKE_CITY_LOSS = 0.05;
+    /** Plant cover from which a bolt leaves scorched ground. */
+    SE.STORM_SCORCH_COVER = 0.2;
+    /** Chance that a bolt on dry plants (CHAIN_FIRE_COVER, CHAIN_FIRE_MOISTURE, not soaked) sets them on fire. */
+    SE.STORM_FIRE_CHANCE = 0.5;
+    /** Over land from this strength on, rain floods the eye and ring 1 where land lies below STORM_FLOOD_LOW or carries a river. */
+    SE.STORM_FLOOD_MIN = 2;
+    SE.STORM_FLOOD_LOW = 0.08;
+    /** The rain water stands this deep (shallow) and runs off after STORM_FLOOD_TICKS plus a hashed 0..STORM_FLOOD_SPAN ticks. */
+    SE.STORM_FLOOD_DEPTH = 0.008;
+    SE.STORM_FLOOD_TICKS = 4;
+    SE.STORM_FLOOD_SPAN = 3;
     /* Earthquake (hazardquake.ts). */
     /** Magnitude within QUAKE_PLATE_ROWS rows of a plate boundary, and elsewhere; the fissure is 2·M + 1 tiles long. */
     SE.QUAKE_PLATE_ROWS = 6;
@@ -1497,6 +1560,172 @@ var SE;
         return `vor ${formatYears(years).replace(/Jahre$/, 'Jahren').replace(/^1 Jahr$/, 'einem Jahr')}`;
     }
     SE.formatYearsAgo = formatYearsAgo;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — developer mode: endless Ω and EP, every step and group open
+ *
+ * Remove before release (README "Entwicklermodus vor Release entfernen"):
+ * set DEV_MODE_AVAILABLE to false, or delete this file, take it out of
+ * tsconfig.json and remove every line marked DEVMODE (grep -rn DEVMODE src css).
+ * Never saved with a planet; Node (tests, probes) always runs with it off.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Release switch: false hides the title switch and turns the mode off for good. */
+    SE.DEV_MODE_AVAILABLE = true;
+    SE.devMode = { on: false };
+    function isDevMode() {
+        return SE.DEV_MODE_AVAILABLE && SE.devMode.on;
+    }
+    SE.isDevMode = isDevMode;
+    const DEV_MODE_KEY = 'simearth2.devmode';
+    /** The title screen's switch; remembered in this browser only. */
+    function devModeToggle() {
+        try {
+            SE.devMode.on = window.localStorage.getItem(DEV_MODE_KEY) === '1';
+        }
+        catch { /* storage blocked */ }
+        const input = SE.make('input');
+        input.type = 'checkbox';
+        input.id = 'dev-mode';
+        input.checked = SE.devMode.on;
+        input.addEventListener('change', () => {
+            SE.devMode.on = input.checked;
+            try {
+                window.localStorage.setItem(DEV_MODE_KEY, SE.devMode.on ? '1' : '0');
+            }
+            catch { /* storage blocked */ }
+        });
+        const label = SE.make('label', 'settings-label', 'Entwicklermodus (∞ Energie, ∞ EP, alles frei)');
+        label.htmlFor = input.id;
+        const row = SE.make('div', 'settings-row title-dev');
+        row.append(input, label);
+        return row;
+    }
+    SE.devModeToggle = devModeToggle;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — performance display (F3)
+ * -----------------------------------------------------------------------------
+ * Frame, tick, redraw, chunk and terrain-field timings, averaged over the
+ * last second with their maximum. app.ts, render.ts and landview.ts report
+ * here; hidden, every report returns at once, and the text is rewritten at
+ * most twice a second.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    class PerfStat {
+        constructor() {
+            this.sum = 0;
+            this.n = 0;
+            this.max = 0;
+        }
+        add(v) {
+            this.sum += v;
+            this.n++;
+            if (v > this.max)
+                this.max = v;
+        }
+    }
+    const PERF_KEYS = ['frame', 'gap', 'tick', 'steps', 'base', 'chunks', 'pending', 'field', 'tiles', 'full'];
+    const perfWindow = () => Object.fromEntries(PERF_KEYS.map((k) => [k, new PerfStat()]));
+    /** Half a second per window; the display joins the last two. */
+    const PERF_WINDOW_MS = 500;
+    class PerfHud {
+        constructor() {
+            this.el = null;
+            this.on = false;
+            this.at = 0;
+            this.older = perfWindow();
+            this.newer = perfWindow();
+            this.cur = perfWindow();
+        }
+        toggle() {
+            this.on = !this.on;
+            if (!this.el)
+                this.el = document.body.appendChild(SE.make('div', 'perf-hud'));
+            this.el.hidden = !this.on;
+            this.older = perfWindow();
+            this.newer = perfWindow();
+            this.cur = perfWindow();
+            this.at = performance.now();
+            if (this.on)
+                this.el.textContent = '…';
+        }
+        /** End of a frame: ms since the last one began, ms this one worked. */
+        frame(gap, work) {
+            if (!this.on)
+                return;
+            this.cur.gap.add(gap);
+            this.cur.frame.add(work);
+            const now = performance.now();
+            if (now - this.at < PERF_WINDOW_MS)
+                return;
+            this.at = now;
+            this.older = this.newer;
+            this.newer = this.cur;
+            this.cur = perfWindow();
+            this.render();
+        }
+        tick(ms) {
+            if (this.on)
+                this.cur.tick.add(ms);
+        }
+        ticksInFrame(n) {
+            if (this.on)
+                this.cur.steps.add(n);
+        }
+        drawBase(ms) {
+            if (this.on)
+                this.cur.base.add(ms);
+        }
+        chunks(composed, pending) {
+            if (!this.on)
+                return;
+            this.cur.chunks.add(composed);
+            this.cur.pending.add(pending ? 1 : 0);
+        }
+        /** TerrainField.refresh: ms and tiles read again (-1: all). */
+        field(ms, tiles) {
+            if (!this.on)
+                return;
+            this.cur.field.add(ms);
+            if (tiles >= 0)
+                this.cur.tiles.add(tiles);
+            else
+                this.cur.full.add(1);
+        }
+        render() {
+            if (!this.el)
+                return;
+            const w = this.older;
+            const v = this.newer;
+            const joined = (k) => {
+                const s = new PerfStat();
+                s.sum = w[k].sum + v[k].sum;
+                s.n = w[k].n + v[k].n;
+                s.max = Math.max(w[k].max, v[k].max);
+                return s;
+            };
+            const span = (w.gap.sum + v.gap.sum) / 1000 || 1;
+            const mean = (s) => (s.n > 0 ? s.sum / s.n : 0).toFixed(1);
+            const frame = joined('frame');
+            const tick = joined('tick');
+            const steps = joined('steps');
+            const base = joined('base');
+            const chunks = joined('chunks');
+            const field = joined('field');
+            const tiles = joined('tiles');
+            this.el.textContent = [
+                `Bilder ${(frame.n / span).toFixed(0)}/s  Bild Ø ${mean(frame)} max ${frame.max.toFixed(1)} ms  Abstand max ${joined('gap').max.toFixed(0)} ms`,
+                `Ticks ${(tick.n / span).toFixed(1)}/s  Ø ${mean(tick)} max ${tick.max.toFixed(1)} ms  je Bild Ø ${(steps.n > 0 ? steps.sum / steps.n : 0).toFixed(2)} max ${steps.max}`,
+                `drawBase ${(base.n / span).toFixed(1)}/s  Ø ${mean(base)} max ${base.max.toFixed(1)} ms`,
+                `Chunks je Bild Ø ${(frame.n > 0 ? chunks.sum / frame.n : 0).toFixed(2)} max ${chunks.max}  pending ${joined('pending').sum}×`,
+                `Feld ${(field.n / span).toFixed(1)}/s  Ø ${mean(field)} max ${field.max.toFixed(1)} ms  Kacheln Ø ${tiles.n > 0 ? Math.round(tiles.sum / tiles.n) : '–'} max ${tiles.max}  voll ${joined('full').n}×`,
+            ].join('\n');
+        }
+    }
+    SE.perfHud = new PerfHud();
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — species art registry
@@ -2221,7 +2450,7 @@ var SE;
             //   end-Permian). A single curved horn-shaped cup with growth wrinkles standing on its tip, a
             //   crown of short tentacles at the top opening. Farben: grey-brown horn, orange tentacles.
             {
-                name: 'Runzelkorallen', ma: 460, art: [
+                name: 'Runzelkorallen', ma: 460, reefBuilder: 'rugose', art: [
                     line('orange', 2.2, 'M11 9 L7.5 4.5'),
                     line('orange', 2.2, 'M13.5 8 L12 3'),
                     line('orange', 2.2, 'M16 7.5 L16.5 2.5'),
@@ -2240,7 +2469,7 @@ var SE;
             //   reef builders). A branching staghorn colony like antlers, pale polyp tips. Farben: coral
             //   orange/pink branches, pale tips.
             {
-                name: 'Steinkorallen', ma: 240, art: [
+                name: 'Steinkorallen', ma: 240, reefBuilder: 'stony', art: [
                     line('shell', 2.8, 'M16 22 L16.5 12 L14.5 4.5'),
                     line('coral', 3.4, 'M16 29.5 L16 21.5'),
                     line('coral', 2.8, 'M16 22 L9.5 15.5 L7 5'),
@@ -3129,7 +3358,7 @@ var SE;
             //   fin, gill cover and symmetric forked tail. Farben: green-gold with dark vertical bars,
             //   orange fins.
             {
-                name: 'Echte Knochenfische', ma: 240, art: [
+                name: 'Echte Knochenfische', ma: 240, reefGrazer: true, art: [
                     { f: 'orange', d: 'M8.5 16 L3 9.6 L5.5 16 L3 22.4 Z' },
                     { f: 'orange', d: 'M11.5 11.5 L13 7 L14.5 9.8 L16 6.5 L17.5 9.6 L19 7 L20.5 10.5 Z' },
                     { f: 'orange', d: 'M15 21.2 L14 25 L18.2 21.8 Z' },
@@ -17270,7 +17499,7 @@ var SE;
         }
         /** Altitude in metres, as the Examine window reports it. */
         altitudeMeters(i) {
-            return Math.round(this.elevation[i] * SE.ELEVATION_KM * 1000);
+            return Math.round(SE.elevationMeters(this.elevation[i]));
         }
         /** Rainfall in cm/year, as the Examine window reports it. */
         rainfallCm(i) {
@@ -18560,6 +18789,21 @@ var SE;
             return Math.min(-1e-3, SE.COAST_DEPTH * (depth / SHELF_DEPTH));
         return SE.COAST_DEPTH + (-1 - SE.COAST_DEPTH) * Math.min(1, (depth - SHELF_DEPTH) / (ABYSS_DEPTH - SHELF_DEPTH));
     }
+    SE.seaElevation = seaElevation;
+    /** Sea depth (m) of an elevation: the inverse of seaElevation, so every planet reads its depths on today's Earth's scale. */
+    function seaDepthMeters(elevation) {
+        const d = Math.max(0, -elevation);
+        const shelf = -SE.COAST_DEPTH;
+        if (d <= shelf)
+            return SHELF_DEPTH * (d / shelf);
+        return SHELF_DEPTH + (ABYSS_DEPTH - SHELF_DEPTH) * Math.min(1, (d - shelf) / (1 - shelf));
+    }
+    SE.seaDepthMeters = seaDepthMeters;
+    /** Height (m) of an elevation, negative below sea level: land linear in ELEVATION_KM, the sea by seaDepthMeters. */
+    function elevationMeters(elevation) {
+        return elevation < 0 ? -seaDepthMeters(elevation) : elevation * SE.ELEVATION_KM * 1000;
+    }
+    SE.elevationMeters = elevationMeters;
     function decodeBase64(text) {
         const bin = atob(text);
         const out = new Uint8Array(bin.length);
@@ -23218,6 +23462,8 @@ var SE;
                 state = 'available';
             else
                 state = 'partial';
+            if (SE.isDevMode())
+                state = 'available'; // DEVMODE: develop() still needs a founding site
             // A parent that was developed but has died out still leaves the node
             // visibly reachable: the condition says what to do about it.
             void lineage;
@@ -23319,7 +23565,7 @@ var SE;
                     kind: 'cost',
                     label: `Kosten: ${n.cost} Evolutionspunkte`,
                     need: `${Math.ceil(n.cost - evo.ep)} weitere EP`,
-                    met: evo.ep >= n.cost,
+                    met: SE.isDevMode() || evo.ep >= n.cost, // DEVMODE
                     detail: `vorhanden: ${Math.floor(evo.ep)} EP`,
                 });
             }
@@ -23338,6 +23584,9 @@ var SE;
         /* ---- acting ---- */
         /** Every condition but the price holds: the step only waits to be paid for. */
         static isReady(status) {
+            // DEVMODE: the forced 'available' says nothing about nature; spontaneous steps keep the real conditions.
+            if (SE.isDevMode())
+                return status.conds.every((c) => c.met || c.kind === 'cost'); // DEVMODE
             return status.state === 'available' ||
                 (status.state === 'partial' && status.conds.every((c) => c.met || c.kind === 'cost'));
         }
@@ -23363,8 +23612,8 @@ var SE;
             const sites = this.foundingSites(world, params, n);
             if (sites.length === 0)
                 return { ok: false, reason: 'Kein geeigneter Lebensraum gefunden.' };
-            if (!spontaneous)
-                evo.ep -= n.cost;
+            if (!spontaneous && !SE.isDevMode())
+                evo.ep -= n.cost; // DEVMODE
             evo.developed.set(id, { tick: world.ticks, years: world.absoluteYears, spontaneous: spontaneous || undefined });
             evo.extinct.delete(id);
             evo.readySince.delete(id);
@@ -27033,6 +27282,36 @@ var SE;
             runs.push(run);
     }
     SE.hazardRunUp = hazardRunUp;
+    /**
+     * Water standing on the land tiles `tiles` where it falls, not running up
+     * from the sea (rain): tile m floods `depth` deep at hazard age at[m] and
+     * runs off at off[m], at least FLOOD_HOLD_TICKS later. Land under standing
+     * water or another hazard stays as it is. The water rises at the next
+     * hazardStepFloods whose tick holds at[m].
+     */
+    function hazardStandWater(world, h, tiles, depth, at, off) {
+        const runs = h.wave?.runs ?? h.storm?.runs;
+        if (!runs)
+            return;
+        const hz = world.hazards;
+        const taken = new Set();
+        for (const r of runs)
+            r.tiles.forEach((i, m) => { if (floodDryTick(r.off[m]) >= h.age)
+                taken.add(i); });
+        const run = { front: [], height: [], steps: 0, born: h.age, tiles: [], reach: [], at: [], off: [], depth: [] };
+        tiles.forEach((i, m) => {
+            if (world.elevation[i] < 0 || taken.has(i) || (hz.tile[i] !== SE.HazardTile.None && hz.tile[i] !== SE.HazardTile.Wet))
+                return;
+            run.tiles.push(i);
+            run.reach.push(1);
+            run.at.push(at[m]);
+            run.off.push(off[m]);
+            run.depth.push(depth);
+        });
+        if (run.tiles.length > 0)
+            runs.push(run);
+    }
+    SE.hazardStandWater = hazardStandWater;
     /** One tick of every run; finished runs drop out. */
     function hazardStepFloods(world, runs) {
         let n = 0;
@@ -27074,6 +27353,7 @@ var SE;
  * warm sea and losing it over cool sea and land. It soaks a strip five tiles
  * wide, throws forests and, making landfall strong, pushes a storm surge up
  * the coast through the same run-up, spinning off tornadoes (hazardtornado.ts).
+ * Its lightning and its rain floods over land are in hazardstorm.ts.
  * The hazard lasts until its strip dries.
  * ========================================================================== */
 var SE;
@@ -27429,12 +27709,34 @@ var SE;
         }
         st.wet.length = n;
     }
-    /** One tile on: west in the tropics, east beyond, drifting poleward; strength follows the sea below. */
+    /** East–west course at row y: west with the trade winds in the tropics, east beyond. */
+    function course(y) {
+        return Math.abs(SE.latitudeDeg(y)) < SE.HURRICANE_RECURVE_LAT ? SE.windDirection(y) : 1;
+    }
+    /**
+     * The eye's offset off its tile's centre (tiles): the part of a step it has gathered, and poleward its drift.
+     * Each grows by exactly what the tile loses when it steps, so the screen's eye moves on evenly; the drift is
+     * counted from half a tile, so the eye stays within half a tile of its tile.
+     */
+    function pushOffset(st, y) {
+        st.offsets.push(st.ax, (SE.latitudeDeg(y) >= 0 ? -1 : 1) * (st.drift - 0.5));
+    }
+    /** On along its course, turning gradually, drifting poleward; strength follows the sea below. */
     function move(world, h, st) {
         const from = st.path[st.path.length - 1];
         const y = (from / SE.GRID_W) | 0;
         const lat = SE.latitudeDeg(y);
-        const dx = Math.abs(lat) < SE.HURRICANE_RECURVE_LAT ? SE.windDirection(y) : 1;
+        st.vx += SE.clamp(course(y) - st.vx, -SE.HURRICANE_TURN, SE.HURRICANE_TURN);
+        st.ax += st.vx;
+        let dx = 0;
+        if (st.ax >= 1) {
+            st.ax -= 1;
+            dx = 1;
+        }
+        else if (st.ax <= -1) {
+            st.ax += 1;
+            dx = -1;
+        }
         st.drift += SE.HURRICANE_DRIFT + (SE.hazardRoll(world.seed ^ h.id, h.age, 0xd21f7) - 0.5) * SE.HURRICANE_DRIFT_JITTER;
         let dy = 0;
         if (st.drift >= 1) {
@@ -27445,15 +27747,18 @@ var SE;
         const ny = SE.clamp(y + dy, 1, SE.GRID_H - 2);
         const to = SE.idx(nx, ny);
         st.path.push(to);
+        pushOffset(st, ny);
         const sea = world.elevation[to] < 0;
         if (world.elevation[from] < 0 && !sea && st.strength >= SE.HURRICANE_SURGE_MIN)
             surge(world, h, st, to);
         if (world.elevation[from] < 0 && !sea && st.strength >= SE.TORNADO_MIN_STRENGTH)
             SE.hazardSpawnTornadoes(world, h, st.tornadoes, from, to);
+        if (!sea && st.strength >= SE.STORM_FLOOD_MIN)
+            SE.hazardStormRain(world, h, to);
         const warm = world.temperature[to] >= SE.HURRICANE_WARM_SEA;
-        st.strength = Math.min(SE.HURRICANE_MAX, st.strength + (!sea ? -SE.HURRICANE_LAND_LOSS : warm ? SE.HURRICANE_GAIN : -SE.HURRICANE_SEA_LOSS));
+        st.strength = Math.max(0, Math.min(SE.HURRICANE_MAX, st.strength + (!sea ? -SE.HURRICANE_LAND_LOSS : warm ? SE.HURRICANE_GAIN : -SE.HURRICANE_SEA_LOSS)));
+        st.strengths.push(st.strength);
         if (st.strength <= 0) {
-            st.strength = 0;
             st.moving = false;
             return;
         }
@@ -27485,9 +27790,12 @@ var SE;
         refuse: () => '',
         start(world, h) {
             const i = SE.idx(h.x, h.y);
+            const strength = stormStrength(world, i);
             const st = {
-                path: [i], strength: stormStrength(world, i), drift: SE.hazardRoll(world.seed ^ h.id, i, 0xd21f), moving: true, wet: [], runs: [], tornadoes: [],
+                path: [i], strengths: [strength], strength, drift: SE.hazardRoll(world.seed ^ h.id, i, 0xd21f), vx: course(h.y), ax: 0, offsets: [],
+                moving: true, wet: [], runs: [], tornadoes: [],
             };
+            pushOffset(st, h.y);
             h.storm = st;
             lash(world, h, st);
         },
@@ -27497,6 +27805,7 @@ var SE;
                 return false;
             dry(world, st);
             SE.hazardStepTornadoes(world, st.tornadoes);
+            SE.hazardStormStrike(world, h);
             if (st.moving)
                 move(world, h, st);
             SE.hazardStepFloods(world, st.runs);
@@ -27610,6 +27919,109 @@ var SE;
         list.length = n;
     }
     SE.hazardStepTornadoes = hazardStepTornadoes;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the hurricane's lightning and its rain floods
+ * -----------------------------------------------------------------------------
+ * docs/ereignisse-spec.md §3.4. Lightning: in the tick after each step a
+ * moving storm sends down 0–4 bolts by strength, within ring 3 of its eye,
+ * mostly into the eyewall and the bands. Where they fall is a pure hash of
+ * the seed, the hazard and the age, read off the storm's track, so the
+ * screen and the simulation see the same bolts at any later time. Their
+ * consequences land a tick later, once the screen has drawn them: on land
+ * the ground is scorched, life and cities lose a little, and a bolt on dry
+ * plants may set them on fire (the hurricane's chain in hazardchain.ts).
+ * Rain: over land the storm floods low land in its eye and ring 1 with
+ * shallow water that runs off again into mud (hazardflood.ts).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Tiles struck in the tick after hazard age `age`, in strike order; none once the storm has stopped. */
+    function stormStrikesAt(world, h, age) {
+        const st = h.storm;
+        if (!st || age < 0 || age >= st.path.length || (age === st.path.length - 1 && !st.moving))
+            return [];
+        const s = st.strengths[age];
+        if (!(s > 0))
+            return [];
+        const band = s >= 3 ? 2 : s >= 2 ? 1 : 0;
+        const seed = world.seed ^ h.id;
+        const lo = SE.STORM_STRIKES_MIN[band];
+        const count = lo + Math.floor(SE.hazardRoll(seed, age, 0x5701) * (SE.STORM_STRIKES_MAX[band] - lo + 1));
+        const eye = st.path[age];
+        const ex = eye % SE.GRID_W;
+        const ey = (eye / SE.GRID_W) | 0;
+        const out = [];
+        for (let n = 0; out.length < count && n < 4 * count; n++) {
+            let roll = SE.hazardRoll(seed, age, 0x5702 + 2 * n);
+            let r = 1;
+            while (r < 3 && roll >= SE.STORM_STRIKE_RINGS[r - 1])
+                roll -= SE.STORM_STRIKE_RINGS[r++ - 1];
+            // The k-th of the 8r tiles on ring r, clockwise from its north-west corner.
+            const k = Math.floor(SE.hazardRoll(seed, age, 0x5703 + 2 * n) * 8 * r);
+            const o = k % (2 * r);
+            const side = (k / (2 * r)) | 0;
+            const dx = side === 0 ? o - r : side === 1 ? r : side === 2 ? r - o : -r;
+            const dy = side === 0 ? -r : side === 1 ? o - r : side === 2 ? r : r - o;
+            const y = ey + dy;
+            if (y < 0 || y >= SE.GRID_H)
+                continue;
+            const i = SE.idx(SE.wrapX(ex + dx), y);
+            if (!out.includes(i))
+                out.push(i);
+        }
+        return out;
+    }
+    SE.stormStrikesAt = stormStrikesAt;
+    /**
+     * The tiles lightning strikes between world tick `tick` and the next: the
+     * screen draws them then, the simulation applies them in the storm's next
+     * step. The same answer at any later tick while the hazard runs.
+     */
+    function stormStrikes(world, h, tick) {
+        return stormStrikesAt(world, h, h.age - (world.ticks - tick));
+    }
+    SE.stormStrikes = stormStrikes;
+    /** The bolts of the tick before come down: scorched ground, a little life and a few people lost. */
+    function hazardStormStrike(world, h) {
+        for (const i of stormStrikesAt(world, h, h.age - 1)) {
+            if (world.elevation[i] < 0)
+                continue;
+            SE.hazardKillLife(world, i, SE.STORM_STRIKE_LIFE_LOSS);
+            const scar = world.hazards.scar[i];
+            // Only plants scorch (bare rock and sand show nothing), and only unscarred ground: thrown forest stays thrown.
+            if (world.tech[i] === SE.Tech.None && scar === SE.ScarKind.None && world.vegetation[i] >= SE.STORM_SCORCH_COVER)
+                SE.setScar(world, i, SE.ScarKind.Scorched);
+            SE.hazardHitCity(world, i, SE.STORM_STRIKE_CITY_LOSS);
+        }
+    }
+    SE.hazardStormStrike = hazardStormStrike;
+    /** Rain over land: low ground and rivers in the eye and ring 1 flood shallow, rising tile by tile in this tick. */
+    function hazardStormRain(world, h, eye) {
+        const seed = world.seed ^ h.id;
+        const ex = eye % SE.GRID_W;
+        const ey = (eye / SE.GRID_W) | 0;
+        const tiles = [];
+        const at = [];
+        const off = [];
+        for (let dy = -1; dy <= 1; dy++) {
+            const y = ey + dy;
+            if (y < 0 || y >= SE.GRID_H)
+                continue;
+            for (let dx = -1; dx <= 1; dx++) {
+                const i = SE.idx(SE.wrapX(ex + dx), y);
+                const e = world.elevation[i];
+                if (e < 0 || world.tech[i] !== SE.Tech.None || (e >= SE.STORM_FLOOD_LOW && world.riverLevel[i] <= 0))
+                    continue;
+                const rise = h.age - 1 + 0.8 * SE.hazardRoll(seed, i, 0x5704);
+                tiles.push(i);
+                at.push(rise);
+                off.push(rise + SE.STORM_FLOOD_TICKS + Math.floor(SE.hazardRoll(seed, i, 0x5705) * (SE.STORM_FLOOD_SPAN + 1)));
+            }
+        }
+        SE.hazardStandWater(world, h, tiles, SE.STORM_FLOOD_DEPTH, at, off);
+    }
+    SE.hazardStormRain = hazardStormRain;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — earthquake: fissure, offset, landslides
@@ -27860,8 +28272,8 @@ var SE;
  * SimEarth 2.0 — chain reactions: one disaster setting off another
  * -----------------------------------------------------------------------------
  * docs/ereignisse-spec.md §3.9. A quake under the sea and a meteor into it
- * raise a tidal wave (K4); lava or a meteor's blast beside dry plants sets
- * them on fire. HazardSystem asks after the start and after every tick; each
+ * raise a tidal wave (K4); lava, a meteor's blast or a hurricane's lightning
+ * beside or on dry plants sets them on fire. HazardSystem asks after the start and after every tick; each
  * hazard sets off at most one other (chainUsed), and a chained one none.
  * ========================================================================== */
 var SE;
@@ -27905,6 +28317,8 @@ var SE;
     SE.HAZARD_CHAINS[SE.EventKind.Earthquake] = (world, h) => atSea(world, h) ? { kind: SE.EventKind.TidalWave, x: h.x, y: h.y, strength: SE.CHAIN_QUAKE_WAVE * (h.quake?.magnitude ?? SE.QUAKE_MAG_INLAND) } : null;
     // Ring 2 of the blast and the tiles beside it.
     SE.HAZARD_CHAINS[SE.EventKind.Meteor] = (world, h) => atSea(world, h) ? { kind: SE.EventKind.TidalWave, x: h.x, y: h.y } : fireAmong(world, h, ringTiles(h.x, h.y, 2, 3));
+    // A bolt of the tick before on dry plants; the storm has soaked its strip, so mostly one in the bands.
+    SE.HAZARD_CHAINS[SE.EventKind.Hurricane] = (world, h) => fireAmong(world, h, SE.stormStrikesAt(world, h, h.age - 1).filter((i) => SE.hazardRoll(world.seed ^ h.id, i, h.age) < SE.STORM_FIRE_CHANCE));
     // Only beside lava that has stopped and above its surface: the flow would bury a fire anywhere else.
     SE.HAZARD_CHAINS[SE.EventKind.Volcano] = (world, h) => {
         const lava = h.lava;
@@ -28867,7 +29281,7 @@ var SE;
  *   stages       a land tile that crosses into another TERRAFORM_STAGES band
  *                (with a band of hysteresis at the edges) takes that stage's
  *                look, from the succession ladder of its climate and plants:
- *                  Küste        sand (Strand on warm coasts), bare
+ *                  Küste        sand, bare
  *                  Tiefland,    soil, and the climax of its climate with the
  *                  Hügel        plants of the land around it: meadow, steppe,
  *                               savanna, forest, marsh … (bare Rohboden on a
@@ -29972,8 +30386,8 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    SE.TERRAIN_MANIFEST = { "version": 1, "tile": 16, "width": 1024, "height": 480, "palette": [[0, 0, 0, 0], [61, 59, 69, 255], [93, 90, 98, 255], [128, 123, 124, 255], [165, 159, 151, 255], [201, 194, 179, 255], [148, 112, 74, 255], [184, 146, 98, 255], [212, 177, 124, 255], [230, 201, 150, 255], [243, 223, 180, 255], [63, 44, 39, 255], [94, 67, 52, 255], [125, 93, 67, 255], [156, 123, 86, 255], [110, 54, 40, 255], [146, 80, 47, 255], [180, 108, 61, 255], [207, 138, 85, 255], [46, 49, 37, 255], [70, 74, 51, 255], [98, 101, 67, 255], [126, 127, 85, 255], [124, 108, 54, 255], [162, 143, 69, 255], [198, 178, 90, 255], [226, 209, 126, 255], [59, 106, 47, 255], [86, 138, 53, 255], [120, 168, 62, 255], [162, 199, 89, 255], [69, 81, 42, 255], [99, 113, 47, 255], [134, 146, 56, 255], [173, 178, 76, 255], [31, 67, 48, 255], [44, 95, 58, 255], [61, 125, 68, 255], [87, 156, 78, 255], [20, 42, 44, 255], [29, 64, 64, 255], [41, 88, 79, 255], [58, 115, 94, 255], [79, 143, 106, 255], [15, 58, 42, 255], [23, 90, 51, 255], [33, 122, 58, 255], [58, 154, 66, 255], [169, 176, 143, 255], [205, 208, 176, 255], [94, 127, 163, 255], [134, 167, 198, 255], [176, 203, 224, 255], [214, 230, 240, 255], [243, 248, 251, 255], [10, 32, 72, 255], [16, 52, 106, 255], [24, 78, 136, 255], [34, 108, 164, 255], [48, 136, 180, 255], [62, 156, 188, 255], [88, 178, 194, 255], [128, 200, 204, 255], [58, 38, 32, 255], [94, 63, 44, 255], [125, 90, 60, 255], [233, 143, 176, 255], [247, 195, 212, 255], [240, 198, 74, 255], [242, 239, 226, 255], [142, 47, 51, 255], [196, 69, 63, 255], [223, 138, 58, 255], [154, 106, 168, 255], [196, 154, 208, 255], [255, 255, 255, 255]], "ramps": { "rock": [1, 2, 3, 4, 5], "sand": [6, 7, 8, 9, 10], "soil": [11, 12, 13, 14], "laterite": [15, 16, 17, 18], "mud": [19, 20, 21, 22], "straw": [23, 24, 25, 26], "meadow": [27, 28, 29, 30], "moss": [31, 32, 33, 34], "leaf": [35, 36, 37, 38], "pine": [39, 40, 41, 42, 43], "jungle": [44, 45, 46, 47], "lichen": [48, 49], "ice": [50, 51, 52, 53, 54], "water": [55, 56, 57, 58, 59, 60, 61, 62], "bark": [63, 64, 65], "blossom": [66, 67], "yellow": [68], "white": [69], "red": [70, 71], "orange": [72], "violet": [73, 74], "mask": [75] }, "maskIndex": 75, "materials": { "rock": { "name": "Fels", "family": "cold", "rank": 1, "size": 64, "densities": [{ "x": 128, "y": 320, "w": 64, "h": 64 }] }, "basalt": { "name": "Basalt", "family": "mountain", "rank": 2, "size": 64, "densities": [{ "x": 640, "y": 128, "w": 64, "h": 64 }] }, "scree": { "name": "Schutt", "family": "mountain", "rank": 3, "size": 64, "densities": [{ "x": 192, "y": 320, "w": 64, "h": 64 }] }, "stony_desert": { "name": "Felswüste", "family": "warm", "rank": 4, "size": 64, "densities": [{ "x": 896, "y": 320, "w": 64, "h": 64 }] }, "sand": { "name": "Sand", "family": "warm", "rank": 5, "size": 128, "densities": [{ "x": 128, "y": 0, "w": 128, "h": 128 }] }, "beach": { "name": "Strand", "family": "coast", "rank": 6, "size": 64, "densities": [{ "x": 704, "y": 128, "w": 64, "h": 64 }] }, "barren": { "name": "Rohboden", "family": "temperate", "rank": 7, "size": 64, "densities": [{ "x": 576, "y": 128, "w": 64, "h": 64 }] }, "mud": { "name": "Schlamm", "family": "wet", "rank": 8, "size": 64, "densities": [{ "x": 832, "y": 256, "w": 64, "h": 64 }] }, "semidesert_rock": { "name": "Halbwüste auf Fels", "family": "warm", "rank": 9, "size": 64, "densities": [{ "x": 256, "y": 320, "w": 64, "h": 64 }, { "x": 320, "y": 320, "w": 64, "h": 64 }, { "x": 384, "y": 320, "w": 64, "h": 64 }] }, "semidesert_sand": { "name": "Halbwüste auf Sand", "family": "warm", "rank": 10, "size": 64, "densities": [{ "x": 448, "y": 320, "w": 64, "h": 64 }, { "x": 512, "y": 320, "w": 64, "h": 64 }, { "x": 576, "y": 320, "w": 64, "h": 64 }] }, "lichen_rock": { "name": "Flechten & Moos auf Fels", "family": "cold", "rank": 11, "size": 64, "densities": [{ "x": 64, "y": 256, "w": 64, "h": 64 }, { "x": 128, "y": 256, "w": 64, "h": 64 }, { "x": 192, "y": 256, "w": 64, "h": 64 }] }, "tundra": { "name": "Tundra", "family": "cold", "rank": 12, "size": 64, "densities": [{ "x": 192, "y": 384, "w": 64, "h": 64 }, { "x": 256, "y": 384, "w": 64, "h": 64 }, { "x": 320, "y": 384, "w": 64, "h": 64 }] }, "moss": { "name": "Moosteppich", "family": "temperate", "rank": 13, "size": 64, "densities": [{ "x": 640, "y": 256, "w": 64, "h": 64 }, { "x": 704, "y": 256, "w": 64, "h": 64 }, { "x": 768, "y": 256, "w": 64, "h": 64 }] }, "fern": { "name": "Farnflur", "family": "temperate", "rank": 14, "size": 64, "densities": [{ "x": 768, "y": 128, "w": 64, "h": 64 }, { "x": 832, "y": 128, "w": 64, "h": 64 }, { "x": 896, "y": 128, "w": 64, "h": 64 }] }, "steppe": { "name": "Steppe", "family": "temperate", "rank": 15, "size": 128, "densities": [{ "x": 768, "y": 0, "w": 128, "h": 128 }, { "x": 896, "y": 0, "w": 128, "h": 128 }, { "x": 0, "y": 128, "w": 128, "h": 128 }] }, "savanna": { "name": "Savanne", "family": "warm", "rank": 16, "size": 128, "densities": [{ "x": 256, "y": 0, "w": 128, "h": 128 }, { "x": 384, "y": 0, "w": 128, "h": 128 }, { "x": 512, "y": 0, "w": 128, "h": 128 }] }, "meadow": { "name": "Wiese", "family": "temperate", "rank": 17, "size": 64, "densities": [{ "x": 448, "y": 256, "w": 64, "h": 64 }, { "x": 512, "y": 256, "w": 64, "h": 64 }, { "x": 576, "y": 256, "w": 64, "h": 64 }] }, "alpine_meadow": { "name": "Alpine Matte", "family": "mountain", "rank": 18, "size": 64, "densities": [{ "x": 384, "y": 128, "w": 64, "h": 64 }, { "x": 448, "y": 128, "w": 64, "h": 64 }, { "x": 512, "y": 128, "w": 64, "h": 64 }] }, "marsh": { "name": "Sumpf", "family": "wet", "rank": 19, "size": 64, "densities": [{ "x": 256, "y": 256, "w": 64, "h": 64 }, { "x": 320, "y": 256, "w": 64, "h": 64 }, { "x": 384, "y": 256, "w": 64, "h": 64 }] }, "shrub": { "name": "Gebüsch", "family": "temperate", "rank": 20, "size": 64, "densities": [{ "x": 640, "y": 320, "w": 64, "h": 64 }, { "x": 704, "y": 320, "w": 64, "h": 64 }, { "x": 768, "y": 320, "w": 64, "h": 64 }] }, "swamp_forest": { "name": "Sumpfwaldboden", "family": "wet", "rank": 21, "size": 64, "densities": [{ "x": 960, "y": 320, "w": 64, "h": 64 }, { "x": 0, "y": 384, "w": 64, "h": 64 }] }, "taiga": { "name": "Nadelwaldboden", "family": "cold", "rank": 22, "size": 64, "densities": [{ "x": 64, "y": 384, "w": 64, "h": 64 }, { "x": 128, "y": 384, "w": 64, "h": 64 }] }, "forest": { "name": "Waldboden", "family": "temperate", "rank": 23, "size": 64, "densities": [{ "x": 960, "y": 128, "w": 64, "h": 64 }, { "x": 0, "y": 256, "w": 64, "h": 64 }] }, "rainforest": { "name": "Regenwaldboden", "family": "warm", "rank": 24, "size": 64, "densities": [{ "x": 896, "y": 256, "w": 64, "h": 64 }, { "x": 960, "y": 256, "w": 64, "h": 64 }] }, "rainforest_montane": { "name": "Bergregenwaldboden", "family": "mountain", "rank": 25, "size": 64, "densities": [{ "x": 0, "y": 320, "w": 64, "h": 64 }, { "x": 64, "y": 320, "w": 64, "h": 64 }] }, "sea_ice": { "name": "Meereis", "family": "cold", "rank": 26, "size": 128, "densities": [{ "x": 640, "y": 0, "w": 128, "h": 128 }] }, "ice": { "name": "Eis", "family": "cold", "rank": 27, "size": 128, "densities": [{ "x": 0, "y": 0, "w": 128, "h": 128 }] }, "snow": { "name": "Gipfelschnee", "family": "cold", "rank": 28, "size": 64, "densities": [{ "x": 832, "y": 320, "w": 64, "h": 64 }] } }, "overlays": { "ripple_coast": { "name": "Rippel Küstenmeer", "family": "wet", "size": 128, "rect": { "x": 128, "y": 128, "w": 128, "h": 128 } }, "ripple_ocean": { "name": "Rippel Hochsee", "family": "wet", "size": 128, "rect": { "x": 256, "y": 128, "w": 128, "h": 128 } }, "algae_film": { "name": "Algenfilm", "family": "wet", "size": 64, "rect": { "x": 384, "y": 384, "w": 64, "h": 64 } } }, "masks": [[{ "x": 58, "y": 448, "w": 16, "h": 16 }, { "x": 74, "y": 448, "w": 16, "h": 16 }, { "x": 90, "y": 448, "w": 16, "h": 16 }], [{ "x": 394, "y": 448, "w": 16, "h": 16 }, { "x": 410, "y": 448, "w": 16, "h": 16 }, { "x": 426, "y": 448, "w": 16, "h": 16 }], [{ "x": 442, "y": 448, "w": 16, "h": 16 }, { "x": 458, "y": 448, "w": 16, "h": 16 }, { "x": 474, "y": 448, "w": 16, "h": 16 }], [{ "x": 490, "y": 448, "w": 16, "h": 16 }, { "x": 506, "y": 448, "w": 16, "h": 16 }, { "x": 522, "y": 448, "w": 16, "h": 16 }], [{ "x": 538, "y": 448, "w": 16, "h": 16 }, { "x": 554, "y": 448, "w": 16, "h": 16 }, { "x": 570, "y": 448, "w": 16, "h": 16 }], [{ "x": 586, "y": 448, "w": 16, "h": 16 }, { "x": 602, "y": 448, "w": 16, "h": 16 }, { "x": 618, "y": 448, "w": 16, "h": 16 }], [{ "x": 634, "y": 448, "w": 16, "h": 16 }, { "x": 650, "y": 448, "w": 16, "h": 16 }, { "x": 666, "y": 448, "w": 16, "h": 16 }], [{ "x": 682, "y": 448, "w": 16, "h": 16 }, { "x": 698, "y": 448, "w": 16, "h": 16 }, { "x": 714, "y": 448, "w": 16, "h": 16 }], [{ "x": 730, "y": 448, "w": 16, "h": 16 }, { "x": 746, "y": 448, "w": 16, "h": 16 }, { "x": 762, "y": 448, "w": 16, "h": 16 }], [{ "x": 778, "y": 448, "w": 16, "h": 16 }, { "x": 794, "y": 448, "w": 16, "h": 16 }, { "x": 810, "y": 448, "w": 16, "h": 16 }], [{ "x": 106, "y": 448, "w": 16, "h": 16 }, { "x": 122, "y": 448, "w": 16, "h": 16 }, { "x": 138, "y": 448, "w": 16, "h": 16 }], [{ "x": 154, "y": 448, "w": 16, "h": 16 }, { "x": 170, "y": 448, "w": 16, "h": 16 }, { "x": 186, "y": 448, "w": 16, "h": 16 }], [{ "x": 202, "y": 448, "w": 16, "h": 16 }, { "x": 218, "y": 448, "w": 16, "h": 16 }, { "x": 234, "y": 448, "w": 16, "h": 16 }], [{ "x": 250, "y": 448, "w": 16, "h": 16 }, { "x": 266, "y": 448, "w": 16, "h": 16 }, { "x": 282, "y": 448, "w": 16, "h": 16 }], [{ "x": 298, "y": 448, "w": 16, "h": 16 }, { "x": 314, "y": 448, "w": 16, "h": 16 }, { "x": 330, "y": 448, "w": 16, "h": 16 }], [{ "x": 346, "y": 448, "w": 16, "h": 16 }, { "x": 362, "y": 448, "w": 16, "h": 16 }, { "x": 378, "y": 448, "w": 16, "h": 16 }]], "objects": { "lepidodendron": { "name": "Schuppenbaum", "group": "clubmosses", "kind": "tree", "family": "wet", "variants": [{ "rect": { "x": 30, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 40, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 940, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 953, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 656, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 672, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "archaeopteris": { "name": "Urbaum", "group": "firstTrees", "kind": "tree", "family": "temperate", "variants": [{ "rect": { "x": 942, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 952, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 810, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 823, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 480, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 496, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "cycad": { "name": "Palmfarn", "group": "seedPlants", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 1002, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 1012, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 888, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 901, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 592, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 608, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "spruce": { "name": "Fichte", "group": "conifers", "kind": "tree", "family": "cold", "variants": [{ "rect": { "x": 70, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 80, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 992, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 1005, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 720, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 736, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "swamp_cypress": { "name": "Sumpfzypresse", "group": "conifers", "kind": "tree", "family": "wet", "variants": [{ "rect": { "x": 90, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 100, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 0, "y": 448, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 13, "y": 448, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 752, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 768, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "oak": { "name": "Laubbaum", "group": "broadleaf", "kind": "tree", "family": "temperate", "variants": [{ "rect": { "x": 50, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 60, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 966, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 979, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 688, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 704, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "jungle_giant": { "name": "Tropenriese", "group": "broadleaf", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 0, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 10, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 914, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 927, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 624, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 640, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "acacia": { "name": "Schirmbaum", "group": "broadleaf", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 922, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 932, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 784, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 797, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 448, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 464, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "baobab": { "name": "Affenbrotbaum", "group": "flowering", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 962, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 972, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 836, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 849, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 512, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 528, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "coconut_palm": { "name": "Kokospalme", "group": "flowering", "kind": "tree", "family": "coast", "variants": [{ "rect": { "x": 982, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 992, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 862, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 875, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 560, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 576, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "tree_fern": { "name": "Baumfarn", "group": "ferns", "kind": "bush", "family": "warm", "variants": [{ "rect": { "x": 296, "y": 465, "w": 16, "h": 9 }, "ax": 8, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 906, "y": 448, "w": 16, "h": 13 }, "ax": 8, "ay": 12, "size": "", "form": 1 }, { "rect": { "x": 42, "y": 448, "w": 16, "h": 16 }, "ax": 8, "ay": 15, "size": "", "form": 2 }] }, "seed_fern": { "name": "Samenfarn-Busch", "group": "seedPlants", "kind": "bush", "family": "temperate", "variants": [{ "rect": { "x": 502, "y": 465, "w": 11, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 326, "y": 465, "w": 13, "h": 9 }, "ax": 6, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 154, "y": 465, "w": 15, "h": 11 }, "ax": 7, "ay": 10, "size": "", "form": 2 }] }, "juniper": { "name": "Wacholder", "group": "conifers", "kind": "bush", "family": "cold", "variants": [{ "rect": { "x": 567, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 362, "y": 465, "w": 11, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 141, "y": 465, "w": 13, "h": 12 }, "ax": 6, "ay": 11, "size": "", "form": 2 }] }, "flower_bush": { "name": "Blütenstrauch", "group": "flowering", "kind": "bush", "family": "temperate", "variants": [{ "rect": { "x": 559, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 351, "y": 465, "w": 11, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 184, "y": 465, "w": 14, "h": 11 }, "ax": 7, "ay": 10, "size": "", "form": 2 }] }, "shrub": { "name": "Laubstrauch", "group": "broadleaf", "kind": "bush", "family": "temperate", "variants": [{ "rect": { "x": 523, "y": 465, "w": 10, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 339, "y": 465, "w": 12, "h": 9 }, "ax": 6, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 169, "y": 465, "w": 15, "h": 11 }, "ax": 7, "ay": 10, "size": "", "form": 2 }] }, "thorn_bush": { "name": "Dornbusch", "group": "broadleaf", "kind": "bush", "family": "warm", "variants": [{ "rect": { "x": 575, "y": 465, "w": 16, "h": 6 }, "ax": 8, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 413, "y": 465, "w": 16, "h": 8 }, "ax": 8, "ay": 7, "size": "", "form": 1 }, { "rect": { "x": 217, "y": 465, "w": 16, "h": 10 }, "ax": 8, "ay": 9, "size": "", "form": 2 }] }, "liverwort": { "name": "Lebermoos-Polster", "group": "landPlants", "kind": "low", "family": "wet", "variants": [{ "rect": { "x": 686, "y": 465, "w": 9, "h": 5 }, "ax": 4, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 591, "y": 465, "w": 13, "h": 6 }, "ax": 6, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 429, "y": 465, "w": 14, "h": 8 }, "ax": 7, "ay": 7, "size": "", "form": 2 }] }, "moss_cushion": { "name": "Moospolster", "group": "mosses", "kind": "low", "family": "cold", "variants": [{ "rect": { "x": 724, "y": 465, "w": 7, "h": 4 }, "ax": 3, "ay": 3, "size": "", "form": 0 }, { "rect": { "x": 675, "y": 465, "w": 11, "h": 5 }, "ax": 5, "ay": 4, "size": "", "form": 1 }, { "rect": { "x": 489, "y": 465, "w": 13, "h": 7 }, "ax": 6, "ay": 6, "size": "", "form": 2 }] }, "rhynia": { "name": "Urfarn-Stängel", "group": "vascular", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 670, "y": 465, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 542, "y": 465, "w": 9, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 247, "y": 465, "w": 12, "h": 10 }, "ax": 6, "ay": 9, "size": "", "form": 2 }] }, "fern_frond": { "name": "Farnwedel", "group": "ferns", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 703, "y": 465, "w": 8, "h": 5 }, "ax": 4, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 615, "y": 465, "w": 11, "h": 6 }, "ax": 5, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 312, "y": 465, "w": 14, "h": 9 }, "ax": 7, "ay": 8, "size": "", "form": 2 }] }, "horsetail": { "name": "Schachtelhalm", "group": "ferns", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 408, "y": 465, "w": 5, "h": 9 }, "ax": 2, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 209, "y": 465, "w": 8, "h": 11 }, "ax": 4, "ay": 10, "size": "", "form": 1 }, { "rect": { "x": 110, "y": 465, "w": 9, "h": 13 }, "ax": 4, "ay": 12, "size": "", "form": 2 }] }, "flowers": { "name": "Blumen", "group": "flowering", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 626, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 635, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 644, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 2 }] }, "dwarf_shrub": { "name": "Heide", "group": "flowering", "kind": "low", "family": "cold", "variants": [{ "rect": { "x": 695, "y": 465, "w": 8, "h": 5 }, "ax": 4, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 604, "y": 465, "w": 11, "h": 6 }, "ax": 5, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 461, "y": 465, "w": 14, "h": 7 }, "ax": 7, "ay": 6, "size": "", "form": 2 }] }, "grass_tuft": { "name": "Grasbüschel", "group": "grasses", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 711, "y": 465, "w": 7, "h": 5 }, "ax": 3, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 533, "y": 465, "w": 9, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 513, "y": 465, "w": 10, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 2 }] }, "tall_grass": { "name": "Hochgras", "group": "grasses", "kind": "low", "family": "warm", "variants": [{ "rect": { "x": 280, "y": 465, "w": 16, "h": 9 }, "ax": 8, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 877, "y": 448, "w": 16, "h": 14 }, "ax": 8, "ay": 13, "size": "", "form": 1 }, { "rect": { "x": 26, "y": 448, "w": 16, "h": 16 }, "ax": 8, "ay": 15, "size": "", "form": 2 }] }, "reed": { "name": "Schilf", "group": "grasses", "kind": "low", "family": "wet", "variants": [{ "rect": { "x": 119, "y": 465, "w": 8, "h": 13 }, "ax": 4, "ay": 12, "size": "", "form": 0 }, { "rect": { "x": 866, "y": 448, "w": 11, "h": 15 }, "ax": 5, "ay": 14, "size": "", "form": 1 }, { "rect": { "x": 826, "y": 448, "w": 15, "h": 16 }, "ax": 7, "ay": 15, "size": "", "form": 2 }] }, "sundew": { "name": "Sonnentau", "group": "carnivorous", "kind": "low", "family": "wet", "variants": [{ "rect": { "x": 731, "y": 465, "w": 7, "h": 4 }, "ax": 3, "ay": 3, "size": "", "form": 0 }, { "rect": { "x": 653, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 393, "y": 465, "w": 9, "h": 9 }, "ax": 4, "ay": 8, "size": "", "form": 2 }] }, "cactus_column": { "name": "Säulenkaktus", "group": "flowering", "kind": "cactus", "family": "warm", "variants": [{ "rect": { "x": 259, "y": 465, "w": 5, "h": 10 }, "ax": 2, "ay": 9, "size": "", "form": 0 }, { "rect": { "x": 854, "y": 448, "w": 12, "h": 16 }, "ax": 6, "ay": 15, "size": "", "form": 1 }, { "rect": { "x": 544, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "", "form": 2 }] }, "cactus_barrel": { "name": "Kugelkaktus", "group": "flowering", "kind": "cactus", "family": "warm", "variants": [{ "rect": { "x": 718, "y": 465, "w": 6, "h": 5 }, "ax": 3, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 551, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 373, "y": 465, "w": 10, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 2 }] }, "cactus_opuntia": { "name": "Feigenkaktus", "group": "flowering", "kind": "cactus", "family": "warm", "variants": [{ "rect": { "x": 454, "y": 465, "w": 7, "h": 8 }, "ax": 3, "ay": 7, "size": "", "form": 0 }, { "rect": { "x": 198, "y": 465, "w": 11, "h": 11 }, "ax": 5, "ay": 10, "size": "", "form": 1 }, { "rect": { "x": 893, "y": 448, "w": 13, "h": 14 }, "ax": 6, "ay": 13, "size": "", "form": 2 }] }, "kelp": { "name": "Tang", "group": "marineAlgae", "kind": "water", "family": "wet", "variants": [{ "rect": { "x": 402, "y": 465, "w": 6, "h": 9 }, "ax": 3, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 20, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "", "form": 1 }, { "rect": { "x": 841, "y": 448, "w": 13, "h": 16 }, "ax": 6, "ay": 15, "size": "", "form": 2 }] }, "boulder": { "name": "Felsbrocken", "group": null, "kind": "rock", "family": "cold", "variants": [{ "rect": { "x": 662, "y": 465, "w": 8, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 443, "y": 465, "w": 11, "h": 8 }, "ax": 5, "ay": 7, "size": "", "form": 1 }, { "rect": { "x": 233, "y": 465, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "form": 2 }] }, "scree": { "name": "Geröll", "group": null, "kind": "rock", "family": "cold", "variants": [{ "rect": { "x": 475, "y": 465, "w": 14, "h": 7 }, "ax": 7, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 264, "y": 465, "w": 16, "h": 9 }, "ax": 8, "ay": 8, "size": "", "form": 1 }] }, "ice_block": { "name": "Eisbrocken", "group": null, "kind": "rock", "family": "cold", "variants": [{ "rect": { "x": 383, "y": 465, "w": 10, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 127, "y": 465, "w": 14, "h": 12 }, "ax": 7, "ay": 11, "size": "", "form": 1 }] } }, "landscapeIds": ["ice", "snow", "rock", "barren", "desert", "lichen", "moss", "tundra", "fernland", "steppe", "meadow", "savanna", "semidesert", "shrubland", "forest", "taiga", "rainforest", "marsh", "swampforest", "alpine", "cloudforest"], "landscapes": { "ice": { "name": "Eis", "materials": { "rock": "ice", "sand": "ice", "soil": "ice", "mire": "ice" }, "objects": {}, "abiotic": 0.04 }, "snow": { "name": "Gipfelschnee", "materials": { "rock": "snow", "sand": "snow", "soil": "snow", "mire": "snow" }, "objects": {}, "abiotic": 0.06 }, "rock": { "name": "Fels", "materials": { "rock": "rock", "sand": "sand", "soil": "rock", "mire": "mud" }, "objects": { "low": [0.6] }, "abiotic": 0.25 }, "barren": { "name": "Rohboden", "materials": { "rock": "rock", "sand": "sand", "soil": "barren", "mire": "mud" }, "objects": { "low": [0.6] }, "abiotic": 0.05 }, "desert": { "name": "Wüste", "materials": { "rock": "stony_desert", "sand": "sand", "soil": "stony_desert", "mire": "mud" }, "objects": { "low": [0.6] }, "abiotic": 0.06 }, "lichen": { "name": "Flechten & Moos auf Fels", "materials": { "rock": "lichen_rock", "sand": "lichen_rock", "soil": "lichen_rock", "mire": "lichen_rock" }, "objects": { "low": [0.1, 0.2, 0.35] }, "abiotic": 0.12 }, "moss": { "name": "Moosteppich", "materials": { "rock": "lichen_rock", "sand": "moss", "soil": "moss", "mire": "moss" }, "objects": { "low": [0.2, 0.4, 0.6] }, "abiotic": 0 }, "tundra": { "name": "Tundra", "materials": { "rock": "lichen_rock", "sand": "tundra", "soil": "tundra", "mire": "tundra" }, "objects": { "bush": [0.05, 0.1, 0.15], "low": [0.2, 0.35, 0.5] }, "abiotic": 0.08 }, "fernland": { "name": "Farnflur", "materials": { "rock": "fern", "sand": "fern", "soil": "fern", "mire": "fern" }, "objects": { "bush": [0.1, 0.2, 0.3], "low": [0.5, 0.9, 1.3] }, "abiotic": 0 }, "steppe": { "name": "Steppe", "materials": { "rock": "steppe", "sand": "steppe", "soil": "steppe", "mire": "steppe" }, "objects": { "bush": [0.02, 0.04, 0.06], "low": [0.3, 0.5, 0.7] }, "abiotic": 0.02 }, "meadow": { "name": "Wiese", "materials": { "rock": "meadow", "sand": "meadow", "soil": "meadow", "mire": "meadow" }, "objects": { "bush": [0.03, 0.05, 0.08], "low": [0.3, 0.5, 0.7] }, "abiotic": 0 }, "savanna": { "name": "Savanne", "materials": { "rock": "savanna", "sand": "savanna", "soil": "savanna", "mire": "savanna" }, "objects": { "tree": [0.08, 0.15, 0.22], "bush": [0.05, 0.1, 0.15], "low": [0.3, 0.5, 0.7] }, "abiotic": 0 }, "semidesert": { "name": "Halbwüste", "materials": { "rock": "semidesert_rock", "sand": "semidesert_sand", "soil": "semidesert_rock", "mire": "semidesert_rock" }, "objects": { "bush": [0.1, 0.18, 0.25], "low": [0.1, 0.2, 0.3] }, "abiotic": 0.06 }, "shrubland": { "name": "Gebüsch", "materials": { "rock": "shrub", "sand": "shrub", "soil": "shrub", "mire": "shrub" }, "objects": { "tree": [0.1, 0.15, 0.2], "bush": [0.6, 1, 1.4], "low": [0.2, 0.3, 0.3] }, "abiotic": 0 }, "forest": { "name": "Wald", "materials": { "rock": "forest", "sand": "forest", "soil": "forest", "mire": "forest" }, "objects": { "tree": [1.5, 2.6], "bush": [0.2, 0.1], "low": [0.3, 0.2] }, "abiotic": 0 }, "taiga": { "name": "Nadelwald", "materials": { "rock": "taiga", "sand": "taiga", "soil": "taiga", "mire": "taiga" }, "objects": { "tree": [1.5, 2.6], "low": [0.2, 0.1] }, "abiotic": 0 }, "rainforest": { "name": "Regenwald", "materials": { "rock": "rainforest", "sand": "rainforest", "soil": "rainforest", "mire": "rainforest" }, "objects": { "tree": [1.8, 3], "low": [0.3, 0.2] }, "abiotic": 0 }, "marsh": { "name": "Sumpf", "materials": { "rock": "marsh", "sand": "marsh", "soil": "marsh", "mire": "marsh" }, "objects": { "bush": [0, 0.05, 0.1], "low": [0.5, 0.9, 1.3] }, "abiotic": 0 }, "swampforest": { "name": "Sumpfwald", "materials": { "rock": "swamp_forest", "sand": "swamp_forest", "soil": "swamp_forest", "mire": "swamp_forest" }, "objects": { "tree": [1.2, 2.2], "low": [0.6, 0.4] }, "abiotic": 0 }, "alpine": { "name": "Alpine Matte", "materials": { "rock": "lichen_rock", "sand": "alpine_meadow", "soil": "alpine_meadow", "mire": "marsh" }, "objects": { "bush": [0.02, 0.04, 0.06], "low": [0.3, 0.5, 0.7] }, "abiotic": 0.1 }, "cloudforest": { "name": "Bergregenwald", "materials": { "rock": "rainforest_montane", "sand": "rainforest_montane", "soil": "rainforest_montane", "mire": "rainforest_montane" }, "objects": { "tree": [1.8, 3], "low": [0.3, 0.2] }, "abiotic": 0 } }, "groups": { "marineAlgae": { "name": "Meeresalgen", "objects": [{ "id": "kelp", "where": ["sea"] }], "swatch": null }, "freshwaterAlgae": { "name": "Süßwasser-Grünalgen", "objects": [], "swatch": { "material": "algae_film", "density": 0 } }, "landPlants": { "name": "Erste Landpflanzen", "objects": [{ "id": "liverwort", "where": "*" }], "swatch": null }, "mosses": { "name": "Moose", "objects": [{ "id": "moss_cushion", "where": "*" }], "swatch": { "material": "moss", "density": 2 } }, "vascular": { "name": "Frühe Gefäßpflanzen", "objects": [{ "id": "rhynia", "where": "*" }], "swatch": null }, "clubmosses": { "name": "Bärlapppflanzen", "objects": [{ "id": "lepidodendron", "where": "*" }], "swatch": null }, "ferns": { "name": "Farne & Schachtelhalme", "objects": [{ "id": "tree_fern", "where": ["rainforest", "cloudforest", "forest", "swampforest", "fernland"] }, { "id": "horsetail", "where": ["marsh", "swampforest", "fernland"] }, { "id": "fern_frond", "where": "*" }], "swatch": null }, "firstTrees": { "name": "Urbäume", "objects": [{ "id": "archaeopteris", "where": "*" }], "swatch": null }, "seedPlants": { "name": "Samenpflanzen", "objects": [{ "id": "cycad", "where": ["savanna", "forest", "semidesert", "shrubland"] }, { "id": "seed_fern", "where": "*" }], "swatch": null }, "conifers": { "name": "Nadelbäume", "objects": [{ "id": "swamp_cypress", "where": ["marsh", "swampforest"] }, { "id": "juniper", "where": ["tundra", "alpine", "shrubland", "semidesert", "steppe", "lichen"] }, { "id": "spruce", "where": ["taiga", "forest", "shrubland", "meadow", "steppe", "fernland", "moss", "tundra", "rock", "barren"] }], "swatch": null }, "flowering": { "name": "Blütenpflanzen", "objects": [{ "id": "cactus_column", "where": ["semidesert", "desert"] }, { "id": "cactus_barrel", "where": ["semidesert", "desert"] }, { "id": "cactus_opuntia", "where": ["semidesert", "desert"] }, { "id": "dwarf_shrub", "where": ["tundra", "alpine", "lichen", "moss"] }, { "id": "flower_bush", "where": ["shrubland", "forest", "meadow"] }, { "id": "flowers", "where": "*" }], "swatch": null }, "broadleaf": { "name": "Laubbäume", "objects": [{ "id": "jungle_giant", "where": ["rainforest", "cloudforest"] }, { "id": "acacia", "where": ["savanna", "semidesert"] }, { "id": "thorn_bush", "where": ["semidesert", "steppe", "savanna"] }, { "id": "shrub", "where": ["shrubland", "meadow", "forest"] }, { "id": "oak", "where": "*" }], "swatch": null }, "grasses": { "name": "Gräser", "objects": [{ "id": "reed", "where": ["marsh", "swampforest"] }, { "id": "tall_grass", "where": ["savanna"] }, { "id": "grass_tuft", "where": "*" }], "swatch": { "material": "steppe", "density": 2 } }, "carnivorous": { "name": "Fleischfressende Pflanzen", "objects": [{ "id": "sundew", "where": "*" }], "swatch": null } }, "abiotic": [{ "id": "boulder", "where": ["rock", "lichen", "tundra", "alpine", "semidesert", "desert", "steppe", "barren"] }, { "id": "scree", "where": ["rock", "snow", "alpine"] }, { "id": "ice_block", "where": ["ice"] }] };
-    SE.TERRAIN_ATLAS_PNG = 'data:image/png;base64,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';
+    SE.TERRAIN_MANIFEST = { "version": 1, "tile": 16, "width": 1024, "height": 480, "palette": [[0, 0, 0, 0], [61, 59, 69, 255], [93, 90, 98, 255], [128, 123, 124, 255], [165, 159, 151, 255], [201, 194, 179, 255], [148, 112, 74, 255], [184, 146, 98, 255], [212, 177, 124, 255], [230, 201, 150, 255], [243, 223, 180, 255], [63, 44, 39, 255], [94, 67, 52, 255], [125, 93, 67, 255], [156, 123, 86, 255], [110, 54, 40, 255], [146, 80, 47, 255], [180, 108, 61, 255], [207, 138, 85, 255], [46, 49, 37, 255], [70, 74, 51, 255], [98, 101, 67, 255], [126, 127, 85, 255], [124, 108, 54, 255], [162, 143, 69, 255], [198, 178, 90, 255], [226, 209, 126, 255], [59, 106, 47, 255], [86, 138, 53, 255], [120, 168, 62, 255], [162, 199, 89, 255], [69, 81, 42, 255], [99, 113, 47, 255], [134, 146, 56, 255], [173, 178, 76, 255], [31, 67, 48, 255], [44, 95, 58, 255], [61, 125, 68, 255], [87, 156, 78, 255], [20, 42, 44, 255], [29, 64, 64, 255], [41, 88, 79, 255], [58, 115, 94, 255], [79, 143, 106, 255], [15, 58, 42, 255], [23, 90, 51, 255], [33, 122, 58, 255], [58, 154, 66, 255], [169, 176, 143, 255], [205, 208, 176, 255], [94, 127, 163, 255], [134, 167, 198, 255], [176, 203, 224, 255], [214, 230, 240, 255], [243, 248, 251, 255], [10, 32, 72, 255], [16, 52, 106, 255], [24, 78, 136, 255], [34, 108, 164, 255], [48, 136, 180, 255], [62, 156, 188, 255], [88, 178, 194, 255], [128, 200, 204, 255], [58, 38, 32, 255], [94, 63, 44, 255], [125, 90, 60, 255], [233, 143, 176, 255], [247, 195, 212, 255], [240, 198, 74, 255], [242, 239, 226, 255], [142, 47, 51, 255], [196, 69, 63, 255], [223, 138, 58, 255], [154, 106, 168, 255], [196, 154, 208, 255], [255, 255, 255, 255], [31, 159, 176, 255], [47, 184, 191, 255], [73, 207, 200, 255], [127, 224, 214, 255], [122, 108, 93, 255], [157, 123, 189, 255], [161, 140, 103, 255], [197, 140, 177, 255], [200, 153, 99, 255], [186, 170, 118, 255], [190, 189, 122, 255], [159, 217, 194, 255], [191, 232, 210, 255], [27, 84, 141, 255], [29, 91, 146, 255], [32, 97, 150, 255], [34, 103, 155, 255], [37, 109, 160, 255], [40, 116, 165, 255]], "ramps": { "rock": [1, 2, 3, 4, 5], "sand": [6, 7, 8, 9, 10], "soil": [11, 12, 13, 14], "laterite": [15, 16, 17, 18], "mud": [19, 20, 21, 22], "straw": [23, 24, 25, 26], "meadow": [27, 28, 29, 30], "moss": [31, 32, 33, 34], "leaf": [35, 36, 37, 38], "pine": [39, 40, 41, 42, 43], "jungle": [44, 45, 46, 47], "lichen": [48, 49], "ice": [50, 51, 52, 53, 54], "water": [55, 56, 57, 58, 59, 60, 61, 62], "bark": [63, 64, 65], "blossom": [66, 67], "yellow": [68], "white": [69], "red": [70, 71], "orange": [72], "violet": [73, 74], "mask": [75], "waterWarm": [76, 77, 78, 79], "reefUnder": [80, 81, 82, 83, 84, 85, 86, 87, 88], "shelf": [89, 90, 91, 92, 93, 94] }, "maskIndex": 75, "materials": { "rock": { "name": "Fels", "family": "cold", "rank": 1, "size": 64, "densities": [{ "x": 64, "y": 320, "w": 64, "h": 64 }] }, "basalt": { "name": "Basalt", "family": "mountain", "rank": 2, "size": 64, "densities": [{ "x": 640, "y": 128, "w": 64, "h": 64 }] }, "scree": { "name": "Schutt", "family": "mountain", "rank": 3, "size": 64, "densities": [{ "x": 128, "y": 320, "w": 64, "h": 64 }] }, "stony_desert": { "name": "Felswüste", "family": "warm", "rank": 4, "size": 64, "densities": [{ "x": 832, "y": 320, "w": 64, "h": 64 }] }, "sand": { "name": "Sand", "family": "warm", "rank": 5, "size": 128, "densities": [{ "x": 128, "y": 0, "w": 128, "h": 128 }] }, "barren": { "name": "Rohboden", "family": "temperate", "rank": 6, "size": 64, "densities": [{ "x": 576, "y": 128, "w": 64, "h": 64 }] }, "mud": { "name": "Schlamm", "family": "wet", "rank": 7, "size": 64, "densities": [{ "x": 768, "y": 256, "w": 64, "h": 64 }] }, "semidesert_rock": { "name": "Halbwüste auf Fels", "family": "warm", "rank": 8, "size": 64, "densities": [{ "x": 192, "y": 320, "w": 64, "h": 64 }, { "x": 256, "y": 320, "w": 64, "h": 64 }, { "x": 320, "y": 320, "w": 64, "h": 64 }] }, "semidesert_sand": { "name": "Halbwüste auf Sand", "family": "warm", "rank": 9, "size": 64, "densities": [{ "x": 384, "y": 320, "w": 64, "h": 64 }, { "x": 448, "y": 320, "w": 64, "h": 64 }, { "x": 512, "y": 320, "w": 64, "h": 64 }] }, "lichen_rock": { "name": "Flechten & Moos auf Fels", "family": "cold", "rank": 10, "size": 64, "densities": [{ "x": 0, "y": 256, "w": 64, "h": 64 }, { "x": 64, "y": 256, "w": 64, "h": 64 }, { "x": 128, "y": 256, "w": 64, "h": 64 }] }, "tundra": { "name": "Tundra", "family": "cold", "rank": 11, "size": 64, "densities": [{ "x": 128, "y": 384, "w": 64, "h": 64 }, { "x": 192, "y": 384, "w": 64, "h": 64 }, { "x": 256, "y": 384, "w": 64, "h": 64 }] }, "moss": { "name": "Moosteppich", "family": "temperate", "rank": 12, "size": 64, "densities": [{ "x": 576, "y": 256, "w": 64, "h": 64 }, { "x": 640, "y": 256, "w": 64, "h": 64 }, { "x": 704, "y": 256, "w": 64, "h": 64 }] }, "fern": { "name": "Farnflur", "family": "temperate", "rank": 13, "size": 64, "densities": [{ "x": 704, "y": 128, "w": 64, "h": 64 }, { "x": 768, "y": 128, "w": 64, "h": 64 }, { "x": 832, "y": 128, "w": 64, "h": 64 }] }, "steppe": { "name": "Steppe", "family": "temperate", "rank": 14, "size": 128, "densities": [{ "x": 768, "y": 0, "w": 128, "h": 128 }, { "x": 896, "y": 0, "w": 128, "h": 128 }, { "x": 0, "y": 128, "w": 128, "h": 128 }] }, "savanna": { "name": "Savanne", "family": "warm", "rank": 15, "size": 128, "densities": [{ "x": 256, "y": 0, "w": 128, "h": 128 }, { "x": 384, "y": 0, "w": 128, "h": 128 }, { "x": 512, "y": 0, "w": 128, "h": 128 }] }, "meadow": { "name": "Wiese", "family": "temperate", "rank": 16, "size": 64, "densities": [{ "x": 384, "y": 256, "w": 64, "h": 64 }, { "x": 448, "y": 256, "w": 64, "h": 64 }, { "x": 512, "y": 256, "w": 64, "h": 64 }] }, "alpine_meadow": { "name": "Alpine Matte", "family": "mountain", "rank": 17, "size": 64, "densities": [{ "x": 384, "y": 128, "w": 64, "h": 64 }, { "x": 448, "y": 128, "w": 64, "h": 64 }, { "x": 512, "y": 128, "w": 64, "h": 64 }] }, "marsh": { "name": "Sumpf", "family": "wet", "rank": 18, "size": 64, "densities": [{ "x": 192, "y": 256, "w": 64, "h": 64 }, { "x": 256, "y": 256, "w": 64, "h": 64 }, { "x": 320, "y": 256, "w": 64, "h": 64 }] }, "shrub": { "name": "Gebüsch", "family": "temperate", "rank": 19, "size": 64, "densities": [{ "x": 576, "y": 320, "w": 64, "h": 64 }, { "x": 640, "y": 320, "w": 64, "h": 64 }, { "x": 704, "y": 320, "w": 64, "h": 64 }] }, "swamp_forest": { "name": "Sumpfwaldboden", "family": "wet", "rank": 20, "size": 64, "densities": [{ "x": 896, "y": 320, "w": 64, "h": 64 }, { "x": 960, "y": 320, "w": 64, "h": 64 }] }, "taiga": { "name": "Nadelwaldboden", "family": "cold", "rank": 21, "size": 64, "densities": [{ "x": 0, "y": 384, "w": 64, "h": 64 }, { "x": 64, "y": 384, "w": 64, "h": 64 }] }, "forest": { "name": "Waldboden", "family": "temperate", "rank": 22, "size": 64, "densities": [{ "x": 896, "y": 128, "w": 64, "h": 64 }, { "x": 960, "y": 128, "w": 64, "h": 64 }] }, "rainforest": { "name": "Regenwaldboden", "family": "warm", "rank": 23, "size": 64, "densities": [{ "x": 832, "y": 256, "w": 64, "h": 64 }, { "x": 896, "y": 256, "w": 64, "h": 64 }] }, "rainforest_montane": { "name": "Bergregenwaldboden", "family": "mountain", "rank": 24, "size": 64, "densities": [{ "x": 960, "y": 256, "w": 64, "h": 64 }, { "x": 0, "y": 320, "w": 64, "h": 64 }] }, "sea_ice": { "name": "Meereis", "family": "cold", "rank": 25, "size": 128, "densities": [{ "x": 640, "y": 0, "w": 128, "h": 128 }] }, "ice": { "name": "Eis", "family": "cold", "rank": 26, "size": 128, "densities": [{ "x": 0, "y": 0, "w": 128, "h": 128 }] }, "snow": { "name": "Gipfelschnee", "family": "cold", "rank": 27, "size": 64, "densities": [{ "x": 768, "y": 320, "w": 64, "h": 64 }] } }, "overlays": { "ripple_coast": { "name": "Rippel Küstenmeer", "family": "wet", "size": 128, "rect": { "x": 128, "y": 128, "w": 128, "h": 128 } }, "ripple_ocean": { "name": "Rippel Hochsee", "family": "wet", "size": 128, "rect": { "x": 256, "y": 128, "w": 128, "h": 128 } }, "algae_film": { "name": "Algenfilm", "family": "wet", "size": 64, "rect": { "x": 320, "y": 384, "w": 64, "h": 64 } }, "beach_sand": { "name": "Strandsand", "family": "coast", "size": 64, "rect": { "x": 384, "y": 384, "w": 64, "h": 64 } } }, "masks": [[{ "x": 58, "y": 448, "w": 16, "h": 16 }, { "x": 74, "y": 448, "w": 16, "h": 16 }, { "x": 90, "y": 448, "w": 16, "h": 16 }], [{ "x": 394, "y": 448, "w": 16, "h": 16 }, { "x": 410, "y": 448, "w": 16, "h": 16 }, { "x": 426, "y": 448, "w": 16, "h": 16 }], [{ "x": 442, "y": 448, "w": 16, "h": 16 }, { "x": 458, "y": 448, "w": 16, "h": 16 }, { "x": 474, "y": 448, "w": 16, "h": 16 }], [{ "x": 490, "y": 448, "w": 16, "h": 16 }, { "x": 506, "y": 448, "w": 16, "h": 16 }, { "x": 522, "y": 448, "w": 16, "h": 16 }], [{ "x": 538, "y": 448, "w": 16, "h": 16 }, { "x": 554, "y": 448, "w": 16, "h": 16 }, { "x": 570, "y": 448, "w": 16, "h": 16 }], [{ "x": 586, "y": 448, "w": 16, "h": 16 }, { "x": 602, "y": 448, "w": 16, "h": 16 }, { "x": 618, "y": 448, "w": 16, "h": 16 }], [{ "x": 634, "y": 448, "w": 16, "h": 16 }, { "x": 650, "y": 448, "w": 16, "h": 16 }, { "x": 666, "y": 448, "w": 16, "h": 16 }], [{ "x": 682, "y": 448, "w": 16, "h": 16 }, { "x": 698, "y": 448, "w": 16, "h": 16 }, { "x": 714, "y": 448, "w": 16, "h": 16 }], [{ "x": 730, "y": 448, "w": 16, "h": 16 }, { "x": 746, "y": 448, "w": 16, "h": 16 }, { "x": 762, "y": 448, "w": 16, "h": 16 }], [{ "x": 778, "y": 448, "w": 16, "h": 16 }, { "x": 794, "y": 448, "w": 16, "h": 16 }, { "x": 810, "y": 448, "w": 16, "h": 16 }], [{ "x": 106, "y": 448, "w": 16, "h": 16 }, { "x": 122, "y": 448, "w": 16, "h": 16 }, { "x": 138, "y": 448, "w": 16, "h": 16 }], [{ "x": 154, "y": 448, "w": 16, "h": 16 }, { "x": 170, "y": 448, "w": 16, "h": 16 }, { "x": 186, "y": 448, "w": 16, "h": 16 }], [{ "x": 202, "y": 448, "w": 16, "h": 16 }, { "x": 218, "y": 448, "w": 16, "h": 16 }, { "x": 234, "y": 448, "w": 16, "h": 16 }], [{ "x": 250, "y": 448, "w": 16, "h": 16 }, { "x": 266, "y": 448, "w": 16, "h": 16 }, { "x": 282, "y": 448, "w": 16, "h": 16 }], [{ "x": 298, "y": 448, "w": 16, "h": 16 }, { "x": 314, "y": 448, "w": 16, "h": 16 }, { "x": 330, "y": 448, "w": 16, "h": 16 }], [{ "x": 346, "y": 448, "w": 16, "h": 16 }, { "x": 362, "y": 448, "w": 16, "h": 16 }, { "x": 378, "y": 448, "w": 16, "h": 16 }]], "objects": { "lepidodendron": { "name": "Schuppenbaum", "group": "clubmosses", "kind": "tree", "family": "wet", "variants": [{ "rect": { "x": 30, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 40, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 940, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 953, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 656, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 672, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "archaeopteris": { "name": "Urbaum", "group": "firstTrees", "kind": "tree", "family": "temperate", "variants": [{ "rect": { "x": 942, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 952, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 810, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 823, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 480, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 496, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "cycad": { "name": "Palmfarn", "group": "seedPlants", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 1002, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 1012, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 888, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 901, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 592, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 608, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "spruce": { "name": "Fichte", "group": "conifers", "kind": "tree", "family": "cold", "variants": [{ "rect": { "x": 70, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 80, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 992, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 1005, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 720, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 736, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "swamp_cypress": { "name": "Sumpfzypresse", "group": "conifers", "kind": "tree", "family": "wet", "variants": [{ "rect": { "x": 90, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 100, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 0, "y": 448, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 13, "y": 448, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 752, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 768, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "oak": { "name": "Laubbaum", "group": "broadleaf", "kind": "tree", "family": "temperate", "variants": [{ "rect": { "x": 50, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 60, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 966, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 979, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 688, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 704, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "jungle_giant": { "name": "Tropenriese", "group": "broadleaf", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 0, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 10, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 914, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 927, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 624, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 640, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "acacia": { "name": "Schirmbaum", "group": "broadleaf", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 922, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 932, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 784, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 797, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 448, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 464, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "baobab": { "name": "Affenbrotbaum", "group": "flowering", "kind": "tree", "family": "warm", "variants": [{ "rect": { "x": 962, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 972, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 836, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 849, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 512, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 528, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "coconut_palm": { "name": "Kokospalme", "group": "flowering", "kind": "tree", "family": "coast", "variants": [{ "rect": { "x": 982, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 0 }, { "rect": { "x": 992, "y": 448, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "s", "form": 1 }, { "rect": { "x": 862, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 0 }, { "rect": { "x": 875, "y": 384, "w": 13, "h": 17 }, "ax": 6, "ay": 16, "size": "m", "form": 1 }, { "rect": { "x": 560, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 0 }, { "rect": { "x": 576, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "l", "form": 1 }] }, "tree_fern": { "name": "Baumfarn", "group": "ferns", "kind": "bush", "family": "warm", "variants": [{ "rect": { "x": 308, "y": 465, "w": 16, "h": 9 }, "ax": 8, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 906, "y": 448, "w": 16, "h": 13 }, "ax": 8, "ay": 12, "size": "", "form": 1 }, { "rect": { "x": 42, "y": 448, "w": 16, "h": 16 }, "ax": 8, "ay": 15, "size": "", "form": 2 }] }, "seed_fern": { "name": "Samenfarn-Busch", "group": "seedPlants", "kind": "bush", "family": "temperate", "variants": [{ "rect": { "x": 557, "y": 465, "w": 11, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 338, "y": 465, "w": 13, "h": 9 }, "ax": 6, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 154, "y": 465, "w": 15, "h": 11 }, "ax": 7, "ay": 10, "size": "", "form": 2 }] }, "juniper": { "name": "Wacholder", "group": "conifers", "kind": "bush", "family": "cold", "variants": [{ "rect": { "x": 658, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 386, "y": 465, "w": 11, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 141, "y": 465, "w": 13, "h": 12 }, "ax": 6, "ay": 11, "size": "", "form": 2 }] }, "flower_bush": { "name": "Blütenstrauch", "group": "flowering", "kind": "bush", "family": "temperate", "variants": [{ "rect": { "x": 650, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 375, "y": 465, "w": 11, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 184, "y": 465, "w": 14, "h": 11 }, "ax": 7, "ay": 10, "size": "", "form": 2 }] }, "shrub": { "name": "Laubstrauch", "group": "broadleaf", "kind": "bush", "family": "temperate", "variants": [{ "rect": { "x": 588, "y": 465, "w": 10, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 363, "y": 465, "w": 12, "h": 9 }, "ax": 6, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 169, "y": 465, "w": 15, "h": 11 }, "ax": 7, "ay": 10, "size": "", "form": 2 }] }, "thorn_bush": { "name": "Dornbusch", "group": "broadleaf", "kind": "bush", "family": "warm", "variants": [{ "rect": { "x": 666, "y": 465, "w": 16, "h": 6 }, "ax": 8, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 447, "y": 465, "w": 16, "h": 8 }, "ax": 8, "ay": 7, "size": "", "form": 1 }, { "rect": { "x": 217, "y": 465, "w": 16, "h": 10 }, "ax": 8, "ay": 9, "size": "", "form": 2 }] }, "liverwort": { "name": "Lebermoos-Polster", "group": "landPlants", "kind": "low", "family": "wet", "variants": [{ "rect": { "x": 792, "y": 465, "w": 9, "h": 5 }, "ax": 4, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 682, "y": 465, "w": 13, "h": 6 }, "ax": 6, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 463, "y": 465, "w": 14, "h": 8 }, "ax": 7, "ay": 7, "size": "", "form": 2 }] }, "moss_cushion": { "name": "Moospolster", "group": "mosses", "kind": "low", "family": "cold", "variants": [{ "rect": { "x": 830, "y": 465, "w": 7, "h": 4 }, "ax": 3, "ay": 3, "size": "", "form": 0 }, { "rect": { "x": 781, "y": 465, "w": 11, "h": 5 }, "ax": 5, "ay": 4, "size": "", "form": 1 }, { "rect": { "x": 544, "y": 465, "w": 13, "h": 7 }, "ax": 6, "ay": 6, "size": "", "form": 2 }] }, "rhynia": { "name": "Urfarn-Stängel", "group": "vascular", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 776, "y": 465, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 625, "y": 465, "w": 9, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 259, "y": 465, "w": 12, "h": 10 }, "ax": 6, "ay": 9, "size": "", "form": 2 }] }, "fern_frond": { "name": "Farnwedel", "group": "ferns", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 809, "y": 465, "w": 8, "h": 5 }, "ax": 4, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 706, "y": 465, "w": 11, "h": 6 }, "ax": 5, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 324, "y": 465, "w": 14, "h": 9 }, "ax": 7, "ay": 8, "size": "", "form": 2 }] }, "horsetail": { "name": "Schachtelhalm", "group": "ferns", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 442, "y": 465, "w": 5, "h": 9 }, "ax": 2, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 209, "y": 465, "w": 8, "h": 11 }, "ax": 4, "ay": 10, "size": "", "form": 1 }, { "rect": { "x": 110, "y": 465, "w": 9, "h": 13 }, "ax": 4, "ay": 12, "size": "", "form": 2 }] }, "flowers": { "name": "Blumen", "group": "flowering", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 717, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 726, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 735, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 2 }] }, "dwarf_shrub": { "name": "Heide", "group": "flowering", "kind": "low", "family": "cold", "variants": [{ "rect": { "x": 801, "y": 465, "w": 8, "h": 5 }, "ax": 4, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 695, "y": 465, "w": 11, "h": 6 }, "ax": 5, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 516, "y": 465, "w": 14, "h": 7 }, "ax": 7, "ay": 6, "size": "", "form": 2 }] }, "grass_tuft": { "name": "Grasbüschel", "group": "grasses", "kind": "low", "family": "temperate", "variants": [{ "rect": { "x": 817, "y": 465, "w": 7, "h": 5 }, "ax": 3, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 616, "y": 465, "w": 9, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 568, "y": 465, "w": 10, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 2 }] }, "tall_grass": { "name": "Hochgras", "group": "grasses", "kind": "low", "family": "warm", "variants": [{ "rect": { "x": 292, "y": 465, "w": 16, "h": 9 }, "ax": 8, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 877, "y": 448, "w": 16, "h": 14 }, "ax": 8, "ay": 13, "size": "", "form": 1 }, { "rect": { "x": 26, "y": 448, "w": 16, "h": 16 }, "ax": 8, "ay": 15, "size": "", "form": 2 }] }, "reed": { "name": "Schilf", "group": "grasses", "kind": "low", "family": "wet", "variants": [{ "rect": { "x": 119, "y": 465, "w": 8, "h": 13 }, "ax": 4, "ay": 12, "size": "", "form": 0 }, { "rect": { "x": 866, "y": 448, "w": 11, "h": 15 }, "ax": 5, "ay": 14, "size": "", "form": 1 }, { "rect": { "x": 826, "y": 448, "w": 15, "h": 16 }, "ax": 7, "ay": 15, "size": "", "form": 2 }] }, "sundew": { "name": "Sonnentau", "group": "carnivorous", "kind": "low", "family": "wet", "variants": [{ "rect": { "x": 837, "y": 465, "w": 7, "h": 4 }, "ax": 3, "ay": 3, "size": "", "form": 0 }, { "rect": { "x": 744, "y": 465, "w": 9, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 1 }, { "rect": { "x": 427, "y": 465, "w": 9, "h": 9 }, "ax": 4, "ay": 8, "size": "", "form": 2 }] }, "cactus_column": { "name": "Säulenkaktus", "group": "flowering", "kind": "cactus", "family": "warm", "variants": [{ "rect": { "x": 271, "y": 465, "w": 5, "h": 10 }, "ax": 2, "ay": 9, "size": "", "form": 0 }, { "rect": { "x": 854, "y": 448, "w": 12, "h": 16 }, "ax": 6, "ay": 15, "size": "", "form": 1 }, { "rect": { "x": 544, "y": 384, "w": 16, "h": 20 }, "ax": 8, "ay": 19, "size": "", "form": 2 }] }, "cactus_barrel": { "name": "Kugelkaktus", "group": "flowering", "kind": "cactus", "family": "warm", "variants": [{ "rect": { "x": 824, "y": 465, "w": 6, "h": 5 }, "ax": 3, "ay": 4, "size": "", "form": 0 }, { "rect": { "x": 634, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 397, "y": 465, "w": 10, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 2 }] }, "cactus_opuntia": { "name": "Feigenkaktus", "group": "flowering", "kind": "cactus", "family": "warm", "variants": [{ "rect": { "x": 509, "y": 465, "w": 7, "h": 8 }, "ax": 3, "ay": 7, "size": "", "form": 0 }, { "rect": { "x": 198, "y": 465, "w": 11, "h": 11 }, "ax": 5, "ay": 10, "size": "", "form": 1 }, { "rect": { "x": 893, "y": 448, "w": 13, "h": 14 }, "ax": 6, "ay": 13, "size": "", "form": 2 }] }, "kelp": { "name": "Tang", "group": "marineAlgae", "kind": "water", "family": "wet", "variants": [{ "rect": { "x": 436, "y": 465, "w": 6, "h": 9 }, "ax": 3, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 20, "y": 465, "w": 10, "h": 13 }, "ax": 5, "ay": 12, "size": "", "form": 1 }, { "rect": { "x": 841, "y": 448, "w": 13, "h": 16 }, "ax": 6, "ay": 15, "size": "", "form": 2 }] }, "coral_rugose": { "name": "Runzelkorallen", "group": null, "kind": "reef", "family": "coast", "variants": [{ "rect": { "x": 769, "y": 465, "w": 7, "h": 6 }, "ax": 3, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 598, "y": 465, "w": 9, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 1 }, { "rect": { "x": 499, "y": 465, "w": 10, "h": 8 }, "ax": 5, "ay": 7, "size": "", "form": 2 }, { "rect": { "x": 642, "y": 465, "w": 8, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 3 }] }, "coral_stony": { "name": "Steinkorallen", "group": null, "kind": "reef", "family": "coast", "variants": [{ "rect": { "x": 607, "y": 465, "w": 9, "h": 7 }, "ax": 4, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 247, "y": 465, "w": 12, "h": 10 }, "ax": 6, "ay": 9, "size": "", "form": 1 }, { "rect": { "x": 488, "y": 465, "w": 11, "h": 8 }, "ax": 5, "ay": 7, "size": "", "form": 2 }, { "rect": { "x": 407, "y": 465, "w": 10, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 3 }] }, "reef_sand": { "name": "Riffsand", "group": null, "kind": "reef", "family": "coast", "variants": [{ "rect": { "x": 761, "y": 465, "w": 8, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 351, "y": 465, "w": 12, "h": 9 }, "ax": 6, "ay": 8, "size": "", "form": 1 }, { "rect": { "x": 578, "y": 465, "w": 10, "h": 7 }, "ax": 5, "ay": 6, "size": "", "form": 2 }] }, "boulder": { "name": "Felsbrocken", "group": null, "kind": "rock", "family": "cold", "variants": [{ "rect": { "x": 753, "y": 465, "w": 8, "h": 6 }, "ax": 4, "ay": 5, "size": "", "form": 0 }, { "rect": { "x": 477, "y": 465, "w": 11, "h": 8 }, "ax": 5, "ay": 7, "size": "", "form": 1 }, { "rect": { "x": 233, "y": 465, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "form": 2 }] }, "scree": { "name": "Geröll", "group": null, "kind": "rock", "family": "cold", "variants": [{ "rect": { "x": 530, "y": 465, "w": 14, "h": 7 }, "ax": 7, "ay": 6, "size": "", "form": 0 }, { "rect": { "x": 276, "y": 465, "w": 16, "h": 9 }, "ax": 8, "ay": 8, "size": "", "form": 1 }] }, "ice_block": { "name": "Eisbrocken", "group": null, "kind": "rock", "family": "cold", "variants": [{ "rect": { "x": 417, "y": 465, "w": 10, "h": 9 }, "ax": 5, "ay": 8, "size": "", "form": 0 }, { "rect": { "x": 127, "y": 465, "w": 14, "h": 12 }, "ax": 7, "ay": 11, "size": "", "form": 1 }] } }, "landscapeIds": ["ice", "snow", "rock", "barren", "desert", "lichen", "moss", "tundra", "fernland", "steppe", "meadow", "savanna", "semidesert", "shrubland", "forest", "taiga", "rainforest", "marsh", "swampforest", "alpine", "cloudforest"], "landscapes": { "ice": { "name": "Eis", "materials": { "rock": "ice", "sand": "ice", "soil": "ice", "mire": "ice" }, "objects": {}, "abiotic": 0.04 }, "snow": { "name": "Gipfelschnee", "materials": { "rock": "snow", "sand": "snow", "soil": "snow", "mire": "snow" }, "objects": {}, "abiotic": 0.06 }, "rock": { "name": "Fels", "materials": { "rock": "rock", "sand": "sand", "soil": "rock", "mire": "mud" }, "objects": { "low": [0.6] }, "abiotic": 0.25 }, "barren": { "name": "Rohboden", "materials": { "rock": "rock", "sand": "sand", "soil": "barren", "mire": "mud" }, "objects": { "low": [0.6] }, "abiotic": 0.05 }, "desert": { "name": "Wüste", "materials": { "rock": "stony_desert", "sand": "sand", "soil": "stony_desert", "mire": "mud" }, "objects": { "low": [0.6] }, "abiotic": 0.06 }, "lichen": { "name": "Flechten & Moos auf Fels", "materials": { "rock": "lichen_rock", "sand": "lichen_rock", "soil": "lichen_rock", "mire": "lichen_rock" }, "objects": { "low": [0.1, 0.2, 0.35] }, "abiotic": 0.12 }, "moss": { "name": "Moosteppich", "materials": { "rock": "lichen_rock", "sand": "moss", "soil": "moss", "mire": "moss" }, "objects": { "low": [0.2, 0.4, 0.6] }, "abiotic": 0 }, "tundra": { "name": "Tundra", "materials": { "rock": "lichen_rock", "sand": "tundra", "soil": "tundra", "mire": "tundra" }, "objects": { "bush": [0.05, 0.1, 0.15], "low": [0.2, 0.35, 0.5] }, "abiotic": 0.08 }, "fernland": { "name": "Farnflur", "materials": { "rock": "fern", "sand": "fern", "soil": "fern", "mire": "fern" }, "objects": { "bush": [0.1, 0.2, 0.3], "low": [0.5, 0.9, 1.3] }, "abiotic": 0 }, "steppe": { "name": "Steppe", "materials": { "rock": "steppe", "sand": "steppe", "soil": "steppe", "mire": "steppe" }, "objects": { "bush": [0.02, 0.04, 0.06], "low": [0.3, 0.5, 0.7] }, "abiotic": 0.02 }, "meadow": { "name": "Wiese", "materials": { "rock": "meadow", "sand": "meadow", "soil": "meadow", "mire": "meadow" }, "objects": { "bush": [0.03, 0.05, 0.08], "low": [0.3, 0.5, 0.7] }, "abiotic": 0 }, "savanna": { "name": "Savanne", "materials": { "rock": "savanna", "sand": "savanna", "soil": "savanna", "mire": "savanna" }, "objects": { "tree": [0.08, 0.15, 0.22], "bush": [0.05, 0.1, 0.15], "low": [0.3, 0.5, 0.7] }, "abiotic": 0 }, "semidesert": { "name": "Halbwüste", "materials": { "rock": "semidesert_rock", "sand": "semidesert_sand", "soil": "semidesert_rock", "mire": "semidesert_rock" }, "objects": { "bush": [0.1, 0.18, 0.25], "low": [0.1, 0.2, 0.3] }, "abiotic": 0.06 }, "shrubland": { "name": "Gebüsch", "materials": { "rock": "shrub", "sand": "shrub", "soil": "shrub", "mire": "shrub" }, "objects": { "tree": [0.1, 0.15, 0.2], "bush": [0.6, 1, 1.4], "low": [0.2, 0.3, 0.3] }, "abiotic": 0 }, "forest": { "name": "Wald", "materials": { "rock": "forest", "sand": "forest", "soil": "forest", "mire": "forest" }, "objects": { "tree": [1.5, 2.6], "bush": [0.2, 0.1], "low": [0.3, 0.2] }, "abiotic": 0 }, "taiga": { "name": "Nadelwald", "materials": { "rock": "taiga", "sand": "taiga", "soil": "taiga", "mire": "taiga" }, "objects": { "tree": [1.5, 2.6], "low": [0.2, 0.1] }, "abiotic": 0 }, "rainforest": { "name": "Regenwald", "materials": { "rock": "rainforest", "sand": "rainforest", "soil": "rainforest", "mire": "rainforest" }, "objects": { "tree": [1.8, 3], "low": [0.3, 0.2] }, "abiotic": 0 }, "marsh": { "name": "Sumpf", "materials": { "rock": "marsh", "sand": "marsh", "soil": "marsh", "mire": "marsh" }, "objects": { "bush": [0, 0.05, 0.1], "low": [0.5, 0.9, 1.3] }, "abiotic": 0 }, "swampforest": { "name": "Sumpfwald", "materials": { "rock": "swamp_forest", "sand": "swamp_forest", "soil": "swamp_forest", "mire": "swamp_forest" }, "objects": { "tree": [1.2, 2.2], "low": [0.6, 0.4] }, "abiotic": 0 }, "alpine": { "name": "Alpine Matte", "materials": { "rock": "lichen_rock", "sand": "alpine_meadow", "soil": "alpine_meadow", "mire": "marsh" }, "objects": { "bush": [0.02, 0.04, 0.06], "low": [0.3, 0.5, 0.7] }, "abiotic": 0.1 }, "cloudforest": { "name": "Bergregenwald", "materials": { "rock": "rainforest_montane", "sand": "rainforest_montane", "soil": "rainforest_montane", "mire": "rainforest_montane" }, "objects": { "tree": [1.8, 3], "low": [0.3, 0.2] }, "abiotic": 0 } }, "groups": { "marineAlgae": { "name": "Meeresalgen", "objects": [{ "id": "kelp", "where": ["sea"] }], "swatch": null }, "freshwaterAlgae": { "name": "Süßwasser-Grünalgen", "objects": [], "swatch": { "material": "algae_film", "density": 0 } }, "landPlants": { "name": "Erste Landpflanzen", "objects": [{ "id": "liverwort", "where": "*" }], "swatch": null }, "mosses": { "name": "Moose", "objects": [{ "id": "moss_cushion", "where": "*" }], "swatch": { "material": "moss", "density": 2 } }, "vascular": { "name": "Frühe Gefäßpflanzen", "objects": [{ "id": "rhynia", "where": "*" }], "swatch": null }, "clubmosses": { "name": "Bärlapppflanzen", "objects": [{ "id": "lepidodendron", "where": "*" }], "swatch": null }, "ferns": { "name": "Farne & Schachtelhalme", "objects": [{ "id": "tree_fern", "where": ["rainforest", "cloudforest", "forest", "swampforest", "fernland"] }, { "id": "horsetail", "where": ["marsh", "swampforest", "fernland"] }, { "id": "fern_frond", "where": "*" }], "swatch": null }, "firstTrees": { "name": "Urbäume", "objects": [{ "id": "archaeopteris", "where": "*" }], "swatch": null }, "seedPlants": { "name": "Samenpflanzen", "objects": [{ "id": "cycad", "where": ["savanna", "forest", "semidesert", "shrubland"] }, { "id": "seed_fern", "where": "*" }], "swatch": null }, "conifers": { "name": "Nadelbäume", "objects": [{ "id": "swamp_cypress", "where": ["marsh", "swampforest"] }, { "id": "juniper", "where": ["tundra", "alpine", "shrubland", "semidesert", "steppe", "lichen"] }, { "id": "spruce", "where": ["taiga", "forest", "shrubland", "meadow", "steppe", "fernland", "moss", "tundra", "rock", "barren"] }], "swatch": null }, "flowering": { "name": "Blütenpflanzen", "objects": [{ "id": "cactus_column", "where": ["semidesert", "desert"] }, { "id": "cactus_barrel", "where": ["semidesert", "desert"] }, { "id": "cactus_opuntia", "where": ["semidesert", "desert"] }, { "id": "dwarf_shrub", "where": ["tundra", "alpine", "lichen", "moss"] }, { "id": "flower_bush", "where": ["shrubland", "forest", "meadow"] }, { "id": "flowers", "where": "*" }], "swatch": null }, "broadleaf": { "name": "Laubbäume", "objects": [{ "id": "jungle_giant", "where": ["rainforest", "cloudforest"] }, { "id": "acacia", "where": ["savanna", "semidesert"] }, { "id": "thorn_bush", "where": ["semidesert", "steppe", "savanna"] }, { "id": "shrub", "where": ["shrubland", "meadow", "forest"] }, { "id": "oak", "where": "*" }], "swatch": null }, "grasses": { "name": "Gräser", "objects": [{ "id": "reed", "where": ["marsh", "swampforest"] }, { "id": "tall_grass", "where": ["savanna"] }, { "id": "grass_tuft", "where": "*" }], "swatch": { "material": "steppe", "density": 2 } }, "carnivorous": { "name": "Fleischfressende Pflanzen", "objects": [{ "id": "sundew", "where": "*" }], "swatch": null } }, "abiotic": [{ "id": "boulder", "where": ["rock", "lichen", "tundra", "alpine", "semidesert", "desert", "steppe", "barren"] }, { "id": "scree", "where": ["rock", "snow", "alpine"] }, { "id": "ice_block", "where": ["ice"] }] };
+    SE.TERRAIN_ATLAS_PNG = 'data:image/png;base64,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';
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — the terrain atlas as palette indices
@@ -30023,6 +30437,7 @@ var SE;
             this.rippleCoast = tex(ov.ripple_coast.rect, ov.ripple_coast.size);
             this.rippleOcean = tex(ov.ripple_ocean.rect, ov.ripple_ocean.size);
             this.algae = tex(ov.algae_film.rect, ov.algae_film.size);
+            this.beach = tex(ov.beach_sand.rect, ov.beach_sand.size);
             const sprites = {};
             for (const id of Object.keys(m.objects)) {
                 sprites[id] = m.objects[id].variants.map((v) => ({
@@ -30050,8 +30465,10 @@ var SE;
             this.rgba = new Uint32Array(256);
             m.palette.forEach((c, i) => { this.rgba[i] = rgbaWord(c); });
             this.water = m.ramps.water;
+            this.waterWarm = m.ramps.waterWarm;
+            this.shelf = m.ramps.shelf;
             this.isWater = new Uint8Array(256);
-            for (const i of this.water)
+            for (const i of [...this.water, ...this.waterWarm, ...this.shelf])
                 this.isWater[i] = 1;
         }
         /** Art from atlas pixels already turned into palette indices (row-major, manifest width). */
@@ -30378,76 +30795,582 @@ var SE;
     SE.savannaTreeId = savannaTreeId;
 })(SE || (SE = {}));
 /* =============================================================================
- * SimEarth 2.0 — tropical sandy beaches and coconut palms
+ * SimEarth 2.0 — coral reefs, lagoons, beaches and palms
  * -----------------------------------------------------------------------------
- * Warm low coasts show a sandy beach in stretches; once the flowering plants
- * have existed for PALM_DELAY_YEARS, coconut palms stand on some tropical
- * and warm beach tiles. Drawing only: the simulation does
- * not know them, so nothing is saved.
+ * Drawing only: derived from what the simulation already holds, never saved
+ * and never read back by it (no field, no tick step, no random numbers).
+ *   - reef: warm (≥ CORAL_MIN_TEMP) coastal sea where a reef-building
+ *     sub-species (species art `reefBuilder`) lives densely enough, away from
+ *     muddy river mouths. At most one centre per seed-offset cell of
+ *     REEF_CELL tiles, REEF_SPACING apart; the reef takes in the candidates
+ *     around it, rugose corals 0–1 tiles, stony corals 1–2;
+ *   - grazing fish (`reefGrazer`) on or beside a reef grind part of its coral
+ *     to sand and wash it ashore: white beaches on the land nearby;
+ *   - lagoon: turquoise over the reef and the coastal sea a tile landward;
+ *   - shell beaches: now and then on warm coasts beside molluscs;
+ *   - palms on the beaches, since the oldest palm fossils.
+ * Densities are read in levels, so a reef's size, patches and sand change
+ * only when a population crosses a level, not with every small change. The
+ * thresholds themselves have no hysteresis: that would need saved state.
+ * Pure functions, no DOM: the renderer, the Examine window, the chronicle
+ * (app.ts) and the tests share them.
  * ========================================================================== */
 var SE;
 (function (SE) {
-    const NO_BEACH = [SE.Landscape.Ice, SE.Landscape.Snow, SE.Landscape.Rock, SE.Landscape.Marsh, SE.Landscape.Swampforest];
-    /** Is land tile i a sandy beach: low, warm (by the hysteresis zone, so it does not flicker), next to open sea, in a stretch? */
-    function isBeach(world, i) {
-        const { elevation, landscapeZone, biome } = world;
-        const h = elevation[i];
-        if (h < 0 || h >= SE.BEACH_MAX_ELEVATION)
-            return false;
-        const z = landscapeZone[i];
-        if (z === SE.ZONE_NONE || SE.zoneTemp(z) < 3 /* TempClass.Warm */ || (z & SE.ZONE_MOUNTAIN) !== 0)
-            return false;
-        // Humid tropical coasts are wetland and grow swamp forest; without this
-        // exception the classic palm coasts (Indonesia, Antilles) had no beach.
-        const tropical = SE.zoneTemp(z) === 4 /* TempClass.Tropical */;
-        if (!tropical && (z & SE.ZONE_WETLAND) !== 0)
+    const N = SE.SUBSPECIES_PER_CLASS;
+    /** Per class × stage: the coral kind it builds (0 none). */
+    const BUILDS = new Uint8Array(SE.LIFE_COUNT * N);
+    /**
+     * Per class: its grazing sub-species (N where it has none). Once that has
+     * evolved anywhere, the class grazes every reef it lives on or beside:
+     * the stage a tile shows is only its newest form, the others live on.
+     */
+    const GRAZE_FROM = new Uint8Array(SE.LIFE_COUNT).fill(N);
+    const BUILDERS = [];
+    const GRAZERS = [];
+    /** The sub-species name of each coral kind, for the Examine window. */
+    const CORAL_NAMES = ['', '', ''];
+    for (let c = 1; c < SE.LIFE_COUNT; c++) {
+        (SE.SPECIES[c]?.stages ?? []).forEach((s, k) => {
+            if (s.reefBuilder) {
+                const kind = s.reefBuilder === 'stony' ? 2 /* CoralKind.Stony */ : 1 /* CoralKind.Rugose */;
+                BUILDS[c * N + k] = kind;
+                CORAL_NAMES[kind] = s.name;
+                if (!BUILDERS.includes(c))
+                    BUILDERS.push(c);
+            }
+            if (s.reefGrazer && k < GRAZE_FROM[c]) {
+                GRAZE_FROM[c] = k;
+                if (!GRAZERS.includes(c))
+                    GRAZERS.push(c);
+            }
+        });
+    }
+    /** Grid sizes as locals: in these loops an SE lookup would cost more than the work. */
+    const W = SE.GRID_W;
+    const H = SE.GRID_H;
+    const LC = SE.LIFE_COUNT;
+    const LARVA_REACH = SE.REEF_LARVA_REACH;
+    const SPACING2 = SE.REEF_SPACING * SE.REEF_SPACING;
+    const CELL = SE.REEF_CELL;
+    const DENSITY_STEP = SE.REEF_DENSITY_STEP;
+    const GRAZER_MIN = SE.REEF_GRAZER_MIN;
+    const COAST = SE.Biome.Coast;
+    /** The density from which a reef grows large (REEF_WIDE_LEVEL). */
+    const WIDE_DENSITY = SE.REEF_WIDE_LEVEL * SE.REEF_DENSITY_STEP;
+    /** Column x wrapped round the planet, for x within one width of it. */
+    function col(x) {
+        return x < 0 ? x + W : x >= W ? x - W : x;
+    }
+    /** Density level 0..3 in steps of DENSITY_STEP. */
+    function level(d) {
+        return Math.min(3, Math.floor(d / DENSITY_STEP));
+    }
+    /** Grazing fish level 0..3: 0 below GRAZER_MIN, then one more per DENSITY_STEP. */
+    function grazing(d) {
+        return d < GRAZER_MIN ? 0 : Math.min(3, 1 + Math.floor(d / DENSITY_STEP));
+    }
+    /** Is water of this temperature warm enough for corals? */
+    function coralWarm(temperature) {
+        return temperature >= SE.CORAL_MIN_TEMP;
+    }
+    SE.coralWarm = coralWarm;
+    /** Columns of the land sums: the grid, 3 wrapped columns past each edge, and the leading zero column. */
+    const SW = W + 7;
+    /** Can land tile i carry a beach: low, not ice, snow, marsh, swamp forest, mountain or rock belt, no fresh scar? */
+    function beachable(world, i) {
+        const h = world.elevation[i];
+        if (h < 0 || h >= SE.UPLAND_ELEVATION || world.hazards.scar[i] !== SE.ScarKind.None)
             return false;
         const ls = world.landscape[i];
-        if (NO_BEACH.includes(ls) && !(tropical && ls === SE.Landscape.Swampforest))
+        if (ls === SE.Landscape.Ice || ls === SE.Landscape.Snow || ls === SE.Landscape.Marsh || ls === SE.Landscape.Swampforest)
             return false;
-        const x = i % SE.GRID_W;
-        const y = (i / SE.GRID_W) | 0;
-        if (SE.landOctave(x, y, SE.GRID_W, 32, 1201) >= SE.BEACH_SHARE)
-            return false;
-        for (let k = 0; k < 4; k++) {
-            const j = k === 0 ? SE.idx(SE.wrapX(x - 1), y) : k === 1 ? SE.idx(SE.wrapX(x + 1), y) : k === 2 ? (y > 0 ? i - SE.GRID_W : -1) : (y < SE.GRID_H - 1 ? i + SE.GRID_W : -1);
-            if (j >= 0 && elevation[j] < 0 && biome[j] !== SE.Biome.Arctic)
-                return true;
-        }
-        return false;
+        const z = world.landscapeZone[i];
+        return z === SE.ZONE_NONE || (z & (SE.ZONE_MOUNTAIN | SE.ZONE_ROCKBELT | SE.ZONE_SNOW)) === 0;
     }
-    SE.isBeach = isBeach;
-    /** Have the flowering plants existed long enough for palms? */
+    class ReefMap {
+        constructor() {
+            /** Coral kind of a reef tile, CoralKind.None elsewhere. */
+            this.coral = new Uint8Array(SE.TILE_COUNT);
+            /** Coral and sand patches drawn on a reef tile. */
+            this.corals = new Uint8Array(SE.TILE_COUNT);
+            this.sands = new Uint8Array(SE.TILE_COUNT);
+            /** Grazing fish on or beside a reef tile, density level 0..3. */
+            this.fish = new Uint8Array(SE.TILE_COUNT);
+            /**
+             * Turquoise of a sea tile: 0 none, 1 landward beside a reef, 2 a reef (or
+             * beside a sandy one), 3 a reef with sand. A land tile holds its sea
+             * neighbours' highest, so the turquoise reaches the shore.
+             */
+            this.lagoon = new Uint8Array(SE.TILE_COUNT);
+            /** BeachKind of a land tile. */
+            this.beach = new Uint8Array(SE.TILE_COUNT);
+            this.reefTiles = 0;
+            this.reefBeachTiles = 0;
+            this.cand = new Uint8Array(SE.TILE_COUNT);
+            this.candLevel = new Uint8Array(SE.TILE_COUNT);
+            /** 1 on a small island's land, 2 on larger land, 0 not looked at yet. */
+            this.island = new Uint8Array(SE.TILE_COUNT);
+            /** 1 within REEF_RIVER_REACH of a big river: muddy water, no reef, no beach. */
+            this.mud = new Uint8Array(SE.TILE_COUNT);
+            /** Prefix sums of the land tiles (rows + 1 × SW), so the distance to land is a few lookups. */
+            this.landSum = new Int32Array(SW * (H + 1));
+            /** 1 where a land tile was weighed for a white beach. */
+            this.looked = new Uint8Array(SE.TILE_COUNT);
+            /** Hash of each candidate, and the best candidate per centre cell (−1 none). */
+            this.score = new Float32Array(SE.TILE_COUNT);
+            this.best = new Int32Array((W / CELL) * (H / CELL + 1));
+        }
+        compute(world) {
+            for (const a of [this.coral, this.corals, this.sands, this.fish, this.lagoon, this.beach, this.cand, this.island, this.mud, this.looked])
+                a.fill(0);
+            this.reefTiles = 0;
+            this.reefBeachTiles = 0;
+            const { elevation: e, biome, temperature, lifeDensity: dens, lifeStage: stage } = world;
+            // The coral kind each builder class has evolved so far, anywhere: the
+            // stage a tile shows is only its newest form, so a class builds reefs
+            // wherever it lives densely in warm coastal sea once it has corals.
+            const built = new Uint8Array(SE.LIFE_COUNT);
+            for (const c of BUILDERS)
+                for (let s = 0; s < N; s++)
+                    if (world.lifeStageCounts[c * N + s] > 0)
+                        built[c] = Math.max(built[c], BUILDS[c * N + s]);
+            const reefs = BUILDERS.some((c) => built[c] > 0);
+            const shells = world.lifeCounts[SE.Life.Mollusc] > 0;
+            if (!reefs && !shells)
+                return;
+            this.sumLand(e);
+            this.markMud(world);
+            const list = [];
+            const shellSea = [];
+            const coast = SE.Biome.Coast;
+            const mollusc = SE.Life.Mollusc;
+            const tMin = SE.CORAL_MIN_TEMP;
+            const dStep = DENSITY_STEP;
+            const shellMin = SE.SHELL_MIN_LEVEL;
+            const builderMin = SE.REEF_BUILDER_MIN;
+            const shoreReach = SE.REEF_SHORE_REACH;
+            const count = SE.TILE_COUNT;
+            for (let i = 0; i < count; i++) {
+                // coralWarm and level, inlined: this runs over the whole planet.
+                if (biome[i] !== coast || e[i] >= 0 || temperature[i] < tMin)
+                    continue;
+                const base = i * LC;
+                if (Math.floor(dens[base + mollusc] / dStep) >= shellMin)
+                    shellSea.push(i);
+                // Warm shallow sea along the land: on a broad shelf the "coastal sea" reaches mid-ocean ridges.
+                if (!reefs || this.distance(e, i) > shoreReach)
+                    continue;
+                let kind = 0;
+                let lvl = 0;
+                for (let b = 0; b < BUILDERS.length; b++) {
+                    const c = BUILDERS[b];
+                    const k = built[c];
+                    if (k === 0)
+                        continue;
+                    const d = this.nearDensity(world, i, c);
+                    if (d < builderMin)
+                        continue;
+                    const l = Math.min(3, Math.floor(d / dStep));
+                    if (k > kind || (k === kind && l > lvl)) {
+                        kind = k;
+                        lvl = l;
+                    }
+                }
+                if (kind === 0 || this.muddy(world, i))
+                    continue;
+                this.cand[i] = kind;
+                this.candLevel[i] = lvl;
+                list.push(i);
+            }
+            if (list.length > 0)
+                this.reefs(world, list);
+            this.shellBeaches(world, shellSea);
+        }
+        /**
+         * The densest population of class c on or within REEF_LARVA_REACH tiles of
+         * tile i: coral larvae settle from nearby, and on many planets the other
+         * sea life crowds the cnidarians out of the coastal sea itself.
+         */
+        nearDensity(world, i, c) {
+            const x = i % W;
+            const y = (i / W) | 0;
+            const R = LARVA_REACH;
+            const dens = world.lifeDensity;
+            let most = dens[i * LC + c];
+            // Past the large reef's level nothing more is read.
+            for (let ny = Math.max(0, y - R); ny <= Math.min(H - 1, y + R) && most < WIDE_DENSITY; ny++) {
+                for (let dx = -R; dx <= R; dx++) {
+                    const d = dens[(ny * W + col(x + dx)) * LC + c];
+                    if (d > most)
+                        most = d;
+                }
+            }
+            return most;
+        }
+        /** Mark the muddy water within REEF_RIVER_REACH of every big river. */
+        markMud(world) {
+            const { riverLevel, riverFlow, elevation: e } = world;
+            const flow = SE.REEF_RIVER_FLOW;
+            const R = SE.REEF_RIVER_REACH;
+            const count = SE.TILE_COUNT;
+            for (let i = 0; i < count; i++) {
+                if (riverFlow[i] < flow || riverLevel[i] <= 0 || e[i] < 0)
+                    continue;
+                const x = i % W;
+                const y = (i / W) | 0;
+                for (let ny = Math.max(0, y - R); ny <= Math.min(H - 1, y + R); ny++)
+                    for (let dx = -R; dx <= R; dx++)
+                        this.mud[ny * W + col(x + dx)] = 1;
+            }
+        }
+        /** A big river within REEF_RIVER_REACH tiles of tile i. */
+        muddy(world, i) {
+            return this.mud[i] !== 0;
+        }
+        /** Prefix sums of the land tiles, the columns wrapped 3 past each edge. */
+        sumLand(e) {
+            const s = this.landSum;
+            for (let y = 0; y < H; y++) {
+                const row = y * W;
+                const above = y * SW;
+                const here = (y + 1) * SW;
+                let run = 0;
+                for (let k = 0; k < SW - 1; k++) {
+                    if (e[row + col(k - 3)] >= 0)
+                        run++;
+                    s[here + k + 1] = s[above + k + 1] + run;
+                }
+            }
+        }
+        /** Chebyshev distance from tile i to land, 1..3, or 4 beyond (four box sums at most). */
+        distance(e, i) {
+            const s = this.landSum;
+            const x = (i % W) + 3;
+            const y = (i / W) | 0;
+            for (let r = 1; r <= 3; r++) {
+                const y0 = Math.max(0, y - r) * SW;
+                const y1 = (Math.min(H - 1, y + r) + 1) * SW;
+                const x0 = x - r;
+                const x1 = x + r + 1;
+                if (s[y1 + x1] - s[y0 + x1] - s[y1 + x0] + s[y0 + x0] > 0)
+                    return r;
+            }
+            return 4;
+        }
+        /** Centres on the seed's cell grid, each reef around its centre, then lagoons and white beaches. */
+        reefs(world, list) {
+            const { elevation: e, lifeDensity: dens } = world;
+            const ox = Math.floor(SE.landHash(world.seed, 0, 1501) * CELL);
+            const oy = Math.floor(SE.landHash(world.seed, 1, 1501) * CELL);
+            const salt = (world.seed * 31 + 1503) | 0;
+            const cols = W / CELL;
+            const { score, best } = this;
+            best.fill(-1);
+            for (const i of list) {
+                score[i] = SE.landHash(i % W, (i / W) | 0, salt);
+                const cell = Math.floor((((i / W) | 0) + oy) / CELL) * cols + (Math.floor(((i % W) + ox) / CELL) % cols);
+                if (best[cell] < 0 || score[i] > score[best[cell]])
+                    best[cell] = i;
+            }
+            const centres = [];
+            for (const c of best)
+                if (c >= 0)
+                    centres.push(c);
+            centres.sort((a, b) => score[b] - score[a]);
+            const kept = [];
+            const reefTiles = [];
+            /** The reef (index into kept) of each reef tile. */
+            const owner = [];
+            for (const c of centres) {
+                const cx = c % W;
+                const cy = (c / W) | 0;
+                if (kept.some((k) => {
+                    const dx = Math.abs((k % W) - cx);
+                    const dy = ((k / W) | 0) - cy;
+                    return Math.min(dx, W - dx) ** 2 + dy * dy < SPACING2;
+                }))
+                    continue;
+                kept.push(c);
+                const kind = this.cand[c];
+                const wide = this.candLevel[c] >= SE.REEF_WIDE_LEVEL ? 1 : 0;
+                const r = kind === 2 /* CoralKind.Stony */ ? 1 + wide : wide;
+                for (let dy = -r; dy <= r; dy++) {
+                    const ny = cy + dy;
+                    if (ny < 0 || ny >= H)
+                        continue;
+                    for (let dx = -r; dx <= r; dx++) {
+                        if (dx * dx + dy * dy > r * r + r)
+                            continue;
+                        const j = ny * W + col(cx + dx);
+                        if (this.cand[j] === 0 || this.coral[j] !== 0)
+                            continue;
+                        this.coral[j] = kind;
+                        reefTiles.push(j);
+                        owner.push(kept.length - 1);
+                    }
+                }
+            }
+            this.reefTiles = reefTiles.length;
+            // Grazing fish on or beside any tile of a reef graze the whole reef and grind a share of its coral to sand.
+            const grazers = GRAZERS.filter((c) => {
+                for (let s = GRAZE_FROM[c]; s < N; s++)
+                    if (world.lifeStageCounts[c * N + s] > 0)
+                        return true;
+                return false;
+            });
+            const reefFish = new Uint8Array(kept.length);
+            for (let n = 0; n < reefTiles.length && grazers.length > 0; n++) {
+                if (reefFish[owner[n]] === 3)
+                    continue;
+                const j = reefTiles[n];
+                const x = j % W;
+                const y = (j / W) | 0;
+                let most = 0;
+                for (let ny = Math.max(0, y - 1); ny <= Math.min(H - 1, y + 1); ny++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const base = (ny * W + col(x + dx)) * LC;
+                        for (let g = 0; g < grazers.length; g++)
+                            if (dens[base + grazers[g]] > most)
+                                most = dens[base + grazers[g]];
+                    }
+                }
+                reefFish[owner[n]] = Math.max(reefFish[owner[n]], grazing(most));
+            }
+            const patches = SE.REEF_PATCHES;
+            const wide = SE.REEF_WIDE_LEVEL;
+            const share = SE.REEF_FISH_SAND / 3;
+            for (let n = 0; n < reefTiles.length; n++) {
+                const j = reefTiles[n];
+                const fish = reefFish[owner[n]];
+                const total = patches + (this.candLevel[j] >= wide ? 1 : 0);
+                // Rounded up: wherever grazing fish live, some sand shows.
+                const sand = Math.ceil(total * share * fish);
+                this.fish[j] = fish;
+                this.sands[j] = sand;
+                this.corals[j] = total - sand;
+                this.lagoon[j] = sand > 0 ? 3 : 2;
+            }
+            const lagoons = reefTiles.slice();
+            // The coastal sea a tile landward of the reef is lagoon too.
+            for (const j of reefTiles) {
+                const x = j % W;
+                const y = (j / W) | 0;
+                const dj = this.distance(e, j);
+                for (let dy = -1; dy <= 1; dy++) {
+                    const ny = y + dy;
+                    if (ny < 0 || ny >= H)
+                        continue;
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const k = ny * W + col(x + dx);
+                        if (e[k] >= 0 || this.coral[k] !== 0 || world.biome[k] !== COAST)
+                            continue;
+                        const dk = this.distance(e, k);
+                        if (dk >= dj && dk > 1)
+                            continue;
+                        if (this.lagoon[k] === 0)
+                            lagoons.push(k);
+                        this.lagoon[k] = Math.max(this.lagoon[k], this.sands[j] > 0 ? 2 : 1);
+                    }
+                }
+            }
+            // Land beside a lagoon takes its turquoise up to the shore.
+            for (const j of lagoons) {
+                const g = this.lagoon[j];
+                const x = j % W;
+                const y = (j / W) | 0;
+                for (let dy = -1; dy <= 1; dy++) {
+                    const ny = y + dy;
+                    if (ny < 0 || ny >= H)
+                        continue;
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const k = ny * W + col(x + dx);
+                        if (e[k] >= 0 && this.lagoon[k] < g)
+                            this.lagoon[k] = g;
+                    }
+                }
+            }
+            // White beaches on the coast near reefs that fish graze.
+            const R = SE.BEACH_REACH;
+            for (const j of reefTiles) {
+                if (this.fish[j] === 0)
+                    continue;
+                const x = j % W;
+                const y = (j / W) | 0;
+                for (let dy = -R; dy <= R; dy++) {
+                    const ny = y + dy;
+                    if (ny < 0 || ny >= H)
+                        continue;
+                    for (let dx = -R; dx <= R; dx++) {
+                        const k = ny * W + col(x + dx);
+                        if (e[k] < 0 || this.looked[k] !== 0)
+                            continue;
+                        this.looked[k] = 1;
+                        if (!this.coastal(e, k) || !beachable(world, k) || this.muddy(world, k))
+                            continue;
+                        const share = this.smallIsland(e, k) ? SE.BEACH_ISLAND_SHARE : SE.BEACH_SHARE;
+                        if (SE.landHash(k % W, (k / W) | 0, 1505) >= share)
+                            continue;
+                        this.beach[k] = 2 /* BeachKind.Reef */;
+                        this.reefBeachTiles++;
+                    }
+                }
+            }
+        }
+        /** Now and then a narrow shell beach on warm coasts beside molluscs. */
+        shellBeaches(world, shellSea) {
+            const e = world.elevation;
+            for (const i of shellSea) {
+                const x = i % W;
+                const y = (i / W) | 0;
+                for (let dy = -1; dy <= 1; dy++) {
+                    const ny = y + dy;
+                    if (ny < 0 || ny >= H)
+                        continue;
+                    for (let dx = -1; dx <= 1; dx++) {
+                        const k = ny * W + col(x + dx);
+                        if (e[k] < 0 || this.beach[k] !== 0 || SE.landHash(k % W, ny, 1507) >= SE.SHELL_BEACH_SHARE || !beachable(world, k) || this.muddy(world, k))
+                            continue;
+                        this.beach[k] = 1 /* BeachKind.Shell */;
+                    }
+                }
+            }
+        }
+        /** Land tile i borders the sea (8 neighbours). */
+        coastal(e, i) {
+            const x = i % W;
+            const y = (i / W) | 0;
+            for (let dy = -1; dy <= 1; dy++) {
+                const ny = y + dy;
+                if (ny < 0 || ny >= H)
+                    continue;
+                for (let dx = -1; dx <= 1; dx++)
+                    if (e[ny * W + col(x + dx)] < 0)
+                        return true;
+            }
+            return false;
+        }
+        /** Land tile i lies on an island of at most BEACH_ISLAND_TILES tiles (8-connected). */
+        smallIsland(e, i) {
+            if (this.island[i] === 0) {
+                const found = [i];
+                const queued = new Set(found);
+                for (let q = 0; q < found.length && found.length <= SE.BEACH_ISLAND_TILES; q++) {
+                    const x = found[q] % W;
+                    const y = (found[q] / W) | 0;
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const ny = y + dy;
+                        if (ny < 0 || ny >= H)
+                            continue;
+                        for (let dx = -1; dx <= 1; dx++) {
+                            const j = ny * W + col(x + dx);
+                            if (e[j] >= 0 && !queued.has(j)) {
+                                queued.add(j);
+                                found.push(j);
+                            }
+                        }
+                    }
+                }
+                const mark = found.length <= SE.BEACH_ISLAND_TILES ? 1 : 2;
+                for (const j of found)
+                    this.island[j] = mark;
+            }
+            return this.island[i] === 1;
+        }
+    }
+    SE.ReefMap = ReefMap;
+    let memo = null;
+    let memoWorld = null;
+    let memoKey = '';
+    /** The reefs, lagoons and beaches of `world` as it is now (worked out once per tick or edit). */
+    function reefMap(world) {
+        const key = `${world.seed}|${world.ticks}|${world.revision}`;
+        if (memo && memoWorld === world && memoKey === key)
+            return memo;
+        memo = memo ?? new ReefMap();
+        memo.compute(world);
+        memoWorld = world;
+        memoKey = key;
+        return memo;
+    }
+    SE.reefMap = reefMap;
+    /** Have palms evolved: the flowering plants developed, and the date past the oldest palm fossils? */
     function palmsArrived(world) {
-        const rec = world.evo.developed.get(SE.FLORA[SE.Flora.Flowering].id);
-        return rec !== undefined && world.absoluteYears - rec.years >= SE.PALM_DELAY_YEARS;
+        return world.evo.developed.has(SE.FLORA[SE.Flora.Flowering].id) && SE.yearsAgo(world.absoluteYears) <= SE.PALM_FIRST_YEARS_AGO;
     }
     SE.palmsArrived = palmsArrived;
-    /**
-     * Coconut palms on beach tile i: 0, 1 or 2; tropical beaches carry them more
-     * often than warm ones. Once arrived, palms need no flowering plants nearby:
-     * those spread to the coasts far slower than palms should show.
-     */
-    function beachPalms(world, i, arrived = palmsArrived(world)) {
-        if (!arrived)
-            return 0;
-        const x = i % SE.GRID_W;
-        const y = (i / SE.GRID_W) | 0;
-        const share = SE.zoneTemp(world.landscapeZone[i]) === 4 /* TempClass.Tropical */ ? SE.PALM_SHARE_TROPICAL : SE.PALM_SHARE_WARM;
-        if (SE.landHash(x, y, 840) >= share)
-            return 0;
-        return SE.landHash(x, y, 841) < SE.PALM_PAIR_SHARE ? 2 : 1;
+    /** Palms on beach tile i: 0, 1 or a pair (2), by the tile's hash. */
+    function beachPalms(i) {
+        const h = SE.landHash(i % W, (i / W) | 0, 840);
+        return h < SE.PALM_ONE ? 0 : h < SE.PALM_PAIR ? 1 : 2;
     }
     SE.beachPalms = beachPalms;
+    /**
+     * The sub-species a creature of class c shows on tile i: a reef builder
+     * only in coral-warm water; elsewhere the class's highest stage below it
+     * that builds no reef.
+     */
+    function reefShownStage(world, i, c, stage) {
+        if (BUILDS[c * N + stage] === 0 || coralWarm(world.temperature[i]))
+            return stage;
+        let s = stage;
+        while (s > 0 && BUILDS[c * N + s] !== 0)
+            s--;
+        return s;
+    }
+    SE.reefShownStage = reefShownStage;
+    /** What the Examine window says about tile i's reef or beach (German), [] for neither. */
+    function reefNotes(world, i) {
+        const m = reefMap(world);
+        const kind = m.coral[i];
+        if (kind !== 0 /* CoralKind.None */) {
+            const out = [`Korallenriff (${CORAL_NAMES[kind]}) · Wassertemperatur ${SE.fmt.int(world.temperature[i])} °C`];
+            if (m.fish[i] > 0)
+                out.push('Fische raspeln Kalk zu Sand');
+            return out;
+        }
+        const b = m.beach[i];
+        return b === 2 /* BeachKind.Reef */ ? ['Weißer Kalksand vom Riff'] : b === 1 /* BeachKind.Shell */ ? ['Muschelsand'] : [];
+    }
+    SE.reefNotes = reefNotes;
+    const FIRST_REEF = 'reefs:first';
+    const FIRST_BEACH = 'reefs:beach';
+    /** The chronicle entries for the first reef and the first white beach, once each (called from app.ts). */
+    function reefMilestones(world) {
+        const has = (key) => world.evo.chronicle.some((e) => e.key === key);
+        const reef = has(FIRST_REEF);
+        const beach = has(FIRST_BEACH);
+        if (reef && beach)
+            return [];
+        const m = reefMap(world);
+        const out = [];
+        const at = { tick: world.ticks, years: world.absoluteYears, major: false, kind: 'milestone' };
+        if (!reef && m.reefTiles > 0) {
+            out.push({
+                ...at, key: FIRST_REEF, title: 'Erste Riffe',
+                text: 'In warmen Flachmeeren bauen Korallen Kalkriffe. Über ihnen leuchtet das klare Wasser türkis.',
+                change: 'Riffe und türkise Lagunen säumen jetzt warme Küsten.', icon: SE.evoIcon('earlyAnimals'),
+            });
+        }
+        if (!beach && m.reefBeachTiles > 0) {
+            out.push({
+                ...at, key: FIRST_BEACH, title: 'Weiße Strände',
+                text: 'Fische raspeln die Korallen ab und scheiden den Kalk als feinen Sand aus. Die Wellen spülen ihn an die Küsten.',
+                change: 'Neben Riffen mit Fischen liegen jetzt weiße Sandstrände.', icon: SE.evoIcon('fish'),
+            });
+        }
+        return out;
+    }
+    SE.reefMilestones = reefMilestones;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — per-tile inputs of the pixel terrain
  * -----------------------------------------------------------------------------
  * Everything the compositor needs from the world, read once per refresh into
- * flat arrays: the ground key of each tile, water depth, relief and macro
- * shading as ramp steps, the river sprite, the distance to a lower ground
- * (forest edges), and the scene, density and plant groups that place
- * objects. Values are quantised here, so a tile's 32-bit signature fixes
+ * flat arrays: the ground key of each tile, its sea class and lagoon, relief
+ * and macro shading as ramp steps, the river sprite, the distance to a lower
+ * ground (forest edges), the scene, density and plant groups that place
+ * objects, and the reefs, beaches and palms (reefs.ts). Values are quantised here, so a tile's 32-bit signature fixes
  * exactly what is drawn — a chunk whose signatures did not change is
  * reused untouched, and two chunks always agree where they meet.
  * ========================================================================== */
@@ -30563,41 +31486,8 @@ var SE;
     const QUANT = 8;
     /** The water ramp position of the shallowest water; the last step of the ramp is foam. */
     SE.LAND_SHALLOW = SE.TERRAIN_MANIFEST.ramps.water.length - 2;
-    /** Water ramp position by elevation (deep → shallow), the knots of DEPTH_RAMP on an 8-step ramp. */
-    const DEPTH_KNOTS = [
-        [-1, 0], [-0.6, 1], [-0.35, 2], [SE.COAST_DEPTH, 3], [-0.07, 4.5], [0, 6],
-    ].map(([e, d]) => [e, (d * SE.LAND_SHALLOW) / 6]);
     /** Tiles beyond a chunk whose inputs reach into it: dual grid 1, objects 1, edge distance 2. */
     const SIGNATURE_REACH = 3;
-    function depthAt(e) {
-        if (e <= -1)
-            return 0;
-        for (let k = 1; k < DEPTH_KNOTS.length; k++) {
-            const [e1, d1] = DEPTH_KNOTS[k];
-            if (e <= e1) {
-                const [e0, d0] = DEPTH_KNOTS[k - 1];
-                return d0 + ((e - e0) / (e1 - e0)) * (d1 - d0);
-            }
-        }
-        return SE.LAND_SHALLOW;
-    }
-    /**
-     * depthAt quantised to 1/QUANT, by table: the depth only grows with the
-     * elevation, so a table cell whose two ends quantise alike holds that value
-     * throughout; only the cells across a step are worked out per tile.
-     */
-    const DEPTH_CELLS = 4096;
-    const DEPTH_TABLE = (() => {
-        const q = (e) => Math.round(depthAt(e) * QUANT) / QUANT;
-        return Float32Array.from({ length: DEPTH_CELLS }, (_, n) => {
-            const a = q(-1 + n / DEPTH_CELLS);
-            return a === q(-1 + (n + 1) / DEPTH_CELLS) ? a : -1;
-        });
-    })();
-    function seaDepth(e) {
-        const v = e <= -1 ? 0 : DEPTH_TABLE[Math.min(DEPTH_CELLS - 1, Math.floor((e + 1) * DEPTH_CELLS))];
-        return v >= 0 ? v : Math.round(depthAt(e) * QUANT) / QUANT;
-    }
     /** Sparse light and dark patches, a few tiles across, so textures never show their period. */
     const MACRO = (() => {
         const out = new Float32Array(SE.TILE_COUNT);
@@ -30627,12 +31517,58 @@ var SE;
     function mountainness(e) {
         return SE.clamp((e - MOUNTAIN_START) / MOUNTAIN_SPAN, 0, 1);
     }
+    /** Above this many changed tiles a refresh reads everything again: cheaper than the bookkeeping. */
+    const INCREMENTAL_MAX = SE.TILE_COUNT / 10;
+    /**
+     * The bits of a tile array as 32-bit words: one loop type for every array
+     * (indexing five array types in one loop is several times slower in V8).
+     */
+    function words(a) {
+        return new Uint32Array(a.buffer, a.byteOffset, a.byteLength >> 2);
+    }
+    /** Copy every value of `src` that differs from `seen` into it, marking the tile in `out`; the number of tiles. */
+    function diffTiles(src, seen, out) {
+        const a = words(src);
+        const b = words(seen);
+        const per = 4 / src.BYTES_PER_ELEMENT;
+        let n = 0;
+        for (let w = 0; w < a.length; w++) {
+            if (a[w] === b[w])
+                continue;
+            for (let i = w * per; i < (w + 1) * per; i++) {
+                if (src[i] !== seen[i]) {
+                    seen[i] = src[i];
+                    out[i] = 1;
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+    function sameTiles(a, b) {
+        const x = words(a);
+        const y = words(b);
+        for (let w = 0; w < x.length; w++)
+            if (x[w] !== y[w])
+                return false;
+        return true;
+    }
     class TerrainField {
         constructor() {
             /** 0 water, else landKey(rank, density). */
             this.key = new Uint8Array(SE.TILE_COUNT);
-            /** Water ramp position, 0 deep .. LAND_SHALLOW; land counts as shallowest. */
-            this.depth = new Float32Array(SE.TILE_COUNT);
+            /** Sea class: 0 open ocean, 1 coastal sea; land counts as coastal sea, so no shore draws a band of its own. */
+            this.sea = new Uint8Array(SE.TILE_COUNT);
+            /** Turquoise of a lagoon, 0..3 (reefs.ts); land takes its neighbours' highest, so a lagoon reaches the beach. */
+            this.lagoon = new Uint8Array(SE.TILE_COUNT);
+            /** 1 on tiles below sea level, pack ice included: where the ranges' lift leaves the water flat. */
+            this.seaTile = new Uint8Array(SE.TILE_COUNT);
+            /** CoralKind of a reef tile and its coral and sand patches (reefs.ts). */
+            this.reef = new Uint8Array(SE.TILE_COUNT);
+            this.corals = new Uint8Array(SE.TILE_COUNT);
+            this.sands = new Uint8Array(SE.TILE_COUNT);
+            /** BeachKind of a land tile, drawn along its shore (landshore.ts). */
+            this.beach = new Uint8Array(SE.TILE_COUNT);
             /** Ramp shift of the ground from relief and macro variation. */
             this.shade = new Float32Array(SE.TILE_COUNT);
             /** Amplitude of the crags drawn inside the tile, ramp steps (0 on flat land). */
@@ -30660,7 +31596,7 @@ var SE;
             this.cactus = new Uint8Array(SE.TILE_COUNT);
             /** 1 where the flowering plants show as a savanna tree (savannatrees.ts). */
             this.savannaTree = new Uint8Array(SE.TILE_COUNT);
-            /** Coconut palms on a beach tile, 0..2 (beaches.ts). */
+            /** Coconut palms on a beach tile, 0..2 (reefs.ts). */
             this.palm = new Uint8Array(SE.TILE_COUNT);
             this.reach = new SE.SavannaReach();
             this.sig = new Uint32Array(SE.TILE_COUNT);
@@ -30668,26 +31604,225 @@ var SE;
             this.low = new Uint8Array(SE.TILE_COUNT);
             this.wide = new Uint8Array(SE.TILE_COUNT);
             this.ridgesAt = -Infinity;
+            /*
+             * Incremental refresh. read() takes per tile, all compared with their
+             * copies from the last refresh (inputs()):
+             *   world: elevation (also through the four neighbours' relief; on water
+             *   only its depth classes), landscape, landscapeDensity, substrate, flora,
+             *   floraTop, riverLevel, tech, hazards.scar (scarShowsGround reads it and
+             *   the landscape); on water only biome, temperature (pack ice) and
+             *   vegetation (kelp density), on bare rock only upliftKind, soil and
+             *   landscapeZone, both as `partIn`;
+             *   derived: reefMap's coral, lagoon, beach, corals, sands and
+             *   SavannaReach's toDry, toForest.
+             * Planet-wide, any change reads everything again (`planet`): seed, plate
+             * drift (driftShifts), mapFloraMask, cactiArrived, savannaTreesArrived,
+             * palmsArrived; also another world, ticks running backwards, forget()
+             * after a load and refreshBox().
+             * Edges follow a changed rank 2 tiles out; cones are found planet-wide
+             * every time (they read the mean mantle heat); the rivers are rebuilt when
+             * land/sea, riverLevel, riverDown, flora or riverFlow on a river changed,
+             * the ridges when elevation, uplift, landscape, landscapeZone,
+             * temperature, riverLevel, flora, terraformed or a cone changed
+             * (ridgeInputs() plus read()'s inputs).
+             */
+            this.world = null;
+            this.planet = '';
+            this.ticks = 0;
+            this.seen = [];
+            /** read()'s view of biome, temperature and vegetation on water, and of upliftKind, soil and landscapeZone on bare rock. */
+            this.partIn = new Uint16Array(SE.TILE_COUNT);
+            this.reread = new Uint8Array(SE.TILE_COUNT);
+            this.resign = new Uint8Array(SE.TILE_COUNT);
+            /** volcano, paths.sig and ridges.sig as the signatures last took them. */
+            this.signed = [new Uint8Array(SE.TILE_COUNT), new Uint16Array(SE.TILE_COUNT), new Uint32Array(SE.TILE_COUNT)];
+            this.downSeen = new Int32Array(SE.TILE_COUNT);
+            this.flowSeen = new Float32Array(SE.TILE_COUNT);
+            this.ridgeSeen = [];
+            /** Tiles read again by the last refresh, -1 after a full one (for the performance display). */
+            this.lastRead = -1;
         }
         refresh(world) {
-            this.read(world, 0, 0, SE.GRID_W, SE.GRID_H, true);
+            const planet = `${world.seed}|${world.driftShifts}|${SE.mapFloraMask(world)}|${+SE.cactiArrived(world)}|${+SE.savannaTreesArrived(world)}|${+SE.palmsArrived(world)}`;
+            const fresh = world !== this.world || planet !== this.planet || world.ticks < this.ticks;
+            this.world = world;
+            this.planet = planet;
+            this.ticks = world.ticks;
+            if (SE.savannaTreesArrived(world))
+                this.reach.update(world);
+            const inputs = this.inputs(world);
+            if (fresh || !this.incremental(world, inputs))
+                this.full(world, inputs);
+        }
+        /** Read everything again on the next refresh (a loaded planet). */
+        forget() {
+            this.world = null;
+        }
+        full(world, inputs) {
+            this.read(world, 0, 0, SE.GRID_W, SE.GRID_H);
             this.edges(0, 0, SE.GRID_W, SE.GRID_H);
             this.volcanoes(world);
             this.paths.build(world);
             this.ridges.build(world, this.volcano);
             this.sign(0, 0, SE.GRID_W, SE.GRID_H);
+            if (this.seen.length !== inputs.length)
+                this.seen = inputs.map((a) => a.slice());
+            else
+                inputs.forEach((a, k) => this.seen[k].set(a));
+            this.riversRead(world);
+            this.ridgesRead(world);
+            this.signed[0].set(this.volcano);
+            this.signed[1].set(this.paths.sig);
+            this.signed[2].set(this.ridges.sig);
+            this.reread.fill(0);
+            this.lastRead = -1;
+        }
+        /** What read() takes from the world per tile; elevation first. */
+        inputs(world) {
+            const { elevation: e, temperature, vegetation: v, biome, landscape, upliftKind: kind, soil, landscapeZone: zone } = world;
+            const part = this.partIn;
+            for (let i = 0; i < SE.TILE_COUNT; i++) {
+                if (e[i] < 0) {
+                    part[i] = biome[i] | (packIce(temperature[i], i) ? 256 : 0) | (v[i] < 0.3 ? 0 : v[i] < 0.6 ? 512 : 1024);
+                }
+                else if (landscape[i] === SE.Landscape.Rock) {
+                    part[i] = (kind[i] === 4 /* UpliftKind.Hotspot */ || kind[i] === 3 /* UpliftKind.IslandArc */) && soil[i] < FRESH_ROCK_SOIL ? 1
+                        : zone[i] !== SE.ZONE_NONE && (zone[i] & SE.ZONE_ROCKBELT) !== 0 ? 2 : 0;
+                }
+                else {
+                    part[i] = 0;
+                }
+            }
+            const reefs = SE.reefMap(world);
+            return [e, world.landscape, world.landscapeDensity, world.substrate, world.flora, world.floraTop, world.riverLevel,
+                world.tech, world.hazards.scar, part, reefs.coral, reefs.lagoon, reefs.beach, reefs.corals, reefs.sands,
+                this.reach.toDry, this.reach.toForest];
+        }
+        /**
+         * Read again only the tiles whose inputs changed since the last refresh,
+         * and what reaches them: the same field a full refresh makes. False,
+         * having done nothing but note the inputs, when too much changed.
+         */
+        incremental(world, inputs) {
+            const { reread, resign } = this;
+            const e = world.elevation;
+            const seenE = this.seen[0];
+            // Elevation reaches the four neighbours' relief.
+            let moved = false;
+            let shore = false;
+            for (let i = 0; i < SE.TILE_COUNT; i++) {
+                if (e[i] === seenE[i])
+                    continue;
+                moved = true;
+                const was = seenE[i];
+                seenE[i] = e[i];
+                if ((e[i] < 0) !== (was < 0))
+                    shore = true;
+                // Water that stays water of the same depth class: nothing read() shows.
+                else if (was < 0 && (e[i] > KELP_DEPTH) === (was > KELP_DEPTH) && (e[i] > SE.COAST_DEPTH) === (was > SE.COAST_DEPTH))
+                    continue;
+                const x = i % SE.GRID_W;
+                const y = (i / SE.GRID_W) | 0;
+                reread[i] = reread[y * SE.GRID_W + SE.wrapX(x - 1)] = reread[y * SE.GRID_W + SE.wrapX(x + 1)] = 1;
+                if (y > 0)
+                    reread[i - SE.GRID_W] = 1;
+                if (y < SE.GRID_H - 1)
+                    reread[i + SE.GRID_W] = 1;
+            }
+            const changed = new Set();
+            for (let k = 1; k < inputs.length; k++)
+                if (diffTiles(inputs[k], this.seen[k], reread) > 0)
+                    changed.add(inputs[k]);
+            const tiles = [];
+            for (let i = 0; i < SE.TILE_COUNT; i++)
+                if (reread[i] !== 0)
+                    tiles.push(i);
+            if (tiles.length > INCREMENTAL_MAX)
+                return false;
+            reread.fill(0);
+            const tile = this.reader(world);
+            const rank = this.rank;
+            for (const i of tiles) {
+                const was = rank[i];
+                tile(i);
+                resign[i] = 1;
+                if (rank[i] === was)
+                    continue;
+                // Edges see a rank 2 tiles away.
+                const x = i % SE.GRID_W;
+                const y = (i / SE.GRID_W) | 0;
+                const y0 = Math.max(0, y - 2);
+                const y1 = Math.min(SE.GRID_H, y + 3);
+                this.edges(x - 2, y0, x + 3, y1);
+                for (let v = y0; v < y1; v++)
+                    for (let u = x - 2; u < x + 3; u++)
+                        resign[v * SE.GRID_W + SE.wrapX(u)] = 1;
+            }
+            const signed = this.signed;
+            this.volcanoes(world);
+            const cones = diffTiles(this.volcano, signed[0], resign) > 0;
+            const flora = changed.has(world.flora);
+            const level = changed.has(world.riverLevel);
+            if (shore || level || flora || this.riversMoved(world)) {
+                this.paths.build(world);
+                diffTiles(this.paths.sig, signed[1], resign);
+                this.riversRead(world);
+            }
+            const more = this.ridgeInputs(world);
+            if (moved || level || flora || cones || changed.has(world.landscape) || more.some((a, k) => !sameTiles(a, this.ridgeSeen[k]))) {
+                this.ridges.build(world, this.volcano);
+                diffTiles(this.ridges.sig, signed[2], resign);
+                this.ridgesRead(world);
+            }
+            for (let i = 0; i < SE.TILE_COUNT; i++) {
+                if (resign[i] === 0)
+                    continue;
+                resign[i] = 0;
+                this.signAt(i);
+            }
+            this.lastRead = tiles.length;
+            return true;
+        }
+        /** riverDown, or riverFlow on a river tile, differ from the last rivers built. */
+        riversMoved(world) {
+            const { elevation: e, riverLevel: level, riverFlow: flow } = world;
+            if (!sameTiles(world.riverDown, this.downSeen))
+                return true;
+            for (let i = 0; i < SE.TILE_COUNT; i++)
+                if (e[i] >= 0 && level[i] > 0 && flow[i] !== this.flowSeen[i])
+                    return true;
+            return false;
+        }
+        riversRead(world) {
+            this.downSeen.set(world.riverDown);
+            this.flowSeen.set(world.riverFlow);
+        }
+        /** What the ridges read beyond read()'s inputs. */
+        ridgeInputs(world) {
+            return [world.temperature, world.uplift, world.terraformed, world.landscapeZone];
+        }
+        ridgesRead(world) {
+            const inputs = this.ridgeInputs(world);
+            if (this.ridgeSeen.length === 0)
+                this.ridgeSeen = inputs.map((a) => a.slice());
+            else
+                inputs.forEach((a, k) => this.ridgeSeen[k].set(a));
         }
         /**
          * Re-read only tiles [x0, x1) × [y0, y1) (x may run past the wrap) after
          * their elevation changed, as a terraforming brush does every frame: a
-         * full refresh costs 10–20 ms. Rivers and the savanna's reach keep their
-         * last state; mountain ridges and cones are rebuilt, they follow the height.
+         * full refresh costs 10–20 ms. Rivers, the savanna's reach and the reefs,
+         * lagoons and beaches (reefs.ts, read up to several tiles from the box)
+         * keep their last state until the stroke's end; mountain ridges and cones
+         * are rebuilt, they follow the height.
          * True when the ridges were rebuilt this time.
          */
         refreshBox(world, x0, y0, x1, y1) {
+            // The next refresh reads everything again: this one used old rivers, reefs and savanna reach.
+            this.world = null;
             const ya = Math.max(0, y0 - 1);
             const yb = Math.min(SE.GRID_H, y1 + 1);
-            this.read(world, x0 - 1, ya, x1 + 1, yb, false);
+            this.read(world, x0 - 1, ya, x1 + 1, yb);
             this.edges(x0 - 3, Math.max(0, ya - 2), x1 + 3, Math.min(SE.GRID_H, yb + 2));
             // The ranges are found planet-wide (1–11 ms): at most ten times a second.
             const now = performance.now();
@@ -30701,7 +31836,14 @@ var SE;
             this.sign(x0 - 8, Math.max(0, y0 - 8), x1 + 8, Math.min(SE.GRID_H, y1 + 8));
             return ridges;
         }
-        read(world, x0, y0, x1, y1, all) {
+        read(world, x0, y0, x1, y1) {
+            const tile = this.reader(world);
+            for (let y = y0; y < y1; y++)
+                for (let x = x0; x < x1; x++)
+                    tile(y * SE.GRID_W + SE.wrapX(x));
+        }
+        /** Reads tile i of `world` into the field. */
+        reader(world) {
             const T = SE.LandTables.shared();
             const { elevation: e, biome, landscape, landscapeDensity, substrate, flora, floraTop, vegetation, riverLevel, tech } = world;
             const algae = SE.floraBit(SE.Flora.FreshwaterAlgae);
@@ -30712,119 +31854,128 @@ var SE;
             const cacti = SE.cactiArrived(world);
             const trees = SE.savannaTreesArrived(world);
             const palms = SE.palmsArrived(world);
-            if (trees && all)
-                this.reach.update(world);
-            for (let y = y0; y < y1; y++)
-                for (let x = x0; x < x1; x++) {
-                    const i = y * SE.GRID_W + SE.wrapX(x);
-                    const h = e[i];
-                    let key = 0;
-                    let scene = SE.LAND_SCENE_NONE;
-                    let density = 0;
-                    let groups = 0;
-                    let cactus = 0;
-                    let tree = 0;
-                    let palm = 0;
-                    let shade = 0;
-                    let rugged = 0;
-                    let river = 0;
-                    if (h < 0) {
-                        if (packIce(world.temperature[i], i))
-                            key = T.seaIceKey;
-                        else if (biome[i] === SE.Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
-                            scene = SE.LAND_SCENE_SEA;
-                            groups = kelp;
-                            density = vegetation[i] < 0.3 ? 0 : vegetation[i] < 0.6 ? 1 : 2;
-                        }
-                        this.depth[i] = seaDepth(h);
+            const reefs = SE.reefMap(world);
+            return (i) => {
+                const h = e[i];
+                let key = 0;
+                let scene = SE.LAND_SCENE_NONE;
+                let density = 0;
+                let groups = 0;
+                let cactus = 0;
+                let tree = 0;
+                let palm = 0;
+                let sea = 1;
+                let lagoon = 0;
+                let reef = 0;
+                let beach = 0;
+                let shade = 0;
+                let rugged = 0;
+                let river = 0;
+                if (h < 0) {
+                    if (packIce(world.temperature[i], i))
+                        key = T.seaIceKey;
+                    else if (reefs.coral[i] !== 0 /* CoralKind.None */)
+                        reef = reefs.coral[i];
+                    else if (biome[i] === SE.Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
+                        scene = SE.LAND_SCENE_SEA;
+                        groups = kelp;
+                        density = vegetation[i] < 0.3 ? 0 : vegetation[i] < 0.6 ? 1 : 2;
                     }
-                    else {
-                        const ls = landscape[i];
-                        density = Math.min(landscapeDensity[i], T.steps[ls * 4 + substrate[i]] - 1);
-                        key = T.groundKey(ls, substrate[i], density);
-                        // New land of a hotspot or an island arc is fresh basalt until it
-                        // weathers; bare rock in the subnival belt is scree (docs/hoehe-spec.md §3.6).
-                        if (ls === SE.Landscape.Rock) {
-                            const kind = world.upliftKind[i];
-                            if ((kind === 4 /* UpliftKind.Hotspot */ || kind === 3 /* UpliftKind.IslandArc */) && world.soil[i] < FRESH_ROCK_SOIL) {
-                                key = T.materialKey('basalt') || key;
-                            }
-                            else if (world.landscapeZone[i] !== SE.ZONE_NONE && (world.landscapeZone[i] & SE.ZONE_ROCKBELT) !== 0) {
-                                key = T.materialKey('scree') || key;
-                            }
-                        }
-                        const beach = SE.isBeach(world, i);
-                        if (beach)
-                            key = T.materialKey('beach') || key;
-                        this.depth[i] = SE.LAND_SHALLOW;
-                        shade = this.relief(e, i) + MACRO[i];
-                        rugged = Math.round(SE.clamp((h - CRAG_START) / MOUNTAIN_SPAN, 0, 1) * CRAG_STEPS * 4) / 4;
-                        if (riverLevel[i] > 0)
-                            river = 1;
-                        if (river === 0 && tech[i] === SE.Tech.None) {
-                            scene = ls;
-                            groups = flora[i] & T.showable[ls] & shown;
-                            // On desert ground the flowering plants show only as cacti, on some tiles, once cacti exist.
-                            if (SE.isCactusLandscape(ls) && (flora[i] & flowering) !== 0) {
-                                groups &= ~flowering;
-                                if (cacti && landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 820) < SE.CACTUS_SHARE)
-                                    cactus = 1;
-                            }
-                            if (trees && ls === SE.Landscape.Savanna && (flora[i] & flowering) !== 0 &&
-                                landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 830) < SE.savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i]))
-                                tree = 1;
-                            // A beach is bare sand: no jungle giants, only its palms.
-                            if (beach) {
-                                scene = SE.LAND_SCENE_NONE;
-                                palm = SE.beachPalms(world, i, palms);
-                            }
-                        }
-                        // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
-                        const scar = scars[i];
-                        // A vent is a cone (volcanoes()): nothing grows on it.
-                        if (scar === SE.ScarKind.Vent)
-                            scene = SE.LAND_SCENE_NONE;
-                        if (scar !== SE.ScarKind.None && SE.scarShowsGround(world, i)) {
-                            // Fresh ground carries none of the landscape's old objects; the
-                            // effect layer draws the scar's own (fxscars.ts).
-                            scene = SE.LAND_SCENE_NONE;
-                            const g = SE.scarGround(scar, T);
-                            if (g) {
-                                key = g.key;
-                                shade += g.shade;
-                            }
-                        }
-                    }
-                    if (key !== 0 && h < 0)
-                        shade = MACRO[i];
-                    this.key[i] = key;
-                    this.rank[i] = key === 0 ? 0 : SE.landKeyRank(key);
-                    this.shade[i] = Math.round(SE.clamp(shade, -SE.LAND_SHIFT_MAX + 1, SE.LAND_SHIFT_MAX - 1) * QUANT) / QUANT;
-                    this.rugged[i] = rugged;
-                    this.river[i] = river;
-                    this.algae[i] = h >= 0 && (flora[i] & algae) !== 0 ? 1 : 0;
-                    this.scene[i] = scene;
-                    this.density[i] = density;
-                    this.groups[i] = groups;
-                    this.top[i] = floraTop[i];
-                    this.cactus[i] = scene === SE.LAND_SCENE_NONE ? 0 : cactus;
-                    this.savannaTree[i] = scene === SE.LAND_SCENE_NONE ? 0 : tree;
-                    this.palm[i] = scars[i] === SE.ScarKind.None ? palm : 0;
+                    sea = biome[i] === SE.Biome.Ocean ? 0 : biome[i] === SE.Biome.Coast || h > SE.COAST_DEPTH ? 1 : 0;
+                    if (key === 0)
+                        lagoon = reefs.lagoon[i];
                 }
+                else {
+                    const ls = landscape[i];
+                    density = Math.min(landscapeDensity[i], T.steps[ls * 4 + substrate[i]] - 1);
+                    key = T.groundKey(ls, substrate[i], density);
+                    // New land of a hotspot or an island arc is fresh basalt until it
+                    // weathers; bare rock in the subnival belt is scree (docs/hoehe-spec.md §3.6).
+                    if (ls === SE.Landscape.Rock) {
+                        const kind = world.upliftKind[i];
+                        if ((kind === 4 /* UpliftKind.Hotspot */ || kind === 3 /* UpliftKind.IslandArc */) && world.soil[i] < FRESH_ROCK_SOIL) {
+                            key = T.materialKey('basalt') || key;
+                        }
+                        else if (world.landscapeZone[i] !== SE.ZONE_NONE && (world.landscapeZone[i] & SE.ZONE_ROCKBELT) !== 0) {
+                            key = T.materialKey('scree') || key;
+                        }
+                    }
+                    lagoon = reefs.lagoon[i];
+                    beach = reefs.beach[i];
+                    shade = this.relief(e, i) + MACRO[i];
+                    rugged = Math.round(SE.clamp((h - CRAG_START) / MOUNTAIN_SPAN, 0, 1) * CRAG_STEPS * 4) / 4;
+                    if (riverLevel[i] > 0)
+                        river = 1;
+                    if (river === 0 && tech[i] === SE.Tech.None) {
+                        scene = ls;
+                        groups = flora[i] & T.showable[ls] & shown;
+                        // On desert ground the flowering plants show only as cacti, on some tiles, once cacti exist.
+                        if (SE.isCactusLandscape(ls) && (flora[i] & flowering) !== 0) {
+                            groups &= ~flowering;
+                            if (cacti && landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 820) < SE.CACTUS_SHARE)
+                                cactus = 1;
+                        }
+                        if (trees && ls === SE.Landscape.Savanna && (flora[i] & flowering) !== 0 &&
+                            landHash(i % SE.GRID_W, (i / SE.GRID_W) | 0, 830) < SE.savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i]))
+                            tree = 1;
+                        if (beach !== 0 /* BeachKind.None */ && palms)
+                            palm = SE.beachPalms(i);
+                    }
+                    // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
+                    const scar = scars[i];
+                    // A vent is a cone (volcanoes()): nothing grows on it.
+                    if (scar === SE.ScarKind.Vent)
+                        scene = SE.LAND_SCENE_NONE;
+                    if (scar !== SE.ScarKind.None && SE.scarShowsGround(world, i)) {
+                        // Fresh ground carries none of the landscape's old objects; the
+                        // effect layer draws the scar's own (fxscars.ts).
+                        scene = SE.LAND_SCENE_NONE;
+                        const g = SE.scarGround(scar, T);
+                        if (g) {
+                            key = g.key;
+                            shade += g.shade;
+                        }
+                    }
+                }
+                if (key !== 0 && h < 0)
+                    shade = MACRO[i];
+                this.key[i] = key;
+                this.rank[i] = key === 0 ? 0 : SE.landKeyRank(key);
+                this.shade[i] = Math.round(SE.clamp(shade, -SE.LAND_SHIFT_MAX + 1, SE.LAND_SHIFT_MAX - 1) * QUANT) / QUANT;
+                this.rugged[i] = rugged;
+                this.river[i] = river;
+                this.algae[i] = h >= 0 && (flora[i] & algae) !== 0 ? 1 : 0;
+                this.scene[i] = scene;
+                this.density[i] = density;
+                this.groups[i] = groups;
+                this.top[i] = floraTop[i];
+                this.cactus[i] = scene === SE.LAND_SCENE_NONE ? 0 : cactus;
+                this.savannaTree[i] = scene === SE.LAND_SCENE_NONE ? 0 : tree;
+                this.palm[i] = scars[i] === SE.ScarKind.None ? palm : 0;
+                this.sea[i] = sea;
+                this.lagoon[i] = lagoon;
+                this.seaTile[i] = h < 0 ? 1 : 0;
+                this.reef[i] = reef;
+                this.corals[i] = reef ? reefs.corals[i] : 0;
+                this.sands[i] = reef ? reefs.sands[i] : 0;
+                this.beach[i] = beach;
+            };
         }
         /** The per-tile signatures over [x0, x1) × [y0, y1). */
         sign(x0, y0, x1, y1) {
+            for (let y = y0; y < y1; y++)
+                for (let x = x0; x < x1; x++)
+                    this.signAt(y * SE.GRID_W + SE.wrapX(x));
+        }
+        signAt(i) {
             const lines = this.paths.sig;
             const ridges = this.ridges.sig;
-            for (let y = y0; y < y1; y++)
-                for (let x = x0; x < x1; x++) {
-                    const i = y * SE.GRID_W + SE.wrapX(x);
-                    let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
-                    s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22) ^ (this.palm[i] << 23), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
-                    s ^= Math.imul((this.depth[i] * QUANT) ^ (((this.shade[i] + SE.LAND_SHIFT_MAX) * QUANT) << 8), 0xc2b2ae3d);
-                    s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
-                    this.sig[i] = (s ^ (s >>> 15)) >>> 0;
-                }
+            let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
+            s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
+            const shore = this.sea[i] | (this.lagoon[i] << 1) | (this.reef[i] << 3) | (this.corals[i] << 5) | (this.sands[i] << 8) | (this.beach[i] << 10) | (this.palm[i] << 12);
+            s ^= Math.imul(shore ^ (((this.shade[i] + SE.LAND_SHIFT_MAX) * QUANT) << 16), 0xc2b2ae3d);
+            s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
+            this.sig[i] = (s ^ (s >>> 15)) >>> 0;
         }
         /**
          * Hillshade in ramp steps: light from the upper left, so a slope that
@@ -30953,6 +32104,8 @@ var SE;
  * lifted mountain range (landridgedraw.ts) an object stands as high as the
  * ground under its foot and hides behind nearer ground; plants stop at the
  * crest's tree line. Volcanic cones are relief, not objects (landridges.ts).
+ * Reefs show coral and sand patches under the water's ripples; on a beach
+ * only palms stand, on the dry sand, their crowns leaning over the sea.
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -30977,8 +32130,6 @@ var SE;
     const CACTUS_SLOT = 10;
     /** A savanna tree's slot: the quarter the first three slots (the rock's and a cactus's among them) leave free. */
     const SAVANNA_TREE_SLOT = 11;
-    /** Coconut palms' slots 12–13 (beach tiles carry no other plants). */
-    const PALM_SLOT = 12;
     /** Ground rows a shadow may lie from its object's foot on lifted ground. */
     const SHADOW_DEPTH = 2;
     /** Ground rows in front of its foot that still leave an object in view. */
@@ -30996,9 +32147,13 @@ var SE;
     function placeTile(f, art, x, y, out) {
         const xw = SE.wrapX(x);
         const i = y * SE.GRID_W + xw;
+        if (f.reef[i] !== 0 /* CoralKind.None */) {
+            SE.placeLandReef(f, art, xw, x, y, out);
+            return;
+        }
         const palms = f.palm[i];
         if (palms > 0 && art.sprites.coconut_palm)
-            placePalms(f, art, xw, x, y, palms, out);
+            SE.placeLandPalms(f, art, xw, x, y, palms, out);
         const scene = f.scene[i];
         if (scene === SE.LAND_SCENE_NONE)
             return;
@@ -31036,42 +32191,6 @@ var SE;
             const ids = T.abioticIds[scene];
             if (ids.length > 0)
                 out.push(spot(art, ids[Math.floor(SE.landHash(xw, y, 801) * ids.length)], xw, x, y, 9, 2, false));
-        }
-    }
-    /**
-     * Coconut palms on a beach tile: feet set back from the sea onto the dry
-     * sand, a pair spread along the shore (a tall one, a younger one), crowns
-     * curving toward the sea (form 0 curves left, 1 right).
-     */
-    function placePalms(f, art, xw, x, y, n, out) {
-        let sx = 0;
-        let sy = 0;
-        for (let dy = -1; dy <= 1; dy++) {
-            const ny = y + dy;
-            if (ny < 0 || ny >= SE.GRID_H)
-                continue;
-            for (let dx = -1; dx <= 1; dx++) {
-                if (f.key[ny * SE.GRID_W + SE.wrapX(xw + dx)] === 0) {
-                    sx += dx;
-                    sy += dy;
-                }
-            }
-        }
-        sx = Math.sign(sx);
-        sy = Math.sign(sy);
-        // Along the shore: across the way to the sea.
-        const ax = sx === 0 && sy === 0 ? 1 : -sy;
-        const ay = sx;
-        const vars = art.sprites.coconut_palm;
-        for (let s = 0; s < n; s++) {
-            const slot = PALM_SLOT + s;
-            const p = spot(art, 'coconut_palm', xw, x, y, slot, s === 0 ? 2 : 1, false);
-            const side = n === 1 ? 0 : s === 0 ? -1 : 1;
-            const jitter = Math.floor((SE.landHash(xw, y, 960 + slot) - 0.5) * 3);
-            const fx = SE.clamp(x * 16 + 8 - sx * 4 + side * ax * 4 + jitter, x * 16 + 2, x * 16 + 14);
-            const fy = SE.clamp(y * 16 + 10 - sy * 4 + side * ay * 3, y * 16 + 4, y * 16 + 14);
-            const sprite = sx === 0 ? p.sprite : vars.find((v) => v.size === p.sprite.size && v.form === (sx > 0 ? 1 : 0)) ?? p.sprite;
-            out.push({ ...p, sprite, fx, fy });
         }
     }
     /** The object a slot shows: a group by weight, then one of its objects for this scene. */
@@ -31131,6 +32250,8 @@ var SE;
      */
     function drawLandObjects(list, art, px, water, occupied, w, h, ox, oy, rise = null, lifts = null, shade = null) {
         const shadow = art.shift[SE.LAND_SHIFT_MAX + SHADOW_SHIFT];
+        const rip = art.rippleCoast;
+        const rw = rip.size - 1;
         const top = rise ? rise.top : null;
         const bottom = rise ? rise.bottom : null;
         const depth = rise ? rise.depth : null;
@@ -31202,6 +32323,9 @@ var SE;
                     const k = base + uy[n] * w + ux[n];
                     px[k] = tone ? tone[uv[n]] : uv[n];
                     occupied[k] = 1;
+                    // Over the sea a crown hides the water: no surf or wave is drawn on it.
+                    if (water[k] === 1)
+                        water[k] = 0;
                 }
                 continue;
             }
@@ -31213,11 +32337,18 @@ var SE;
                 const k = y * w + x;
                 if (p.water && water[k] !== 1)
                     continue;
+                // Corals lie under the water: its ripples and the shore's foam and lighter band show over them.
+                if (look.under && (rip.px[((oy + y) & rw) * rip.size + ((ox + x) & rw)] !== 0 || x < 2 || y < 2 || x >= w - 2 || y >= h - 2 ||
+                    water[k - 1] !== 1 || water[k + 1] !== 1 || water[k - w] !== 1 || water[k + w] !== 1 ||
+                    water[k - 2] !== 1 || water[k + 2] !== 1 || water[k - 2 * w] !== 1 || water[k + 2 * w] !== 1))
+                    continue;
                 // Nearer ground shows here (riseDepth, inlined: this runs for every sprite pixel).
                 if (depth && y >= top[x] && y <= bottom[x] && depth[k] > ground + DEPTH_SLACK)
                     continue;
                 px[k] = tone ? tone[uv[n]] : uv[n];
                 occupied[k] = 1;
+                if (!p.water && water[k] === 1)
+                    water[k] = 0;
             }
         }
     }
@@ -31269,7 +32400,7 @@ var SE;
         const look = {
             x: Uint8Array.from(xs), y: Uint8Array.from(ys), v: Uint8Array.from(vs),
             shadowX: Int8Array.from(dxs), shadowY: Int8Array.from(dys),
-            plant: ob.group !== null, tree: ob.kind === 'tree',
+            plant: ob.group !== null, tree: ob.kind === 'tree', under: ob.kind === 'reef',
         };
         LOOKS.set(t, look);
         return look;
@@ -32183,10 +33314,10 @@ var SE;
      * own pixel takes it, the pixels between average their two or four), cut
      * the gullies, flatten the far foot, and note each column's lifted rows.
      * Open water stays flat: the pixels `water` marks 1 in its first
-     * `waterRows` rows, below them the pixels of sea tiles (`depth`, when
-     * given). False when nothing rises.
+     * `waterRows` rows, below them the pixels of sea tiles (`seaTiles`, when
+     * given: TerrainField.seaTile). False when nothing rises.
      */
-    function fill(ridges, ox, oy, w, h, water, waterRows, depth) {
+    function fill(ridges, ox, oy, w, h, water, waterRows, seaTiles) {
         const gw = (w >> 1) + 1;
         const gh = (h >> 1) + 1;
         allocate(w, h);
@@ -32242,7 +33373,7 @@ var SE;
                     if (v0 <= 0)
                         continue;
                     const k = y * w + x;
-                    if (y < waterRows ? water[k] === 1 : depth !== null && seaTile(depth, ox + x, oy + y))
+                    if (y < waterRows ? water[k] === 1 : seaTiles !== null && seaTile(seaTiles, ox + x, oy + y))
                         continue;
                     // The thresholds of the strongest sample the pixel reads.
                     let s = ra + i;
@@ -32444,16 +33575,16 @@ var SE;
         const ids = ridges.query(ox, oy, ox + w, oy + hh);
         if (ids.length === 0 || !sample(ridges, ids, ox, oy, w, hh))
             return null;
-        if (!fill(ridges, ox, oy, w, hh, sea ?? NO_WATER, sea ? h : 0, field.depth))
+        if (!fill(ridges, ox, oy, w, hh, sea ?? NO_WATER, sea ? h : 0, field.seaTile))
             return null;
         colTop.fill(hh, 0, w);
         lift(ridges, { px: new Uint8Array(0), water: new Uint8Array(0), w, h: hh }, null, ox, oy, false, h);
         return { ridges, z: zBuf, seg: segBuf, depth: depthBuf, top: colTop, bottom: colHi };
     }
     SE.landRiseMap = landRiseMap;
-    /** Whether world art pixel (wx, wy) lies on a sea tile (the field's water depth below the shallowest). */
-    function seaTile(depth, wx, wy) {
-        return depth[SE.clampY(Math.floor(wy / 16)) * SE.GRID_W + SE.wrapX(Math.floor(wx / 16))] < SE.LAND_SHALLOW;
+    /** Whether world art pixel (wx, wy) lies on a sea tile (TerrainField.seaTile). */
+    function seaTile(seaTiles, wx, wy) {
+        return seaTiles[SE.clampY(Math.floor(wy / 16)) * SE.GRID_W + SE.wrapX(Math.floor(wx / 16))] === 1;
     }
     /**
      * Lift of the ground at world art pixel (wx, wy), x wrapped or not: the
@@ -32463,7 +33594,7 @@ var SE;
      * everywhere but on the frayed coast and in rivers (water stays flat).
      */
     function landRiseAt(field, wx, wy) {
-        return seaTile(field.depth, wx, wy) ? 0 : footRise(field.ridges, wx, wy).z;
+        return seaTile(field.seaTile, wx, wy) ? 0 : footRise(field.ridges, wx, wy).z;
     }
     SE.landRiseAt = landRiseAt;
     const FOOT = { z: 0, seg: -1 };
@@ -32740,11 +33871,17 @@ var SE;
  * SimEarth 2.0 — water in the pixel terrain: sea and shore
  * -----------------------------------------------------------------------------
  * The compositor's sea and shore passes, on its index buffer (landcompose.ts):
- *   - sea: the depth of the four corners, bilinear, on the water ramp with an
- *     ordered dither between steps and the shelf or open-ocean ripple;
- *   - shore: a foam line and a lighter band on the water side, a wet rim
- *     (one ramp step darker) on the ground side, wherever the dual grid put
- *     water next to ground — coasts, lakes and sea ice alike.
+ *   - sea: two flat classes, open ocean and coastal sea, each with its ripple;
+ *     at the shelf edge a 3–4 px ordered dither between them, and over the
+ *     first open-ocean tile a fade along the shelf ramp. The main map
+ *     shows no depth (the depth views do). Lagoons (reefs.ts) mix in
+ *     turquoise by an ordered dither: a quarter, a half or all of it;
+ *   - reef edge: an interrupted foam line where waves break on a reef's
+ *     open-sea side;
+ *   - shore: beach sand where reefs.ts lays a beach (landshore.ts), then a
+ *     foam line and a lighter band on the water side, a wet rim (one ramp
+ *     step darker) on the ground side, wherever the dual grid put water next
+ *     to ground — coasts, lakes and sea ice alike.
  * Rivers are drawn as lines in landrivers.ts.
  * ========================================================================== */
 var SE;
@@ -32755,13 +33892,15 @@ var SE;
     SE.LAND_CENTER = Float32Array.from({ length: 16 }, (_, k) => (k + 0.5) / 16);
     SE.LAND_BAYER_MIN = 0.5 / 16;
     SE.LAND_BAYER_MAX = 15.5 / 16;
-    /**
-     * Share of each step over which water deepens into the next (the rest is
-     * flat): calm sea, with the dither only in bands between depth steps.
-     */
-    const WATER_BAND = 0.6;
-    /** Water ramp position of the shelf edge (COAST_DEPTH): deeper water shows the open-ocean ripple. */
-    const COAST_RIPPLE_DEPTH = SE.LAND_SHALLOW / 2;
+    /** Water ramp steps of the open ocean and the coastal sea, and the lagoon's step on waterWarm. */
+    SE.SEA_OCEAN_STEP = 2;
+    SE.SEA_COAST_STEP = 4;
+    SE.SEA_LAGOON_STEP = 1;
+    /** Pixels over which the shelf edge dithers from open ocean into coastal sea. */
+    const SHELF_BAND = 3.5;
+    /** Share of a reef's open-sea edge pixels that show foam. */
+    const REEF_FOAM = 0.5;
+    const WORLD_PX = SE.GRID_W * 16;
     /** Whole steps stay flat; only the middle `band` of each step blends into the next. */
     function landTerrace(v, band) {
         const n = Math.floor(v);
@@ -32769,52 +33908,156 @@ var SE;
         return n + (f <= 0 ? 0 : f >= band ? 1 : f / band);
     }
     SE.landTerrace = landTerrace;
-    function seaStep(depth, bayer) {
-        const step = Math.floor(landTerrace(depth, WATER_BAND) + bayer);
-        return step < 0 ? 0 : step > SE.LAND_SHALLOW ? SE.LAND_SHALLOW : step;
+    /** Share of a pixel's lagoon level (0..3, bilinear) that turns turquoise: a quarter, a half, all. */
+    function lagoonShare(g) {
+        return g <= 2 ? g * 0.25 : 0.5 + (g - 2) * 0.5;
     }
-    /** One display cell of sea (through `mask` when it is not the cell's lowest layer). */
-    function paintSea(b, art, depth, c0, c1, c2, c3, mask, base, wx, wy, steps) {
-        const a = depth[c0];
-        const dx = depth[c1] - a;
-        const dy = depth[c2] - a;
-        const dxy = depth[c3] - depth[c2] - dx;
-        const lo = Math.min(a, depth[c1], depth[c2], depth[c3]);
-        const hi = Math.max(a, depth[c1], depth[c2], depth[c3]);
-        // The whole cell dithers to one step — most of the ocean: a table of the 16 Bayer cells.
-        const calm = Math.floor(landTerrace(lo, WATER_BAND) + SE.LAND_BAYER_MIN) === Math.floor(landTerrace(hi, WATER_BAND) + SE.LAND_BAYER_MAX);
-        if (calm)
-            for (let j = 0; j < 16; j++)
-                steps[j] = seaStep((lo + hi) / 2, SE.BAYER4[j]);
+    function bilinear(a, b, c, d, u, v) {
+        const top = a + (b - a) * u;
+        return top + (c + (d - c) * u - top) * v;
+    }
+    /**
+     * A corner's shelf level: 2 coastal sea (land counts), 1 open ocean beside
+     * it (8 neighbours), 0 open ocean. Read from the neighbours at paint time:
+     * the chunk signature already covers them (SIGNATURE_REACH).
+     */
+    function shelfLevel(S, c) {
+        if (S[c] === 1)
+            return 2;
+        const x = c % SE.GRID_W;
+        const y = (c - x) / SE.GRID_W;
+        for (let dy = -1; dy <= 1; dy++) {
+            const row = SE.clampY(y + dy) * SE.GRID_W;
+            for (let dx = -1; dx <= 1; dx++)
+                if (S[row + SE.wrapX(x + dx)] === 1)
+                    return 1;
+        }
+        return 0;
+    }
+    /**
+     * One display cell of sea (through `mask` when it is not the cell's lowest
+     * layer). Returns whether a corner is a reef: then `reefBits` holds per
+     * pixel 1 inside the reef and 2 on open water (neither reef nor lagoon),
+     * for paintReefEdges.
+     */
+    function paintSea(b, art, f, c0, c1, c2, c3, mask, base, wx, wy, reefBits) {
         const { px, water, w } = b;
         const ramp = art.water;
         const top = ramp[ramp.length - 1];
+        const S = f.sea;
+        const G = f.lagoon;
+        const s0 = shelfLevel(S, c0), s1 = shelfLevel(S, c1), s2 = shelfLevel(S, c2), s3 = shelfLevel(S, c3);
+        const g0 = G[c0], g1 = G[c1], g2 = G[c2], g3 = G[c3];
+        // Most of the sea: one class over the whole cell, away from the shelf edge, and no lagoon.
+        if (s0 === s1 && s1 === s2 && s2 === s3 && s0 !== 1 && (g0 | g1 | g2 | g3) === 0) {
+            const flat = s0 === 2 ? SE.SEA_COAST_STEP : SE.SEA_OCEAN_STEP;
+            const rip = s0 === 2 ? art.rippleCoast : art.rippleOcean;
+            const rw = rip.size - 1;
+            // The flat colour and its two ripple steps.
+            const c0 = ramp[flat];
+            const c1 = ramp[Math.min(SE.LAND_SHALLOW, flat + 1)];
+            const c2 = ramp[Math.min(SE.LAND_SHALLOW, flat + 2)];
+            for (let ly = 0; ly < 16; ly++) {
+                const row = ((wy + ly) & rw) * rip.size;
+                let o = base + ly * w;
+                for (let lx = 0; lx < 16; lx++, o++) {
+                    if (mask && mask[ly * 16 + lx] === 0)
+                        continue;
+                    const r = rip.px[row + ((wx + lx) & rw)];
+                    px[o] = r === 0 ? c0 : r === top ? c2 : c1;
+                    water[o] = 1;
+                }
+            }
+            return false;
+        }
+        const warm = art.waterWarm;
+        const warmTop = warm.length - 1;
+        // Locals, not SE lookups: this runs for every pixel of the cell.
+        const center = SE.LAND_CENTER;
+        const bayer = SE.BAYER4;
+        const shallow = SE.LAND_SHALLOW;
+        const coastStep = SE.SEA_COAST_STEP;
+        const oceanStep = SE.SEA_OCEAN_STEP;
+        const lagoonStep = SE.SEA_LAGOON_STEP;
+        const shelf = art.shelf;
+        const shelfN = shelf.length;
+        const rc = art.rippleCoast;
+        const ro = art.rippleOcean;
+        const R = f.reef;
+        const reef = (R[c0] | R[c1] | R[c2] | R[c3]) !== 0;
+        const r0 = R[c0] ? 1 : 0, r1 = R[c1] ? 1 : 0, r2 = R[c2] ? 1 : 0, r3 = R[c3] ? 1 : 0;
+        const open = (c) => (f.key[c] === 0 && R[c] === 0 && G[c] === 0 ? 1 : 0);
+        const o0 = open(c0), o1 = open(c1), o2 = open(c2), o3 = open(c3);
         for (let ly = 0; ly < 16; ly++) {
             const y = wy + ly;
-            const row0 = a + dy * SE.LAND_CENTER[ly];
-            const slope = dx + dxy * SE.LAND_CENTER[ly];
+            const v = center[ly];
             const bay = (y & 3) * 4;
             let o = base + ly * w;
             for (let lx = 0; lx < 16; lx++, o++) {
                 if (mask && mask[ly * 16 + lx] === 0)
                     continue;
                 const x = wx + lx;
-                const d = row0 + slope * SE.LAND_CENTER[lx];
-                let step = calm ? steps[bay + (x & 3)] : seaStep(d, SE.BAYER4[bay + (x & 3)]);
-                const rip = d >= COAST_RIPPLE_DEPTH ? art.rippleCoast : art.rippleOcean;
+                const u = center[lx];
+                const t = bayer[bay + (x & 3)];
+                // The shelf edge (level 1.5) dithers over SHELF_BAND px (unclamped: only its comparison with t counts).
+                const d = bilinear(s0, s1, s2, s3, u, v);
+                const coast = (d - 1.5) * (16 / SHELF_BAND) + 0.5 > t;
+                const lagoon = lagoonShare(bilinear(g0, g1, g2, g3, u, v)) > t;
+                const rip = lagoon || coast ? rc : ro;
                 const r = rip.px[(y & (rip.size - 1)) * rip.size + (x & (rip.size - 1))];
-                if (r !== 0)
-                    step = Math.min(SE.LAND_SHALLOW, step + (r === top ? 2 : 1));
-                px[o] = ramp[step];
+                const up = r === 0 ? 0 : r === top ? 2 : 1;
+                if (lagoon)
+                    px[o] = warm[Math.min(warmTop, lagoonStep + up)];
+                else if (coast || d <= 0.5)
+                    px[o] = ramp[Math.min(shallow, (coast ? coastStep : oceanStep) + up)];
+                else {
+                    // The first open-ocean tile: the shelf ramp from its far side (level 0.5) up to the edge (1.5),
+                    // dithered only between neighbouring shades; its ripple a step lighter on the brighter half.
+                    const k = Math.floor(Math.min(1, d - 0.5) * shelfN + t);
+                    px[o] = up !== 0 ? ramp[Math.min(shallow, oceanStep + up + (k * 2 > shelfN ? 1 : 0))] : k === 0 ? ramp[oceanStep] : shelf[k - 1];
+                }
                 water[o] = 1;
+                if (reef)
+                    reefBits[o] = (bilinear(r0, r1, r2, r3, u, v) >= 0.5 ? 1 : 0) | (bilinear(o0, o1, o2, o3, u, v) >= 0.5 ? 2 : 0);
             }
         }
+        return reef;
     }
     SE.paintSea = paintSea;
     /**
+     * Waves break on a reef's open-sea side: foam on about REEF_FOAM of the
+     * reef's sea pixels beside open water, in the cells `cells` lists (buffer
+     * offsets of cells with a reef corner; `reefBits` from paintSea), the
+     * buffer's pixel (0, 0) at world (ox, oy). Drawn after the objects, so the
+     * line runs over the corals.
+     */
+    function paintReefEdges(b, art, cells, reefBits, ox, oy) {
+        const { px, water, w, h } = b;
+        const foam = art.water[art.water.length - 1];
+        const outside = (o) => (reefBits[o] & 3) === 2;
+        for (const base of cells) {
+            const cx = base % w;
+            const cy = (base / w) | 0;
+            const x0 = Math.max(1, cx);
+            const x1 = Math.min(w - 1, cx + 16);
+            for (let y = Math.max(1, cy); y < Math.min(h - 1, cy + 16); y++) {
+                for (let x = x0, o = y * w + x0; x < x1; x++, o++) {
+                    if ((reefBits[o] & 1) === 0 || water[o] !== 1)
+                        continue;
+                    if (!outside(o - 1) && !outside(o + 1) && !outside(o - w) && !outside(o + w))
+                        continue;
+                    // Hashed at the wrapped x, so chunks on both sides of the date line agree.
+                    if (SE.landHash((((ox + x) % WORLD_PX) + WORLD_PX) % WORLD_PX, oy + y, 1611) < REEF_FOAM)
+                        px[o] = foam;
+                }
+            }
+        }
+    }
+    SE.paintReefEdges = paintReefEdges;
+    /**
      * Foam on the first water pixel, lighter water on the second, a wet rim on
      * the ground, around every cell listed in `shores` (buffer offsets).
-     * `done` keeps a pixel from being shaded twice by two neighbouring cells.
+     * Bit 1 of `done` keeps a pixel from being shaded twice by two neighbouring cells.
      */
     function paintShore(b, art, shores, done) {
         const { px, water, w, h } = b;
@@ -32828,9 +34071,9 @@ var SE;
             const y1 = Math.min(h - 2, ((base / w) | 0) + 18);
             for (let y = y0; y < y1; y++) {
                 for (let x = x0, o = y * w + x0; x < x1; x++, o++) {
-                    if (done[o] !== 0)
+                    if ((done[o] & 1) !== 0)
                         continue;
-                    done[o] = 1;
+                    done[o] |= 1;
                     if (water[o] !== 0) {
                         if (!water[o - 1] || !water[o + 1] || !water[o - w] || !water[o + w])
                             px[o] = foam;
@@ -32846,6 +34089,400 @@ var SE;
         }
     }
     SE.paintShore = paintShore;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — beaches on the pixel terrain
+ * -----------------------------------------------------------------------------
+ * A beach is a detail of the shore, not a ground of its own: a strip of beach
+ * sand (dry sand with ripples and shells, the shore pass's wet line on its
+ * sea side) along the water's edge of the tiles reefs.ts marks. Beside a
+ * reef it is 2–4 px wide, up to 5 in a bay and 1 or none on a headland; a
+ * shell beach 1–3 px. The width drifts with soft noise along the coast and
+ * frays on the land side.
+ *
+ * Every input is a function of world pixels: the beach kinds of the dual
+ * cell's land corners, noise, and the sea within SHORE_REACH px. The
+ * compositor reads that sea off its buffer (all of the disk lies inside it
+ * for every pixel it shows); palms and the plants kept off the sand read it
+ * off the dual grid itself (landSeaAt), which gives the same pixels. So
+ * chunks join without a seam.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Radius (px) of the disk read around a land pixel: its nearest sea, and how much sea lies near. */
+    SE.SHORE_REACH = 6;
+    /** Strip width (px) by BeachKind before noise, and the widest it gets (in a bay). */
+    const BEACH_BASE = [0, 2, 3];
+    const BEACH_MAX = [0, 3, 5];
+    /** Width gained per unit of missing sea in a bay (against a straight coast), lost per unit of extra sea on a headland. */
+    const BAY_GAIN = 2.5;
+    const HEADLAND_LOSS = 2.5;
+    /** Period (px) of the width noise along the coast, ± this many px. */
+    const WIDTH_PERIOD = 32;
+    const WIDTH_SWING = 1;
+    /** Period (px) and amplitude of the fraying on the land side. */
+    const FRAY_PERIOD = 8;
+    const FRAY = 0.6;
+    const WORLD_PX = SE.GRID_W * 16;
+    /** The disk as offsets, nearest first: dx, dy and distance. */
+    const DISK_X = [];
+    const DISK_Y = [];
+    const DISK_D = [];
+    (() => {
+        const all = [];
+        const r = SE.SHORE_REACH;
+        for (let dy = -r; dy <= r; dy++)
+            for (let dx = -r; dx <= r; dx++) {
+                const d = Math.hypot(dx, dy);
+                if (d > 0 && d <= r)
+                    all.push([dx, dy, d]);
+            }
+        all.sort((a, b) => a[2] - b[2]);
+        for (const [x, y, d] of all) {
+            DISK_X.push(x);
+            DISK_Y.push(y);
+            DISK_D.push(d);
+        }
+    })();
+    /** Sea pixels in the disk of a pixel d px from a straight coast, d = 0..SHORE_REACH. */
+    const STRAIGHT = Array.from({ length: SE.SHORE_REACH + 1 }, (_, d) => DISK_Y.filter((y) => y >= d).length);
+    function straightAt(d) {
+        const k = Math.min(SE.SHORE_REACH - 1, Math.floor(d));
+        return STRAIGHT[k] + (STRAIGHT[k + 1] - STRAIGHT[k]) * (d - k);
+    }
+    /** Scratch: the nearest sea (px, Infinity when none in reach) and the sea pixels counted. */
+    const NEAR = { d: Infinity, count: 0 };
+    /**
+     * Width (px) of the beach strip at world pixel (wx, wy), x wrapped, given
+     * its nearest sea `d` and the sea pixels `count` in its disk; 0 where the
+     * dual cell has no beach corner.
+     */
+    function beachWidth(f, wx, wy, d, count) {
+        const gx = wx - 8;
+        const gy = wy - 8;
+        const tx = Math.floor(gx / 16);
+        const ty = Math.floor(gy / 16);
+        const u = (gx - tx * 16 + 0.5) / 16;
+        const v = (gy - ty * 16 + 0.5) / 16;
+        let base = 0;
+        let max = 0;
+        let sum = 0;
+        for (let c = 0; c < 4; c++) {
+            const t = SE.clampY(ty + (c >> 1)) * SE.GRID_W + SE.wrapX(tx + (c & 1));
+            if (f.key[t] === 0 || f.seaTile[t] === 1)
+                continue;
+            const w = ((c & 1) ? u : 1 - u) * ((c >> 1) ? v : 1 - v);
+            base += w * BEACH_BASE[f.beach[t]];
+            max += w * BEACH_MAX[f.beach[t]];
+            sum += w;
+        }
+        if (base <= 0)
+            return 0;
+        base /= sum;
+        max /= sum;
+        let width = base + (SE.landOctave(wx, wy, WORLD_PX, WORLD_PX / WIDTH_PERIOD, 1601) - 0.5) * 2 * WIDTH_SWING;
+        const rho = count / straightAt(d);
+        width += rho < 1 ? (1 - rho) * BAY_GAIN : -(rho - 1) * HEADLAND_LOSS;
+        return Math.min(width, max) + (SE.landOctave(wx, wy, WORLD_PX, WORLD_PX / FRAY_PERIOD, 1603) - 0.5) * 2 * FRAY;
+    }
+    /** Does any of the dual cell's corners around world pixel (wx, wy) carry a beach? */
+    function beachCell(f, wx, wy) {
+        const tx = Math.floor((wx - 8) / 16);
+        const ty = Math.floor((wy - 8) / 16);
+        for (let c = 0; c < 4; c++)
+            if (f.beach[SE.clampY(ty + (c >> 1)) * SE.GRID_W + SE.wrapX(tx + (c & 1))] !== 0)
+                return true;
+        return false;
+    }
+    /**
+     * Is world pixel (wx, wy) open sea in the composed map, before rivers?
+     * The compositor's dual grid, pixel by pixel: a cell with sea in a corner
+     * is sea wherever no land layer's frayed mask covers it.
+     */
+    function landSeaAt(f, art, wx, wy) {
+        const gx = wx - 8;
+        const gy = wy - 8;
+        const tx = Math.floor(gx / 16);
+        const ty = Math.floor(gy / 16);
+        const xa = SE.wrapX(tx);
+        const xb = SE.wrapX(tx + 1);
+        const ra = SE.clampY(ty) * SE.GRID_W;
+        const rb = SE.clampY(ty + 1) * SE.GRID_W;
+        const k0 = f.key[ra + xa];
+        const k1 = f.key[ra + xb];
+        const k2 = f.key[rb + xa];
+        const k3 = f.key[rb + xb];
+        if (k0 !== 0 && k1 !== 0 && k2 !== 0 && k3 !== 0)
+            return false;
+        if (k0 === 0 && k1 === 0 && k2 === 0 && k3 === 0)
+            return true;
+        const variant = Math.floor(SE.landHash(xa, ty, 77) * art.masks[0].length);
+        const m = (gy - ty * 16) * 16 + (gx - tx * 16);
+        for (const v of [k0, k1, k2, k3]) {
+            if (v === 0)
+                continue;
+            const kase = (k0 >= v ? 1 : 0) | (k1 >= v ? 2 : 0) | (k2 >= v ? 4 : 0) | (k3 >= v ? 8 : 0);
+            if (art.masks[kase][variant][m] !== 0)
+                return false;
+        }
+        return true;
+    }
+    SE.landSeaAt = landSeaAt;
+    /** NEAR for world pixel (wx, wy), read off the dual grid. */
+    function nearSea(f, art, wx, wy) {
+        NEAR.d = Infinity;
+        NEAR.count = 0;
+        for (let k = 0; k < DISK_D.length; k++) {
+            if (!landSeaAt(f, art, wx + DISK_X[k], wy + DISK_Y[k]))
+                continue;
+            if (NEAR.count === 0)
+                NEAR.d = DISK_D[k];
+            NEAR.count++;
+        }
+        return NEAR;
+    }
+    /**
+     * The beach at world pixel (wx, wy), read off the dual grid: its nearest
+     * sea (px) when it is beach sand, else 0.
+     */
+    function landBeachAt(f, art, wx, wy) {
+        const x = ((wx % WORLD_PX) + WORLD_PX) % WORLD_PX;
+        if (wy < 0 || wy >= SE.GRID_H * 16 || !beachCell(f, x, wy) || landSeaAt(f, art, x, wy))
+            return 0;
+        const n = nearSea(f, art, x, wy);
+        return n.count > 0 && n.d <= beachWidth(f, x, wy, n.d, n.count) ? n.d : 0;
+    }
+    SE.landBeachAt = landBeachAt;
+    /** The strip's width at world pixel (wx, wy) as landBeachAt reads it, for placing palms. */
+    function landBeachWidthAt(f, art, wx, wy) {
+        const x = ((wx % WORLD_PX) + WORLD_PX) % WORLD_PX;
+        const n = nearSea(f, art, x, wy);
+        return n.count > 0 ? beachWidth(f, x, wy, n.d, n.count) : 0;
+    }
+    SE.landBeachWidthAt = landBeachWidthAt;
+    /** A beach corner within a tile of tile (tx, ty), x unwrapped: whether objects there must look for the sand. */
+    function landBeachNear(f, tx, ty) {
+        for (let dy = -1; dy <= 1; dy++) {
+            const y = ty + dy;
+            if (y < 0 || y >= SE.GRID_H)
+                continue;
+            for (let dx = -1; dx <= 1; dx++)
+                if (f.beach[y * SE.GRID_W + SE.wrapX(tx + dx)] !== 0)
+                    return true;
+        }
+        return false;
+    }
+    SE.landBeachNear = landBeachNear;
+    /**
+     * Beach sand over the ground of the buffer `b` (pixel (0, 0) at world
+     * (ox, oy)), around the cells `shores` lists, before the shore pass draws
+     * its wet line on it. Pixels nearer the buffer's edge than SHORE_REACH are
+     * never shown (the margin is smaller) and stay as they are. `seen` marks
+     * the pixels looked at (bit 2).
+     */
+    function paintBeaches(b, art, f, ox, oy, shores, seen) {
+        const sand = art.beach;
+        const { px, water, w, h } = b;
+        const r = SE.SHORE_REACH;
+        const sw = sand.size - 1;
+        const offs = Int32Array.from(DISK_X, (dx, k) => DISK_Y[k] * w + dx);
+        for (const base of shores) {
+            const cx = base % w;
+            const cy = (base / w) | 0;
+            const x0 = Math.max(r, cx - r);
+            const x1 = Math.min(w - r, cx + 16 + r);
+            const y1 = Math.min(h - r, cy + 16 + r);
+            for (let y = Math.max(r, cy - r); y < y1; y++) {
+                const wy = oy + y;
+                for (let x = x0, o = y * w + x0; x < x1; x++, o++) {
+                    if ((seen[o] & 2) !== 0 || water[o] !== 0)
+                        continue;
+                    seen[o] |= 2;
+                    const wx = (((ox + x) % WORLD_PX) + WORLD_PX) % WORLD_PX;
+                    if (!beachCell(f, wx, wy))
+                        continue;
+                    let d = Infinity;
+                    let count = 0;
+                    for (let k = 0; k < offs.length; k++) {
+                        if (water[o + offs[k]] !== 1)
+                            continue;
+                        if (count === 0)
+                            d = DISK_D[k];
+                        count++;
+                    }
+                    if (count === 0 || d > beachWidth(f, wx, wy, d, count))
+                        continue;
+                    px[o] = sand.px[(wy & sw) * sand.size + (wx & sw)];
+                }
+            }
+        }
+    }
+    SE.paintBeaches = paintBeaches;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the objects of the coast: reef patches and palms
+ * -----------------------------------------------------------------------------
+ * Placed with the other objects (landobjects.ts), from hashes and the dual
+ * grid only, so every chunk places them alike:
+ *   - a reef tile (reefs.ts) shows 3–4 coral patches, some of them the light
+ *     sand its fish ground out; drawn under the water's ripples;
+ *   - palms stand on the dry sand of a beach (landshore.ts), their crowns
+ *     leaning over the sea; nothing else grows on the sand.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Coconut palms' slots 12–13: the plants of a beach tile stand off its sand. */
+    const PALM_SLOT = 12;
+    /** A foot stands this many px from the sea: dry sand 1–2 px behind the wet line (the pixels touching the water). */
+    const PALM_BACK = [2, 3];
+    /** Rows of its tile a palm tries (px from the tile's top), in an order its hash rotates: a coast is rarely straight. */
+    const PALM_ROWS = [6, 10, 3, 13, 8, 4, 12, 2, 9, 5, 11, 7];
+    /** Crown over the water, px. */
+    const PALM_OVERHANG_MIN = 3;
+    const PALM_OVERHANG_MAX = 6;
+    /** A pair's second palm stands this many px (and more by hash, up to +2) along the shore from the first. */
+    const PALM_PAIR_GAP = 4;
+    /** The second palm of a pair: the size whose sprite is 3 px shorter or taller (l 20, m 17 px; s has none). */
+    const PALM_PARTNER = { l: ['m'], m: ['l'], s: [] };
+    /** Where a palm row looks for the sea: from this far behind the tile's centre, this far towards the sea. */
+    const PALM_SEARCH_BACK = 8;
+    const PALM_SEARCH = 32;
+    /**
+     * The coral patches of a reef tile, and the light sand patches its fish
+     * ground out of it, over a jittered 2×2 pattern.
+     */
+    function placeLandReef(f, art, xw, x, y, out) {
+        const i = y * SE.GRID_W + xw;
+        const coral = f.reef[i] === 2 /* CoralKind.Stony */ ? 'coral_stony' : 'coral_rugose';
+        const sands = f.sands[i];
+        const turn = Math.floor(SE.landHash(xw, y, 1620) * 4);
+        for (let s = 0; s < f.corals[i] + sands; s++) {
+            const vars = art.sprites[s < sands ? 'reef_sand' : coral];
+            if (!vars)
+                continue;
+            const sprite = vars[Math.floor(SE.landHash(xw, y, 1610 + s) * vars.length)];
+            const p = (s + turn) % 4;
+            const cx = x * 16 + 4 + (p % 2) * 8 + Math.floor((SE.landHash(xw, y, 1630 + s) - 0.5) * 4);
+            const cy = y * 16 + 4 + (p >> 1) * 8 + Math.floor((SE.landHash(xw, y, 1640 + s) - 0.5) * 4);
+            out.push({ sprite, fx: cx, fy: cy - (sprite.h >> 1) + sprite.ay, water: true, seq: i * 16 + s });
+        }
+    }
+    SE.placeLandReef = placeLandReef;
+    /**
+     * Coconut palms on a beach tile: each foot on the dry sand of its own row,
+     * 1–2 px behind the wet line where the strip is at least 2 px wide, the
+     * crown leaning to the sea and reaching 3–6 px over the water (form 0
+     * curves left, 1 right). A pair stands 4–6 px apart along the shore, a
+     * tall palm and a younger one 3 px lower. Rows with no fit carry none.
+     */
+    function placeLandPalms(f, art, xw, x, y, n, out) {
+        let sx = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+            const ny = y + dy;
+            if (ny < 0 || ny >= SE.GRID_H)
+                continue;
+            for (let dx = -1; dx <= 1; dx++)
+                if (f.key[ny * SE.GRID_W + SE.wrapX(xw + dx)] === 0)
+                    sx += dx;
+        }
+        const dirs = sx !== 0 ? [Math.sign(sx)] : SE.landHash(xw, y, 961) < 0.5 ? [-1, 1] : [1, -1];
+        const vars = art.sprites.coconut_palm;
+        const i = y * SE.GRID_W + xw;
+        const sizes = SE.landHash(xw, y, 962) < 0.5 ? ['l', 'm', 's'] : ['m', 'l', 's'];
+        let first = null;
+        for (let s = 0; s < n; s++) {
+            const gap = PALM_PAIR_GAP + Math.floor(SE.landHash(xw, y, 963) * 3);
+            const turn = Math.floor(SE.landHash(xw, y, 964) * PALM_ROWS.length);
+            const rows = first ? [first.fy + (first.fy - y * 16 < 8 ? gap : -gap)] : PALM_ROWS.map((_, k) => y * 16 + PALM_ROWS[(k + turn) % PALM_ROWS.length]);
+            const own = first ? PALM_PARTNER[first.size] : sizes;
+            const flip = SE.landHash(xw, y, 965 + s) < 0.5;
+            let at = null;
+            let fy = 0;
+            for (const row of rows) {
+                for (const dir of dirs) {
+                    at = palmFoot(f, art, x * 16 + 8, row, dir, own.map((size) => vars.find((v) => v.size === size && v.form === (dir < 0 ? 0 : 1))), flip);
+                    if (at) {
+                        fy = row;
+                        break;
+                    }
+                }
+                if (at)
+                    break;
+            }
+            if (!at)
+                return;
+            out.push({ sprite: at.sprite, fx: at.fx, fy, water: false, seq: i * 16 + PALM_SLOT + s });
+            first = { fy, size: at.sprite.size };
+        }
+    }
+    SE.placeLandPalms = placeLandPalms;
+    /**
+     * A palm's foot on row fy, walking from the tile's centre cx to the first
+     * sea pixel in direction dir, then PALM_BACK px back onto dry sand of a
+     * strip at least 2 px wide; the first of `sprites` whose crown then reaches
+     * PALM_OVERHANG_MIN..MAX px over the water. Null where none fits.
+     */
+    function palmFoot(f, art, cx, fy, dir, sprites, flip) {
+        let x = cx - dir * PALM_SEARCH_BACK;
+        if (SE.landSeaAt(f, art, x, fy))
+            return null;
+        let found = false;
+        for (let k = 0; k < PALM_SEARCH && !found; k++) {
+            x += dir;
+            found = SE.landSeaAt(f, art, x, fy);
+        }
+        if (!found)
+            return null;
+        for (const back of flip ? [PALM_BACK[1], PALM_BACK[0]] : PALM_BACK) {
+            const fx = x - dir * back;
+            // The foot stays on its own tile: the compositor places objects one tile around a chunk.
+            if (fx < cx - 8 || fx > cx + 7)
+                continue;
+            const d = SE.landBeachAt(f, art, fx, fy);
+            // Off the wet line (the pixels touching the water), not further than the strip's dry sand.
+            if (d <= 1 || d > PALM_BACK[1] + 0.5 || SE.landBeachWidthAt(f, art, fx, fy) < 2)
+                continue;
+            for (const sprite of sprites) {
+                if (!sprite)
+                    continue;
+                const over = crownOverWater(f, art, sprite, fx, fy, dir);
+                if (over >= PALM_OVERHANG_MIN && over <= PALM_OVERHANG_MAX)
+                    return { fx, sprite };
+            }
+        }
+        return null;
+    }
+    /** How far (px) a sprite standing at (fx, fy) reaches over the sea in direction dir: the most of any row. */
+    function crownOverWater(f, art, t, fx, fy, dir) {
+        let most = 0;
+        for (let sy = 0; sy < t.h; sy++) {
+            let edge = -1;
+            for (let sx = 0; sx < t.w; sx++) {
+                if (t.px[sy * t.w + sx] === 0)
+                    continue;
+                if (edge < 0 || (dir < 0 ? sx < edge : sx > edge))
+                    edge = sx;
+            }
+            if (edge < 0)
+                continue;
+            const wy = fy - t.ay + sy;
+            let x = fx - t.ax + edge;
+            let k = 0;
+            while (k <= PALM_OVERHANG_MAX && SE.landSeaAt(f, art, x, wy)) {
+                k++;
+                x -= dir;
+            }
+            most = Math.max(most, k);
+        }
+        return most;
+    }
+    /** A plant or rock with its foot on beach sand: only palms stand there. */
+    function landObjectOnBeach(f, art, p) {
+        if (p.water || p.sprite.id === 'coconut_palm')
+            return false;
+        return SE.landBeachNear(f, Math.floor(p.fx / 16), Math.floor(p.fy / 16)) && SE.landBeachAt(f, art, p.fx, p.fy) > 0;
+    }
+    SE.landObjectOnBeach = landObjectOnBeach;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — rivers as drawn paths in the pixel terrain
@@ -33198,6 +34835,14 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
+    /** A sea pixel's colour beside buffer pixel k that is not foam, or null. */
+    function seaBeside(px, water, k, w, foam) {
+        for (const o of [k - 1, k + 1, k - w, k + w, k - 2, k + 2, k - 2 * w, k + 2 * w]) {
+            if (o >= 0 && o < px.length && water[o] === 1 && px[o] !== foam)
+                return px[o];
+        }
+        return null;
+    }
     let dist = new Float32Array(0);
     let seg = new Int32Array(0);
     /** Paint the rivers into a compositor buffer whose pixel (0, 0) is world pixel (ox, oy). */
@@ -33252,9 +34897,9 @@ var SE;
                 const wx = ox + x;
                 const wy = oy + y;
                 if (water[k] === 1) {
-                    // The mouth opens the shore's foam line.
+                    // The mouth opens the shore's foam line, in the colour of the sea beside it (a lagoon's turquoise too).
                     if (d <= 0 && px[k] === foam)
-                        px[k] = ramp[5];
+                        px[k] = seaBeside(px, water, k, w, foam) ?? ramp[5];
                     continue;
                 }
                 const id = seg[k];
@@ -33486,15 +35131,19 @@ var SE;
  *      its four corner tiles; the lowest ground fills it, each higher one
  *      draws through the shared frayed edge mask — water is rank 0, so coasts
  *      fray the same way as any other border;
- *   2. water (landwater.ts): depth on the water ramp, dithered, with ripples;
+ *   2. water (landwater.ts): open ocean and coastal sea with their ripples,
+ *      turquoise lagoons over and behind the reefs;
  *   3. ground: the 16×16 window of its seamless texture at the world position,
  *      shifted along its ramp by relief and macro variation — a cubic
  *      B-spline through the tiles' shading, so no tile edge shows, plus
  *      crags in the mountains — dithered in 2×2 blocks;
- *   4. shore (landwater.ts): foam on the water side, a wet rim on the land side;
+ *   4. shore (landwater.ts): beach sand (landshore.ts), foam on the water
+ *      side, a wet rim on the land side;
  *   5. rivers as smoothed lines (landrivers.ts), the mountain ranges lifted in
  *      3/4 view (landridgedraw.ts), then objects row by row with their
- *      shadows, standing on the lifted ground.
+ *      shadows, standing on the lifted ground — corals under the water's
+ *      ripples, no plant but palms on the beach — and the foam where waves
+ *      break on the reefs.
  * Pure arithmetic on typed arrays — no DOM — so tests run it in Node.
  * ========================================================================== */
 var SE;
@@ -33623,11 +35272,13 @@ var SE;
             this.riverRows = { px: new Uint8Array(0), water: new Uint8Array(0), w: 0, h: 0 };
             this.occupied = new Uint8Array(0);
             this.done = new Uint8Array(0);
-            /** Buffer offsets of cells where water meets ground. */
+            /** Buffer offsets of cells where water meets ground, and of cells with a reef corner. */
             this.shores = [];
+            this.reefCells = [];
+            /** Per pixel of a reef cell: inside the reef (1), open water (2); see paintSea. */
+            this.reefBits = new Uint8Array(0);
             this.placements = [];
             this.order = new Uint8Array(4);
-            this.steps = new Uint8Array(16);
             this.ctl = new Float32Array(16);
             this.rows = new Float32Array(32);
             /** Cell columns of the rows below the tiles that a range lifts into view. */
@@ -33656,6 +35307,7 @@ var SE;
             this.ground(f, tx0, ty0, tw, th, Math.max(0, below));
             const b = this.buf;
             if (!seaColor) {
+                SE.paintBeaches(b, this.art, f, ox, oy, this.shores, this.done);
                 SE.paintShore(b, this.art, this.shores, this.done);
                 // Rivers only on the rows composed: what lies below them stays out of view.
                 const rows = this.riverRows;
@@ -33732,11 +35384,16 @@ var SE;
                 }
                 if (river && f.paths.near(p.fx + 0.5, p.fy + 0.5, SE.RIVER_CLEARANCE))
                     continue;
+                // With the Oceans layer off no beach is drawn, so nothing is kept off it.
+                if (!seaColor && SE.landObjectOnBeach(f, this.art, p))
+                    continue;
                 lifts[n] = z;
                 placed[n++] = p;
             }
             placed.length = n;
             SE.drawLandObjects(this.placements, this.art, b.px, b.water, this.occupied, b.w, b.h, ox, oy, rise, lifts, f.shade);
+            if (!seaColor)
+                SE.paintReefEdges(b, this.art, this.reefCells, this.reefBits, ox, oy);
             this.motion = seaColor ? SE.NO_LAND_MOTION : SE.collectLandMotion(b, this.art, this.shores, f.paths.sig, PAD, tx0, ty0, tw, th);
             this.emit(out, margin, tw, th, tx0, ty0, seaColor);
         }
@@ -33749,13 +35406,18 @@ var SE;
                 b.water = new Uint8Array(w * h);
                 this.occupied = new Uint8Array(w * h);
                 this.done = new Uint8Array(w * h);
+                this.reefBits = new Uint8Array(w * h);
             }
             else {
                 this.occupied.fill(0);
                 this.done.fill(0);
                 b.water.fill(0);
+                for (const base of this.reefCells)
+                    for (let y = 0; y < 16; y++)
+                        this.reefBits.fill(0, base + y * w, base + y * w + 16);
             }
             this.shores.length = 0;
+            this.reefCells.length = 0;
         }
         /* ------------------------------------------------------------ ground -- */
         /** The dual-grid cells of the tiles, and `extra` cell rows below them in the columns `this.below` marks. */
@@ -33791,8 +35453,10 @@ var SE;
                     for (let layer = 0; layer < n; layer++) {
                         const v = order[layer];
                         const mask = layer === 0 ? null : this.art.masks[(k0 >= v ? 1 : 0) | (k1 >= v ? 2 : 0) | (k2 >= v ? 4 : 0) | (k3 >= v ? 8 : 0)][variant];
-                        if (v === 0)
-                            SE.paintSea(this.buf, this.art, f.depth, c0, c1, c2, c3, mask, base, wx, wy, this.steps);
+                        if (v === 0) {
+                            if (SE.paintSea(this.buf, this.art, f, c0, c1, c2, c3, mask, base, wx, wy, this.reefBits))
+                                this.reefCells.push(base);
+                        }
                         else
                             this.land(v, mask, base, wx, wy, (k0 === v && f.algae[c0]) || (k1 === v && f.algae[c1]) ||
                                 (k2 === v && f.algae[c2]) || (k3 === v && f.algae[c3]) ? this.art.algae : null, sea);
@@ -34124,7 +35788,7 @@ var SE;
      * Composing stops after this long in one draw; the rest follows on the next
      * frames, so a first zoom-out (90+ chunks) never freezes the game.
      */
-    const COMPOSE_BUDGET_MS = 60;
+    const COMPOSE_BUDGET_MS = 8;
     /** A chunk recomposed this long after a brush last changed tiles near it dissolves into its new picture (landfade.ts). */
     const FADE_WINDOW_MS = 1500;
     /** Tiles around the brushed box whose pictures a brush changes: ridge lines and cones (refreshBox) plus SIGNATURE_REACH. */
@@ -34156,6 +35820,8 @@ var SE;
             this.brushAt = -Infinity;
             /** Chunk number → chunk, while it dissolves. */
             this.fading = new Map();
+            /** Chunk number → when it was first seen out of date (-Infinity: never composed), until composed. */
+            this.waiting = new Map();
         }
         static shared() {
             return PixelTerrain.instance ?? (PixelTerrain.instance = new PixelTerrain());
@@ -34197,7 +35863,9 @@ var SE;
                 return;
             this.fieldKey = key;
             this.fieldWorld = world;
+            const t0 = performance.now();
             this.field.refresh(world);
+            SE.perfHud.field(performance.now() - t0, this.field.lastRead);
             this.flatFresh = false;
             if (oceans) {
                 this.seaColor = null;
@@ -34207,7 +35875,7 @@ var SE;
                 const bytes = new Uint8Array(4);
                 const word = new Uint32Array(bytes.buffer);
                 for (let i = 0; i < SE.TILE_COUNT; i++) {
-                    const c = SE.sampleRamp(SE.ELEV_RAMP, Math.min(-0.01, world.elevation[i]) * 0.4);
+                    const c = SE.sampleRamp(SE.DEPTH_RAMP, world.elevation[i]);
                     bytes[0] = c[0];
                     bytes[1] = c[1];
                     bytes[2] = c[2];
@@ -34301,6 +35969,7 @@ var SE;
                 }
                 c.motion = composer.motion;
                 c.sig = sig;
+                this.waiting.delete(n);
                 this.composed++;
             }
             else if (c.fade) {
@@ -34386,6 +36055,7 @@ var SE;
             const tyB = Math.min(SE.GRID_H, Math.ceil(cam.scrollY + y1 / T));
             if (txB <= txA || tyB <= tyA)
                 return;
+            this.composeDue(txA, txB, tyA, tyB);
             ctx.save();
             ctx.beginPath();
             ctx.rect(x0, y0, x1 - x0, y1 - y0);
@@ -34428,8 +36098,35 @@ var SE;
                 }
             }
             ctx.restore();
+            SE.perfHud.chunks(this.composed, this.pending);
         }
-        /** A chunk not composed yet: one flat colour per tile, from its ground or water depth. */
+        /**
+         * Compose the changed chunks over tiles [txA, txB) × [tyA, tyB) within
+         * the budget: missing ones first, then the longest waiting. In screen
+         * order, a running planet changes the first chunks on every tick and the
+         * last ones would never get their turn.
+         */
+        composeDue(txA, txB, tyA, tyB) {
+            const due = [];
+            for (let cy = Math.floor(tyA / SE.LAND_CHUNK); cy <= Math.floor((tyB - 1) / SE.LAND_CHUNK); cy++) {
+                for (let cu = Math.floor(txA / SE.LAND_CHUNK); cu <= Math.floor((txB - 1) / SE.LAND_CHUNK); cu++) {
+                    const n = cy * CHUNKS_X + (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X);
+                    const c = this.chunks.get(n);
+                    if (due.includes(n) || (c && c.sig === this.field.signature((n % CHUNKS_X) * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, this.seaColor ? 1 : 0)))
+                        continue;
+                    due.push(n);
+                    if (!this.waiting.has(n))
+                        this.waiting.set(n, c && c.sig !== -1 ? performance.now() : -Infinity);
+                }
+            }
+            due.sort((a, b) => (this.waiting.get(a) ?? 0) - (this.waiting.get(b) ?? 0));
+            for (const n of due) {
+                this.chunk(n % CHUNKS_X, Math.floor(n / CHUNKS_X));
+                if (this.pending)
+                    return;
+            }
+        }
+        /** A chunk not composed yet: one flat colour per tile, from its ground or sea class. */
         drawFlat(ctx, cu, cy, cam) {
             const flat = this.overview();
             if (!flat)
@@ -34441,7 +36138,8 @@ var SE;
         }
         /**
          * The whole planet at one pixel per tile, one flat colour each from its
-         * ground or water depth: what shows where no chunk has been composed yet.
+         * ground or sea class (lagoons turquoise): what shows where no chunk has
+         * been composed yet.
          */
         overview() {
             const art = this.art;
@@ -34460,9 +36158,9 @@ var SE;
             const f = this.field;
             for (let i = 0; i < SE.TILE_COUNT; i++) {
                 const key = f.key[i];
-                words[i] = art.rgba[key === 0
-                    ? art.water[Math.min(SE.LAND_SHALLOW, Math.round(f.depth[i]))]
-                    : art.ground[SE.landKeyRank(key)][SE.landKeyDensity(key)].px[0]];
+                words[i] = art.rgba[key !== 0 ? art.ground[SE.landKeyRank(key)][SE.landKeyDensity(key)].px[0]
+                    : f.lagoon[i] >= 2 ? art.waterWarm[SE.SEA_LAGOON_STEP]
+                        : art.water[f.sea[i] === 1 ? SE.SEA_COAST_STEP : SE.SEA_OCEAN_STEP]];
             }
             fctx.putImageData(image, 0, 0);
             this.flatFresh = true;
@@ -34538,9 +36236,10 @@ var SE;
 (function (SE) {
     const EMPTY_SCENE = new Uint8Array(SE.TILE_COUNT).fill(SE.LAND_SCENE_NONE);
     const EMPTY_VOLCANO = new Uint8Array(SE.TILE_COUNT);
+    const EMPTY = new Uint8Array(SE.TILE_COUNT);
     function composeExaminedTile(art, field, x, y) {
         // Share terrain inputs, but suppress all objects while composing the field's ground.
-        const bare = Object.assign(Object.create(SE.TerrainField.prototype), field, { scene: EMPTY_SCENE, volcano: EMPTY_VOLCANO });
+        const bare = Object.assign(Object.create(SE.TerrainField.prototype), field, { scene: EMPTY_SCENE, volcano: EMPTY_VOLCANO, reef: EMPTY, palm: EMPTY });
         const ground = new Uint32Array(16 * 16);
         new SE.LandComposer(art).compose(bare, x, y, 1, 1, 0, ground, null);
         const placed = [];
@@ -34548,6 +36247,8 @@ var SE;
         const objects = [];
         for (const p of placed) {
             if (!p.water && field.paths.near(p.fx + 0.5, p.fy + 0.5, SE.RIVER_CLEARANCE))
+                continue;
+            if (SE.landObjectOnBeach(field, art, p))
                 continue;
             const rise = p.water ? { z: 0, seg: -1 } : SE.footRise(field.ridges, p.fx, p.fy);
             if (rise.z > 0 && SE.landObjectAboveLine(art, p.sprite, field.ridges, rise.seg, rise.z))
@@ -34613,11 +36314,9 @@ var SE;
 var SE;
 (function (SE) {
     const DENSITY_NAMES = [[], [], ['licht', 'dicht'], ['spärlich', 'mittel', 'dicht']];
-    /** Hill country begins at about 500 m; mountains at ALPINE_MIN_ELEVATION. */
-    const UPLAND_ELEVATION = 0.11;
     /** "Höhe 2.340 m" or "Tiefe 1.200 m": a tile's mean height, to 10 m. */
     function altitudeLabel(world, i) {
-        const m = Math.round((world.elevation[i] * SE.ELEVATION_KM * 1000) / 10) * 10;
+        const m = Math.round(SE.elevationMeters(world.elevation[i]) / 10) * 10;
         return m < 0 ? `Tiefe ${SE.fmt.int(-m)} m` : `Höhe ${SE.fmt.int(m)} m`;
     }
     SE.altitudeLabel = altitudeLabel;
@@ -34626,7 +36325,7 @@ var SE;
         const e = world.elevation[i];
         if (e < 0)
             return '';
-        if (e < UPLAND_ELEVATION)
+        if (e < SE.UPLAND_ELEVATION)
             return 'Tiefland';
         if (e < SE.ALPINE_MIN_ELEVATION)
             return 'Bergland';
@@ -34646,8 +36345,6 @@ var SE;
     function landscapeLabel(world, i) {
         if (world.isWater(i))
             return SE.BIOME_NAMES[world.biome[i]];
-        if (SE.isBeach(world, i))
-            return 'Sandstrand';
         const ls = world.landscape[i];
         const dens = DENSITY_NAMES[SE.LANDSCAPE_DENSITIES[ls]]?.[world.landscapeDensity[i]];
         const name = SE.LANDSCAPE_NAMES[ls] + (dens ? ` (${dens})` : '');
@@ -35108,15 +36805,18 @@ var SE;
 /* =============================================================================
  * SimEarth 2.0 — ground and sea art for the Edit window
  * -----------------------------------------------------------------------------
- * The sea is shaded continuously by depth instead of being two flat tiles, so
- * shelves, trenches and lagoons read at a glance; the old Coast and Ocean
- * sprites stay on top as a sparse ripple texture, which keeps it pixel art.
+ * The sea shows two flat classes, coastal sea and open ocean, like the pixel
+ * map; the old Coast and Ocean sprites stay on top as a sparse ripple
+ * texture. Depth (DEPTH_RAMP) only shows with the Oceans layer off and in the
+ * overview's depth maps.
  * Every coast gets a line of surf, every ground one of four mirrored variants
  * picked per tile, so large plains no longer show a repeating stamp.
  * ========================================================================== */
 var SE;
 (function (SE) {
-    /** Sea colour by elevation below sea level: from the abyss to the lagoon. */
+    /** Lagoon turquoise as the pixel map draws it (waterWarm), for the maps that show the sea flat. */
+    SE.LAGOON_RGB = ((c) => [c[0], c[1], c[2]])(SE.TERRAIN_MANIFEST.palette[SE.TERRAIN_MANIFEST.ramps.waterWarm[SE.SEA_LAGOON_STEP]]);
+    /** Sea colour by elevation below sea level: from the abyss to the shore. */
     SE.DEPTH_RAMP = [
         [-1.0, [10, 32, 72]],
         [-0.6, [16, 52, 104]],
@@ -35292,13 +36992,13 @@ var SE;
             }
             return tile;
         }
-        /** Open water at a depth step (see depthStep) with its ripple. */
-        sea(depth, coast, variant) {
-            const k = (depth * 2 + (coast ? 1 : 0)) * 4 + variant;
+        /** Open water, coastal sea or open ocean in the main map's flat colours, with its ripple. */
+        sea(coast, variant) {
+            const k = (coast ? 1 : 0) * 4 + variant;
             let tile = this.seas[k];
             if (!tile) {
                 const { canvas, ctx } = blank(8 * SCALE, 8 * SCALE);
-                ctx.fillStyle = SE.depthStyleAt(depth);
+                ctx.fillStyle = SE.rgbCss(SE.BIOME_COLORS[coast ? SE.Biome.Coast : SE.Biome.Ocean]);
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.globalAlpha = coast ? RIPPLE_ALPHA.coast : RIPPLE_ALPHA.ocean;
                 ctx.drawImage(SE.drawPixelArt(SE.GROUND_VARIANTS[coast ? SE.Biome.Coast : SE.Biome.Ocean][variant], SCALE), 0, 0);
@@ -36186,7 +37886,9 @@ var SE;
                 if (cx < 2 || cy < 2 || cx >= gw - 2 || cy >= gh - 2 || (!m.pinned && this.crowded(k, cx, cy, gw, gap)))
                     continue;
                 grid[cy * gw + cx] = k + 1;
-                const pic = tiles.life(m.c, m.stage, SE.animalSpecialist(regions, world, m.tile, m.c, m.stage), m.flip);
+                // Corals only in warm water: elsewhere the class shows its highest form that builds no reef.
+                const stage = SE.reefShownStage(world, m.tile, m.c, m.stage);
+                const pic = tiles.life(m.c, stage, SE.animalSpecialist(regions, world, m.tile, m.c, stage), m.flip);
                 const py = Math.round(ys[k] * size);
                 for (let x = xs[k]; x < cols; x += SE.GRID_W)
                     ctx.drawImage(pic, Math.round(x * size), py, big, big);
@@ -36261,7 +37963,7 @@ var SE;
                     const j = SE.idx(SE.wrapX(x + dx), y + dy);
                     if (!this.fits(world, m.c, j, self))
                         continue;
-                    if (m.pinned && world.lifeStage[j * SE.LIFE_COUNT + m.c] !== m.stage)
+                    if (m.pinned && (world.lifeStage[j * SE.LIFE_COUNT + m.c] !== m.stage || SE.reefShownStage(world, j, m.c, m.stage) !== m.stage))
                         continue;
                     seen++;
                     if (rand() * seen < 1) {
@@ -36409,7 +38111,12 @@ var SE;
          */
         pin(world, c, stage, rand = Math.random) {
             const ms = this.markers;
-            const own = ms.find((m) => m.c === c && m.stage === stage && m.pinned) ?? ms.find((m) => m.c === c && m.stage === stage);
+            // Only where it shows as itself: a coral in cold water shows another form (reefShownStage).
+            const shows = (m) => SE.reefShownStage(world, m.tile, c, stage) === stage;
+            for (const m of ms)
+                if (m.c === c && m.stage === stage && m.pinned && !shows(m))
+                    m.pinned = false;
+            const own = ms.find((m) => m.c === c && m.stage === stage && m.pinned) ?? ms.find((m) => m.c === c && m.stage === stage && shows(m));
             if (own) {
                 own.pinned = true;
                 return own.tile;
@@ -36425,7 +38132,9 @@ var SE;
                 if (a !== 0 && ms[a - 1].pinned)
                     continue;
                 const far = !nearCity(world, i);
-                const score = d + (far ? 2 : 0) + (far && this.free(i % SE.GRID_W, (i / SE.GRID_W) | 0, 0) ? 2 : 0);
+                // A tile where it shows as itself first; a coral only in cold water still gets its creature.
+                const shows = SE.reefShownStage(world, i, c, stage) === stage ? 8 : 0;
+                const score = d + shows + (far ? 2 : 0) + (far && this.free(i % SE.GRID_W, (i / SE.GRID_W) | 0, 0) ? 2 : 0);
                 if (score > bestScore) {
                     best = i;
                     bestScore = score;
@@ -36497,7 +38206,7 @@ var SE;
 var SE;
 (function (SE) {
     SE.CIV_MANIFEST = { "version": 1, "width": 128, "height": 80, "box": { "w": 16, "h": 20 }, "shadow": { "rgb": [20, 22, 38], "alpha": 0.5, "width": 0.5, "ry": 1.5 }, "eras": ["stone", "bronze", "iron", "industrial", "atomic", "information", "nanotech"], "tribeColors": [{ "id": "red", "name": "Rot", "pixel": "red1", "art": "red", "rgb": [196, 69, 63] }, { "id": "blue", "name": "Blau", "pixel": "water3", "art": "blue", "rgb": [34, 108, 164] }, { "id": "yellow", "name": "Gelb", "pixel": "yellow0", "art": "yellow", "rgb": [240, 198, 74] }, { "id": "white", "name": "Weiß", "pixel": "white0", "art": "white", "rgb": [242, 239, 226] }, { "id": "violet", "name": "Violett", "pixel": "violet0", "art": "violet", "rgb": [154, 106, 168] }, { "id": "orange", "name": "Orange", "pixel": "orange0", "art": "orange", "rgb": [223, 138, 58] }, { "id": "green", "name": "Grün", "pixel": "meadow3", "art": "leafLight", "rgb": [162, 199, 89] }, { "id": "pink", "name": "Rosa", "pixel": "blossom0", "art": "pink", "rgb": [233, 143, 176] }], "blocks": { "hut_straw": { "name": "Rundhütte (Stroh)", "era": "stone", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 84, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "s", "bx0": 1, "bx1": 3, "spans": [2, 2, 1, 3, 0, 4, 0, 4, 1, 3, 1, 3] }, { "rect": { "x": 90, "y": 51, "w": 7, "h": 8 }, "ax": 3, "ay": 7, "size": "m", "bx0": 1, "bx1": 5, "spans": [3, 3, 3, 3, 2, 4, 1, 5, 0, 6, 0, 6, 1, 5, 1, 5] }, { "rect": { "x": 78, "y": 41, "w": 9, "h": 10 }, "ax": 4, "ay": 9, "size": "l", "bx0": 1, "bx1": 7, "spans": [4, 4, 4, 4, 3, 5, 2, 6, 1, 7, 1, 7, 0, 8, 0, 8, 1, 7, 1, 7] }] }, "hut_hide": { "name": "Rundhütte (Fell)", "era": "stone", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 46, "y": 69, "w": 5, "h": 5 }, "ax": 2, "ay": 4, "size": "s", "bx0": 0, "bx1": 4, "spans": [1, 3, 0, 4, 0, 4, 0, 4, 0, 4] }, { "rect": { "x": 57, "y": 61, "w": 7, "h": 6 }, "ax": 3, "ay": 5, "size": "m", "bx0": 0, "bx1": 6, "spans": [2, 4, 1, 5, 0, 6, 0, 6, 0, 6, 0, 6] }, { "rect": { "x": 81, "y": 51, "w": 9, "h": 8 }, "ax": 4, "ay": 7, "size": "l", "bx0": 0, "bx1": 8, "spans": [3, 5, 2, 6, 1, 7, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8] }] }, "longhouse": { "name": "Langhaus", "era": "stone", "role": "hall", "depth": 3, "variants": [{ "rect": { "x": 70, "y": 51, "w": 11, "h": 8 }, "ax": 5, "ay": 7, "size": "", "bx0": 1, "bx1": 9, "spans": [2, 8, 1, 9, 0, 10, 0, 10, 0, 10, 1, 9, 1, 9, 1, 9] }, { "rect": { "x": 7, "y": 51, "w": 13, "h": 9 }, "ax": 6, "ay": 8, "size": "", "bx0": 1, "bx1": 11, "spans": [3, 10, 2, 11, 1, 12, 0, 12, 0, 12, 0, 12, 1, 11, 1, 11, 1, 11] }] }, "megalith": { "name": "Steinsetzung", "era": "stone", "role": "landmark", "depth": 2, "variants": [{ "rect": { "x": 97, "y": 51, "w": 7, "h": 8 }, "ax": 3, "ay": 7, "size": "", "bx0": 0, "bx1": 6, "spans": [0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6] }, { "rect": { "x": 0, "y": 51, "w": 4, "h": 10 }, "ax": 2, "ay": 9, "size": "", "bx0": 0, "bx1": 3, "spans": [1, 2, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3, 0, 3] }] }, "firepit": { "name": "Feuerstelle", "era": "stone", "role": "yard", "depth": 2, "variants": [{ "rect": { "x": 41, "y": 69, "w": 5, "h": 5 }, "ax": 2, "ay": 4, "size": "", "bx0": 0, "bx1": 4, "spans": [2, 2, 1, 3, 1, 3, 0, 4, 1, 3] }, { "rect": { "x": 69, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "", "bx0": 0, "bx1": 4, "spans": [2, 2, 1, 3, 1, 3, 0, 4, 0, 4, 1, 3] }] }, "menhir": { "name": "Menhir", "era": "stone", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 112, "y": 61, "w": 3, "h": 6 }, "ax": 1, "ay": 5, "size": "", "bx0": 0, "bx1": 2, "spans": [1, 1, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2] }, { "rect": { "x": 94, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "", "bx0": 0, "bx1": 4, "spans": [1, 1, 0, 2, 0, 4, 0, 4, 0, 4, 0, 4] }] }, "palisade": { "name": "Palisade", "era": "stone", "role": "wall", "depth": 1, "variants": [{ "rect": { "x": 61, "y": 69, "w": 4, "h": 5 }, "ax": 2, "ay": 4, "size": "", "bx0": 0, "bx1": 3, "spans": [0, 2, 0, 3, 0, 3, 0, 3, 0, 3] }, { "rect": { "x": 45, "y": 61, "w": 2, "h": 7 }, "ax": 1, "ay": 6, "size": "", "bx0": 0, "bx1": 1, "spans": [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1] }, { "rect": { "x": 20, "y": 69, "w": 8, "h": 5 }, "ax": 4, "ay": 4, "size": "", "bx0": 0, "bx1": 7, "spans": [0, 6, 0, 7, 0, 7, 0, 7, 0, 7] }] }, "yard_stone": { "name": "Festgetretene Erde", "era": "stone", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 42, "y": 41, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [2, 9, 2, 9, 2, 11, 2, 11, 0, 13, 0, 13, 0, 13, 0, 13, 2, 11, 2, 11] }, { "rect": { "x": 32, "y": 30, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [6, 11, 6, 11, 2, 15, 2, 15, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 7, 9] }, { "rect": { "x": 32, "y": 18, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [6, 11, 6, 11, 2, 13, 2, 13, 0, 15, 0, 15, 0, 15, 0, 15, 0, 13, 0, 13, 4, 9, 4, 9] }] }, "mudbrick": { "name": "Lehmziegelhaus", "era": "bronze", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 56, "y": 69, "w": 5, "h": 5 }, "ax": 2, "ay": 4, "size": "s", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }, { "rect": { "x": 111, "y": 51, "w": 6, "h": 8 }, "ax": 3, "ay": 7, "size": "m", "bx0": 0, "bx1": 5, "spans": [0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }, { "rect": { "x": 87, "y": 41, "w": 9, "h": 10 }, "ax": 4, "ay": 9, "size": "l", "bx0": 0, "bx1": 8, "spans": [1, 5, 1, 5, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8, 0, 8] }] }, "granary": { "name": "Speicher", "era": "bronze", "role": "hall", "depth": 2, "variants": [{ "rect": { "x": 32, "y": 61, "w": 11, "h": 7 }, "ax": 5, "ay": 6, "size": "", "bx0": 0, "bx1": 10, "spans": [4, 6, 1, 9, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "ziggurat": { "name": "Stufentempel", "era": "bronze", "role": "landmark", "depth": 2, "variants": [{ "rect": { "x": 67, "y": 41, "w": 11, "h": 10 }, "ax": 5, "ay": 9, "size": "", "bx0": 0, "bx1": 10, "spans": [4, 6, 4, 6, 3, 7, 3, 7, 2, 8, 2, 8, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "well": { "name": "Brunnen und Krüge", "era": "bronze", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 77, "y": 69, "w": 5, "h": 4 }, "ax": 2, "ay": 3, "size": "", "bx0": 1, "bx1": 3, "spans": [1, 3, 0, 4, 0, 4, 1, 3] }, { "rect": { "x": 82, "y": 69, "w": 5, "h": 4 }, "ax": 2, "ay": 3, "size": "", "bx0": 0, "bx1": 4, "spans": [1, 1, 0, 4, 0, 4, 0, 4] }] }, "mudwall": { "name": "Lehmmauer", "era": "bronze", "role": "wall", "depth": 1, "variants": [{ "rect": { "x": 87, "y": 69, "w": 4, "h": 4 }, "ax": 2, "ay": 3, "size": "", "bx0": 0, "bx1": 3, "spans": [0, 2, 0, 3, 0, 3, 0, 3] }, { "rect": { "x": 43, "y": 61, "w": 2, "h": 7 }, "ax": 1, "ay": 6, "size": "", "bx0": 0, "bx1": 1, "spans": [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1] }, { "rect": { "x": 69, "y": 69, "w": 8, "h": 4 }, "ax": 4, "ay": 3, "size": "", "bx0": 0, "bx1": 7, "spans": [0, 6, 0, 7, 0, 7, 0, 7] }] }, "bridge_wood": { "name": "Holzbrücke", "era": "bronze", "role": "bridge", "depth": 2, "variants": [{ "rect": { "x": 10, "y": 69, "w": 10, "h": 5 }, "ax": 5, "ay": 4, "size": "", "bx0": 0, "bx1": 9, "spans": [0, 9, 0, 9, 0, 9, 0, 9, 1, 7] }, { "rect": { "x": 118, "y": 41, "w": 5, "h": 10 }, "ax": 2, "ay": 9, "size": "", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }] }, "yard_bronze": { "name": "Gestampfter Lehm", "era": "bronze", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 95, "y": 30, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [2, 11, 2, 11, 2, 13, 2, 13, 0, 13, 0, 13, 0, 11, 0, 11, 2, 9, 2, 9] }, { "rect": { "x": 72, "y": 18, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 13, 2, 13, 0, 15, 0, 15, 0, 13, 0, 13, 2, 13, 2, 13, 7, 8] }, { "rect": { "x": 71, "y": 0, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 13, 2, 13, 0, 13, 0, 13, 0, 15, 0, 15, 0, 13, 0, 13, 6, 11, 6, 11] }] }, "timberhouse": { "name": "Fachwerkhaus", "era": "iron", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 104, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "s", "bx0": 1, "bx1": 3, "spans": [2, 2, 1, 3, 0, 4, 1, 3, 1, 3, 1, 3] }, { "rect": { "x": 52, "y": 51, "w": 7, "h": 9 }, "ax": 3, "ay": 8, "size": "m", "bx0": 1, "bx1": 5, "spans": [3, 3, 2, 4, 1, 5, 0, 6, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5] }, { "rect": { "x": 59, "y": 30, "w": 9, "h": 11 }, "ax": 4, "ay": 10, "size": "l", "bx0": 1, "bx1": 7, "spans": [4, 4, 3, 5, 2, 6, 1, 7, 0, 8, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7] }] }, "stonehouse": { "name": "Steinhaus mit Ziegeldach", "era": "iron", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 99, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "s", "bx0": 1, "bx1": 3, "spans": [2, 2, 1, 3, 0, 4, 1, 3, 1, 3, 1, 3] }, { "rect": { "x": 104, "y": 51, "w": 7, "h": 8 }, "ax": 3, "ay": 7, "size": "m", "bx0": 1, "bx1": 5, "spans": [2, 4, 1, 5, 0, 6, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5] }, { "rect": { "x": 42, "y": 51, "w": 10, "h": 9 }, "ax": 5, "ay": 8, "size": "l", "bx0": 1, "bx1": 8, "spans": [3, 6, 2, 7, 1, 8, 0, 9, 1, 8, 1, 8, 1, 8, 1, 8, 1, 8] }] }, "keep": { "name": "Turm", "era": "iron", "role": "hall", "depth": 2, "variants": [{ "rect": { "x": 48, "y": 0, "w": 7, "h": 13 }, "ax": 3, "ay": 12, "size": "", "bx0": 1, "bx1": 5, "spans": [3, 3, 2, 4, 1, 5, 0, 6, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5] }] }, "temple": { "name": "Säulentempel", "era": "iron", "role": "landmark", "depth": 2, "variants": [{ "rect": { "x": 31, "y": 51, "w": 11, "h": 9 }, "ax": 5, "ay": 8, "size": "", "bx0": 0, "bx1": 10, "spans": [4, 6, 2, 8, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "market": { "name": "Marktstand und Brunnen", "era": "iron", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 51, "y": 69, "w": 5, "h": 5 }, "ax": 2, "ay": 4, "size": "", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }, { "rect": { "x": 89, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "", "bx0": 1, "bx1": 3, "spans": [2, 2, 1, 3, 0, 4, 0, 4, 0, 4, 1, 3] }] }, "stonewall": { "name": "Steinmauer", "era": "iron", "role": "wall", "depth": 1, "variants": [{ "rect": { "x": 65, "y": 69, "w": 4, "h": 5 }, "ax": 2, "ay": 4, "size": "", "bx0": 0, "bx1": 3, "spans": [0, 2, 0, 3, 0, 3, 0, 3, 0, 3] }, { "rect": { "x": 30, "y": 61, "w": 2, "h": 8 }, "ax": 1, "ay": 7, "size": "", "bx0": 0, "bx1": 1, "spans": [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1] }, { "rect": { "x": 28, "y": 69, "w": 8, "h": 5 }, "ax": 4, "ay": 4, "size": "", "bx0": 0, "bx1": 7, "spans": [0, 6, 0, 7, 0, 7, 0, 7, 0, 7] }] }, "bridge_stone": { "name": "Steinbrücke", "era": "iron", "role": "bridge", "depth": 2, "variants": [{ "rect": { "x": 0, "y": 69, "w": 10, "h": 5 }, "ax": 5, "ay": 4, "size": "", "bx0": 0, "bx1": 9, "spans": [0, 9, 0, 9, 0, 9, 0, 9, 0, 9] }, { "rect": { "x": 113, "y": 41, "w": 5, "h": 10 }, "ax": 2, "ay": 9, "size": "", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }] }, "yard_iron": { "name": "Kopfsteinpflaster", "era": "iron", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 14, "y": 41, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [4, 9, 4, 9, 0, 13, 0, 13, 0, 13, 0, 13, 2, 11, 2, 11, 2, 11, 2, 11] }, { "rect": { "x": 0, "y": 30, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 0, 13, 0, 13, 0, 15, 0, 15, 2, 13, 2, 13, 2, 13, 2, 13, 6, 8] }, { "rect": { "x": 0, "y": 18, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 13, 2, 13, 2, 15, 2, 15, 0, 13, 0, 13, 2, 15, 2, 15, 4, 11, 4, 11] }] }, "terrace": { "name": "Ziegelreihenhaus", "era": "industrial", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 117, "y": 51, "w": 5, "h": 8 }, "ax": 2, "ay": 7, "size": "s", "bx0": 1, "bx1": 3, "spans": [3, 3, 3, 3, 1, 3, 0, 4, 1, 3, 1, 3, 1, 3, 1, 3] }, { "rect": { "x": 68, "y": 30, "w": 7, "h": 11 }, "ax": 3, "ay": 10, "size": "m", "bx0": 1, "bx1": 5, "spans": [5, 5, 5, 5, 1, 5, 0, 6, 0, 6, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5] }, { "rect": { "x": 39, "y": 0, "w": 9, "h": 13 }, "ax": 4, "ay": 12, "size": "l", "bx0": 1, "bx1": 7, "spans": [2, 6, 2, 6, 1, 7, 0, 8, 0, 8, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7] }] }, "factory": { "name": "Fabrikhalle", "era": "industrial", "role": "hall", "depth": 2, "variants": [{ "rect": { "x": 48, "y": 30, "w": 11, "h": 11 }, "ax": 5, "ay": 10, "size": "", "bx0": 0, "bx1": 10, "spans": [9, 10, 9, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "station": { "name": "Bahnhofshalle", "era": "industrial", "role": "landmark", "depth": 2, "variants": [{ "rect": { "x": 56, "y": 41, "w": 11, "h": 10 }, "ax": 5, "ay": 9, "size": "", "bx0": 0, "bx1": 10, "spans": [3, 7, 2, 8, 1, 9, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "chimney": { "name": "Schlot", "era": "industrial", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 53, "y": 18, "w": 3, "h": 12 }, "ax": 1, "ay": 11, "size": "", "bx0": 0, "bx1": 2, "spans": [1, 2, 0, 1, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2] }, { "rect": { "x": 28, "y": 61, "w": 2, "h": 8 }, "ax": 1, "ay": 7, "size": "", "bx0": 0, "bx1": 1, "spans": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1] }] }, "bridge_steel": { "name": "Stahlbrücke", "era": "industrial", "role": "bridge", "depth": 2, "variants": [{ "rect": { "x": 115, "y": 61, "w": 10, "h": 5 }, "ax": 5, "ay": 4, "size": "", "bx0": 0, "bx1": 9, "spans": [0, 9, 0, 9, 0, 9, 0, 9, 0, 9] }, { "rect": { "x": 108, "y": 41, "w": 5, "h": 10 }, "ax": 2, "ay": 9, "size": "", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }] }, "yard_industrial": { "name": "Pflaster", "era": "industrial", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 109, "y": 30, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [4, 9, 4, 9, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 0, 13, 4, 11, 4, 11] }, { "rect": { "x": 88, "y": 18, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 0, 15, 0, 15, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 7, 8] }, { "rect": { "x": 87, "y": 0, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 15, 2, 15, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 4, 11, 4, 11] }] }, "concrete": { "name": "Betonblock und Wohnhochhaus", "era": "atomic", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 64, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "s", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }, { "rect": { "x": 75, "y": 30, "w": 6, "h": 11 }, "ax": 3, "ay": 10, "size": "m", "bx0": 0, "bx1": 5, "spans": [0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }, { "rect": { "x": 24, "y": 0, "w": 6, "h": 16 }, "ax": 3, "ay": 15, "size": "l", "bx0": 0, "bx1": 5, "spans": [0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }] }, "slab": { "name": "Plattenbau", "era": "atomic", "role": "hall", "depth": 2, "variants": [{ "rect": { "x": 20, "y": 51, "w": 11, "h": 9 }, "ax": 5, "ay": 8, "size": "", "bx0": 0, "bx1": 10, "spans": [0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "cooling_tower": { "name": "Kühlturm", "era": "atomic", "role": "landmark", "depth": 2, "variants": [{ "rect": { "x": 30, "y": 0, "w": 9, "h": 14 }, "ax": 4, "ay": 13, "size": "", "bx0": 0, "bx1": 8, "spans": [2, 4, 1, 5, 0, 6, 1, 5, 0, 8, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 1, 7, 0, 8, 0, 8] }] }, "water_tower": { "name": "Wasserturm und Mast", "era": "atomic", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 123, "y": 41, "w": 5, "h": 10 }, "ax": 2, "ay": 9, "size": "", "bx0": 0, "bx1": 4, "spans": [1, 3, 0, 4, 0, 4, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 1, 3, 0, 4] }, { "rect": { "x": 4, "y": 51, "w": 3, "h": 10 }, "ax": 1, "ay": 9, "size": "", "bx0": 0, "bx1": 2, "spans": [1, 1, 1, 1, 1, 1, 0, 2, 1, 1, 1, 1, 0, 2, 1, 1, 1, 1, 0, 2] }] }, "yard_atomic": { "name": "Asphalt", "era": "atomic", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 81, "y": 30, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [2, 9, 2, 9, 2, 11, 2, 11, 0, 13, 0, 13, 2, 11, 2, 11, 4, 9, 4, 9] }, { "rect": { "x": 56, "y": 18, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 13, 2, 13, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 7, 8] }, { "rect": { "x": 55, "y": 0, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 13, 2, 13, 0, 15, 0, 15, 0, 15, 0, 15, 2, 15, 2, 15, 4, 11, 4, 11] }] }, "glass": { "name": "Glashaus und Glasturm", "era": "information", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 79, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "s", "bx0": 0, "bx1": 4, "spans": [0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4] }, { "rect": { "x": 102, "y": 41, "w": 6, "h": 10 }, "ax": 3, "ay": 9, "size": "m", "bx0": 0, "bx1": 5, "spans": [0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }, { "rect": { "x": 12, "y": 0, "w": 6, "h": 17 }, "ax": 3, "ay": 16, "size": "l", "bx0": 0, "bx1": 5, "spans": [0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }] }, "pavilion": { "name": "Pavillon", "era": "information", "role": "hall", "depth": 2, "variants": [{ "rect": { "x": 47, "y": 61, "w": 10, "h": 6 }, "ax": 5, "ay": 5, "size": "", "bx0": 1, "bx1": 8, "spans": [1, 8, 0, 9, 1, 8, 1, 8, 1, 8, 1, 8] }] }, "radio_tower": { "name": "Funkturm", "era": "information", "role": "landmark", "depth": 1, "variants": [{ "rect": { "x": 7, "y": 0, "w": 5, "h": 18 }, "ax": 2, "ay": 17, "size": "", "bx0": 0, "bx1": 4, "spans": [2, 2, 2, 2, 2, 2, 2, 2, 1, 3, 0, 4, 0, 4, 1, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 3, 1, 3, 1, 3, 0, 4, 0, 4] }] }, "turbine": { "name": "Windrad und Solarfeld", "era": "information", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 48, "y": 18, "w": 5, "h": 12 }, "ax": 2, "ay": 11, "size": "", "bx0": 1, "bx1": 3, "spans": [2, 2, 2, 2, 0, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 3] }, { "rect": { "x": 91, "y": 69, "w": 6, "h": 3 }, "ax": 3, "ay": 2, "size": "", "bx0": 0, "bx1": 5, "spans": [0, 5, 0, 5, 0, 5] }] }, "yard_information": { "name": "Platz mit Grünstreifen", "era": "information", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 0, "y": 41, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [2, 9, 2, 9, 0, 13, 0, 13, 0, 13, 0, 13, 2, 11, 2, 11, 2, 9, 2, 9] }, { "rect": { "x": 104, "y": 18, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 9, 4, 9, 0, 13, 0, 13, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 7, 8] }, { "rect": { "x": 103, "y": 0, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 9, 4, 9, 2, 13, 2, 13, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 4, 11, 4, 11] }] }, "biotower": { "name": "Organischer Turm", "era": "nanotech", "role": "dwelling", "depth": 1, "variants": [{ "rect": { "x": 36, "y": 69, "w": 5, "h": 5 }, "ax": 2, "ay": 4, "size": "s", "bx0": 0, "bx1": 4, "spans": [1, 3, 0, 4, 0, 4, 0, 4, 0, 4] }, { "rect": { "x": 96, "y": 41, "w": 6, "h": 10 }, "ax": 3, "ay": 9, "size": "m", "bx0": 0, "bx1": 5, "spans": [1, 4, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }, { "rect": { "x": 18, "y": 0, "w": 6, "h": 16 }, "ax": 3, "ay": 15, "size": "l", "bx0": 0, "bx1": 5, "spans": [1, 4, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5, 0, 5] }] }, "biodome": { "name": "Kuppel mit Grün", "era": "nanotech", "role": "hall", "depth": 2, "variants": [{ "rect": { "x": 59, "y": 51, "w": 11, "h": 8 }, "ax": 5, "ay": 7, "size": "", "bx0": 0, "bx1": 10, "spans": [3, 7, 2, 8, 1, 9, 1, 9, 0, 10, 0, 10, 0, 10, 0, 10] }] }, "megatower": { "name": "Megaturm", "era": "nanotech", "role": "landmark", "depth": 1, "variants": [{ "rect": { "x": 0, "y": 0, "w": 7, "h": 18 }, "ax": 3, "ay": 17, "size": "", "bx0": 0, "bx1": 6, "spans": [3, 3, 3, 3, 3, 3, 3, 3, 2, 4, 2, 4, 2, 4, 2, 4, 2, 4, 1, 5, 1, 5, 1, 5, 1, 5, 1, 5, 0, 6, 0, 6, 0, 6, 0, 6] }] }, "garden": { "name": "Gartenkapsel und Schwebekugel", "era": "nanotech", "role": "yard", "depth": 1, "variants": [{ "rect": { "x": 74, "y": 61, "w": 5, "h": 6 }, "ax": 2, "ay": 5, "size": "", "bx0": 1, "bx1": 3, "spans": [1, 3, 0, 4, 0, 4, 1, 3, 0, 4, 1, 3] }, { "rect": { "x": 109, "y": 61, "w": 3, "h": 6 }, "ax": 1, "ay": 5, "size": "", "bx0": 0, "bx1": 2, "spans": [1, 1, 0, 2, 1, 1, 3, -1, 1, 1, 0, 2] }] }, "yard_nanotech": { "name": "Park", "era": "nanotech", "role": "ground", "depth": 0, "variants": [{ "rect": { "x": 28, "y": 41, "w": 14, "h": 10 }, "ax": 7, "ay": 9, "size": "", "bx0": 14, "bx1": -1, "spans": [4, 11, 4, 11, 2, 13, 2, 13, 0, 13, 0, 13, 0, 11, 0, 11, 2, 9, 2, 9] }, { "rect": { "x": 16, "y": 30, "w": 16, "h": 11 }, "ax": 8, "ay": 10, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 15, 2, 15, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 6, 8] }, { "rect": { "x": 16, "y": 18, "w": 16, "h": 12 }, "ax": 8, "ay": 11, "size": "", "bx0": 16, "bx1": -1, "spans": [4, 11, 4, 11, 2, 15, 2, 15, 0, 15, 0, 15, 0, 15, 0, 15, 2, 13, 2, 13, 4, 11, 4, 11] }] }, "banner": { "name": "Wimpel", "era": null, "role": "banner", "depth": 1, "variants": [{ "rect": { "x": 122, "y": 51, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 0, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 4, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 8, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 12, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 16, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 20, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }, { "rect": { "x": 24, "y": 61, "w": 4, "h": 8 }, "ax": 2, "ay": 7, "size": "", "bx0": 0, "bx1": 0, "spans": [0, 3, 0, 3, 0, 3, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0] }] } } };
-    SE.CIV_ATLAS_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAABQCAMAAADm3o3WAAAA5FBMVEUAAAA9O0VdWmKAe3yln5fJwrOUcEq4kmLUsXzmyZbz37Q/LCdeQzR9XUOce1ZuNiiSUC+0bD3PilUuMSVGSjNiZUN+f1V8bDaij0XGslri0X47ai9WijV4qD6ix1lFUSpjcS+GkjitskwfQzAsXzo9fURXnE4UKiwdQEApWE86c15Pj2oPOioXWjMhejo6mkKpsI/N0LBef6OGp8awy+DW5vDz+PsKIEgQNGoYTogibKQwiLQ+nLxYssKAyMw6JiBePyx9Wjzpj7D3w9Twxkry7+KOLzPERT/fijqaaqjEmtD///8MPF1sAAAAAXRSTlMAQObYZgAACKVJREFUeNrtmWtvozoQhgebO7kAX5JWOvulCd9bCNp0j4SzCpv0//+ho5mxAZNrV9ld6WiHkJSS4IfX9uuxAQAoAeMA0GJIqOuyBA9DALR1S6fB0TtAzv8AIYQjpXT0IeQUWQaD87ibY8/z3NdXOA0GaIELlXVdbzaliyGgbtu2pvOp3iHP5r8EwAOottW2fMPyKwKQom2RADWQqeTC8ixLkUA6BkAIAkyzDIvHd1LMCoBXlwHwcwRQ2ACbDQF8db9KAUSAxQkOB4tIkcC+/CkAozGilADuIOzy6w1K0HrSAHzbfDMKeLoEYcIB+j/0d8+ffeH4DmCflbK/e/48AWirqpLVtt6Wb8V6tS5WWgHP4wJhzgHgOq5zG8AZxU0Aur1TBXqALHvL3lD68wpgwXkXaWrfv7wKUBRrXQX1aRsYAGTc+vh4fIe3ANxRnLaBQSO8oQBVgd0LhMPSpykXP+4FeHyxF1CnGwKcbwMjBW4DDDX4HMDNNtAQwKkRoRVhZzRHBsA2old37AJFsV5f9IEOoOkVMABDgc8BjM+fdwFbgXrsA56rpTgD8KDQAL0RDdtAD/DLokbBq3LYDb9tSQHnl5Y7bALFer3WCghqA9vNbwTQCrQ4EDMA/N6oN5ttVZVkxfCnQkopcDfHLy+vr6vVatV/I6AAk7mA1z40I/k0QOs9MiUSg8Dj1coAMMRsNqUIgtkM80ZPSnKX6ynReLQaDoUjL8bcD3ejwXUAcqzsdko0zkguD4YWgIuEVmCxuHNgNTDA9Ywkyz6REgkrHgVwd0o0vH8cuFB2UwUvL6sVF8+NEBEuAdgZyTgnlY8HuJ4SnQJcSYnsKrAbITZBlp73YSMc94KfTomMBqzD4wDuTokADIA5Xq0Q4OXFHHMVdHaiAbR89qV6Fzp//qRsqxLuApCehGw+/4NjQZdwDWfKOHM2E2o7FzTt0mjD/vwAAKqFbqaMM2c9of4kwLgPXLfi2awCgMoAdDNlKSUDSDFsnWOHHs+Y6e7FZ8aC2aySALgjgJkp89TZ0Yk0XB4ibO86B3B7LKikBNwhneu5CLkiAZACtkXaDn0OQIjPjQWVlLIiyefQcOipM7AC1wDOVYFxgXutuPs5AsRxHEcNTZvSedcGegBsgr1Dny5a/AxA9vaW4Y513yRN0yQEgI3xXBu4B+BaL2AbGlqxBXBeAZOrGW9kh740YbPHgjsAdLACcROjAo1WwPl6G2A8ZTUQ9j9eX1f2F2bGhrKGZokZtromjhtSQAP85FzGjFK2L55zxenUGhXyPO/GhDzvLLGhd6wdnyYeuOzJS6CO61Jm4glF3/NY8p8FyPO8zYwVZ0kHsKT3MAxDn8rHZU9eAuXUyPVcsZvNdo1HlW6ny7eSE+OJXP6mqjRBnkdGguXzEwoQqUgFcezzsifPu40CrtgpZQDsRGlszJcBuPxNRYuWkKWRThGWz89PCwSIJmEQhz4vdwwBOgWA7tFOFm2Aa56oy682NCihAiTB8nm5XC4XEEZRFAZh6PNyhwYw2SkrABLkGOCaLdsAWdcf59jV0ijN5lqAp6cFYA1QLfByB6+9jBWQ3NR6ANsXbVfkvKj3xKwy25xsLsK3OZf/tFxEGJMoDCwF7DbACgxXkT8F0CtA71GKfy6WHAyAtcBtoB5UwYkCdjc8b8smNzQQqHrDLwsAppNJkkwSiKLEKLAlBcRlBWyA3pjvBqCIeEi2AFiB7aYDQBP2UF0yIkcCJgV4qwfdgTCe9JMTk2LioRh4H/+lP2ryuf7XT/S3ClRvigKv4zraLGPjkA6ow+EHnXcdTPV1+6Um3LcKoWnYM3Pd6AFy/qjZ5wa/XlAGG5MJsikK8hdH549YPp1MewDpgGs6MLeggS8ZKZAl77qdTkax/KJYF+Xg1wsI4jhiGyZTFJ4DwnVSinnIFo05rAFwhSNd2d0/9iHMLGgjXzJipCbm+gN0+QTQ/TiI4igIw8DXpqgBuHWTP4QB5W3qAAMFuisQwEABx2xiMIHiVJAEWBfFuioXXf9bBGyBgU+XXC4MgOviMn9EFo1JJOh2IlwC6K6A1xgoMARwcMCnhwUNJUKm/KIqYaoSDJVAEIVhkCSBz1dc0N1L86yJuwZNLjsAqgJzhURNEriggNutG3MquDFBANNpkkzVpAeA6QQ7ZAfQEEBCAE06VsBcYUoAePcOK9C1QlKg0QpQInQewPcJwDcAmP7hfgLQXAHAcKxe4ElSoDEKUCb2kODHgs4fW6UF9f6+Vfv9XrVtqz4+PtTxeFRfvvyjvn//3urlBJ3dxTDTD7jxETdNmdmnBFCFFusV6HNLM3UXvW/iW43/sedG1wAcxxMQ+wRAr53qqwSCOAp9YL9Ue0XPflZ8ihwIp+7YB7Vv5mQcJT2M5dWF2wDZ3PNiDj+O/SieKSjLFl9vVH4Y+Nwv1FFBsS7WK5Jn+fy0XJBbUhfozGsOJXYKxxSvAWCr9rBXLbTqAz7UEY7qC/yjvgMCiCGAv5tAVbX4esPuFhgAdTwcFazWK6hw3EcHWDTwDo1wHeGBMS9u9P2KHQ3G6sreKxB2ClRVKwwA9naajAj3xw+H01965DFNJuDSRNCVjgtuYwA2aAnShLgDQERRGEVJiPcbhbsBgB/2ACBQ1LIsoRKVBgBcAeCm1gHUm9KaFd4BIIcAwa55fDdsruzzuffrH+P0yY+i28bXDHjz9AZFgWuGe+r7PhzaQ3uglmm+FOuNZ3s5eUYM1XZbbbf3AkixM6HMZtDwwd4L7I977vsEQImF/lLXVbz3f98F9v8cj7YUNwEkr59KMdvpTU10GDR0mBc4Ho7U93yqIZp18JekMDk4Phdx8myeZ3h09knxFQBloukUEJ4nPCHwyV4p3MMPEURJ4De73a6JkigM9Jc6AGr5nCTj0V2BHqH3BvRr1/BmFCAA6mp+mPhaAQKgL8k/98Dxb/yN/0P8Byb20BQ12nd7AAAAAElFTkSuQmCC';
+    SE.CIV_ATLAS_PNG = 'data:image/png;base64,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';
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — how a city is built up from blocks
@@ -37862,8 +39571,8 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    SE.FX_MANIFEST = { "version": 1, "width": 1024, "height": 408, "sprites": { "smoke_puff": { "name": "Rauchwölkchen", "w": 8, "h": 8, "fps": 8, "loop": 4, "layer": "top", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 872, "y": 392, "w": 8, "h": 8 }, { "x": 880, "y": 392, "w": 8, "h": 8 }, { "x": 888, "y": 392, "w": 8, "h": 8 }, { "x": 896, "y": 392, "w": 8, "h": 8 }] }, "steam_puff": { "name": "Dampfwolke", "w": 16, "h": 16, "fps": 8, "loop": 4, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 624, "y": 392, "w": 16, "h": 16 }, { "x": 640, "y": 392, "w": 16, "h": 16 }, { "x": 656, "y": 392, "w": 16, "h": 16 }, { "x": 672, "y": 392, "w": 16, "h": 16 }] }, "volcano_column": { "name": "Ausbruchssäule mit Lavafontäne", "w": 32, "h": 48, "fps": 10, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 176, "w": 32, "h": 48 }, { "x": 32, "y": 176, "w": 32, "h": 48 }, { "x": 64, "y": 176, "w": 32, "h": 48 }, { "x": 96, "y": 176, "w": 32, "h": 48 }, { "x": 128, "y": 176, "w": 32, "h": 48 }, { "x": 160, "y": 176, "w": 32, "h": 48 }, { "x": 192, "y": 176, "w": 32, "h": 48 }, { "x": 224, "y": 176, "w": 32, "h": 48 }] }, "ash_cloud": { "name": "Aschewolke", "w": 48, "h": 32, "fps": 6, "loop": 4, "layer": "top", "ax": 24, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 256, "y": 176, "w": 48, "h": 32 }, { "x": 304, "y": 176, "w": 48, "h": 32 }, { "x": 352, "y": 176, "w": 48, "h": 32 }, { "x": 400, "y": 176, "w": 48, "h": 32 }, { "x": 448, "y": 176, "w": 48, "h": 32 }, { "x": 496, "y": 176, "w": 48, "h": 32 }, { "x": 544, "y": 176, "w": 48, "h": 32 }] }, "crater_glow": { "name": "Glühender Lavasee im Krater", "w": 16, "h": 16, "fps": 6, "loop": 4, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 560, "y": 392, "w": 16, "h": 16 }, { "x": 576, "y": 392, "w": 16, "h": 16 }, { "x": 592, "y": 392, "w": 16, "h": 16 }, { "x": 608, "y": 392, "w": 16, "h": 16 }] }, "lava_splash": { "name": "Lavaspritzer", "w": 8, "h": 8, "fps": 10, "loop": 4, "layer": "object", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 840, "y": 392, "w": 8, "h": 8 }, { "x": 848, "y": 392, "w": 8, "h": 8 }, { "x": 856, "y": 392, "w": 8, "h": 8 }, { "x": 864, "y": 392, "w": 8, "h": 8 }] }, "flame_small": { "name": "Flamme, klein", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 384, "y": 352, "w": 16, "h": 20 }, { "x": 400, "y": 352, "w": 16, "h": 20 }, { "x": 416, "y": 352, "w": 16, "h": 20 }, { "x": 432, "y": 352, "w": 16, "h": 20 }, { "x": 448, "y": 352, "w": 16, "h": 20 }, { "x": 464, "y": 352, "w": 16, "h": 20 }] }, "flame_medium": { "name": "Flamme, mittel", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 288, "y": 352, "w": 16, "h": 20 }, { "x": 304, "y": 352, "w": 16, "h": 20 }, { "x": 320, "y": 352, "w": 16, "h": 20 }, { "x": 336, "y": 352, "w": 16, "h": 20 }, { "x": 352, "y": 352, "w": 16, "h": 20 }, { "x": 368, "y": 352, "w": 16, "h": 20 }] }, "flame_large": { "name": "Flamme, groß", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 192, "y": 352, "w": 16, "h": 20 }, { "x": 208, "y": 352, "w": 16, "h": 20 }, { "x": 224, "y": 352, "w": 16, "h": 20 }, { "x": 240, "y": 352, "w": 16, "h": 20 }, { "x": 256, "y": 352, "w": 16, "h": 20 }, { "x": 272, "y": 352, "w": 16, "h": 20 }] }, "smoke_plume": { "name": "Rauchfahne, aufrecht", "w": 16, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 96, "y": 224, "w": 16, "h": 32 }, { "x": 112, "y": 224, "w": 16, "h": 32 }, { "x": 128, "y": 224, "w": 16, "h": 32 }, { "x": 144, "y": 224, "w": 16, "h": 32 }, { "x": 160, "y": 224, "w": 16, "h": 32 }, { "x": 176, "y": 224, "w": 16, "h": 32 }] }, "smoke_plume_east": { "name": "Rauchfahne, nach Osten geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 592, "y": 176, "w": 24, "h": 32 }, { "x": 616, "y": 176, "w": 24, "h": 32 }, { "x": 640, "y": 176, "w": 24, "h": 32 }, { "x": 664, "y": 176, "w": 24, "h": 32 }, { "x": 688, "y": 176, "w": 24, "h": 32 }, { "x": 712, "y": 176, "w": 24, "h": 32 }] }, "smoke_plume_west": { "name": "Rauchfahne, nach Westen geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 736, "y": 176, "w": 24, "h": 32 }, { "x": 760, "y": 176, "w": 24, "h": 32 }, { "x": 784, "y": 176, "w": 24, "h": 32 }, { "x": 808, "y": 176, "w": 24, "h": 32 }, { "x": 832, "y": 176, "w": 24, "h": 32 }, { "x": 856, "y": 176, "w": 24, "h": 32 }] }, "charred_trunk": { "name": "Verkohlter Stamm", "w": 8, "h": 16, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 768, "y": 392, "w": 8, "h": 16 }, { "x": 776, "y": 392, "w": 8, "h": 16 }, { "x": 784, "y": 392, "w": 8, "h": 16 }] }, "meteor_streak": { "name": "Feuerschweif", "w": 32, "h": 32, "fps": 12, "loop": 4, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 880, "y": 176, "w": 32, "h": 32 }, { "x": 912, "y": 176, "w": 32, "h": 32 }, { "x": 944, "y": 176, "w": 32, "h": 32 }, { "x": 976, "y": 176, "w": 32, "h": 32 }] }, "flash": { "name": "Örtlicher Blitz (Frames 0, 1) und Feuerball ohne Weiß (2)", "w": 32, "h": 32, "fps": 12, "loop": 3, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 224, "w": 32, "h": 32 }, { "x": 32, "y": 224, "w": 32, "h": 32 }, { "x": 64, "y": 224, "w": 32, "h": 32 }] }, "dust_cloud": { "name": "Staubwolke", "w": 48, "h": 48, "fps": 6, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 640, "y": 64, "w": 48, "h": 48 }, { "x": 688, "y": 64, "w": 48, "h": 48 }, { "x": 736, "y": 64, "w": 48, "h": 48 }, { "x": 784, "y": 64, "w": 48, "h": 48 }, { "x": 832, "y": 64, "w": 48, "h": 48 }, { "x": 880, "y": 64, "w": 48, "h": 48 }, { "x": 928, "y": 64, "w": 48, "h": 48 }, { "x": 976, "y": 64, "w": 48, "h": 48 }] }, "mushroom": { "name": "Pilzwolke", "w": 32, "h": 48, "fps": 6, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 768, "y": 128, "w": 32, "h": 48 }, { "x": 800, "y": 128, "w": 32, "h": 48 }, { "x": 832, "y": 128, "w": 32, "h": 48 }, { "x": 864, "y": 128, "w": 32, "h": 48 }, { "x": 896, "y": 128, "w": 32, "h": 48 }, { "x": 928, "y": 128, "w": 32, "h": 48 }, { "x": 960, "y": 128, "w": 32, "h": 48 }, { "x": 992, "y": 128, "w": 32, "h": 48 }] }, "water_fountain": { "name": "Wasserfontäne", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 288, "y": 224, "w": 16, "h": 32 }, { "x": 304, "y": 224, "w": 16, "h": 32 }, { "x": 320, "y": 224, "w": 16, "h": 32 }, { "x": 336, "y": 224, "w": 16, "h": 32 }, { "x": 352, "y": 224, "w": 16, "h": 32 }, { "x": 368, "y": 224, "w": 16, "h": 32 }] }, "crater_rim": { "name": "Kraterrand (frisch, verwittert)", "w": 24, "h": 16, "fps": 0, "loop": 2, "layer": "object", "ax": 12, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 688, "y": 392, "w": 24, "h": 16 }, { "x": 712, "y": 392, "w": 24, "h": 16 }] }, "stump": { "name": "Versengter Stumpf", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 928, "y": 392, "w": 8, "h": 8 }, { "x": 936, "y": 392, "w": 8, "h": 8 }, { "x": 944, "y": 392, "w": 8, "h": 8 }] }, "wave_break": { "name": "Brechende Welle: 8 Richtungen × 6 Frames", "w": 16, "h": 16, "fps": 10, "loop": 48, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 376, "w": 16, "h": 16 }, { "x": 16, "y": 376, "w": 16, "h": 16 }, { "x": 32, "y": 376, "w": 16, "h": 16 }, { "x": 48, "y": 376, "w": 16, "h": 16 }, { "x": 64, "y": 376, "w": 16, "h": 16 }, { "x": 80, "y": 376, "w": 16, "h": 16 }, { "x": 96, "y": 376, "w": 16, "h": 16 }, { "x": 112, "y": 376, "w": 16, "h": 16 }, { "x": 128, "y": 376, "w": 16, "h": 16 }, { "x": 144, "y": 376, "w": 16, "h": 16 }, { "x": 160, "y": 376, "w": 16, "h": 16 }, { "x": 176, "y": 376, "w": 16, "h": 16 }, { "x": 192, "y": 376, "w": 16, "h": 16 }, { "x": 208, "y": 376, "w": 16, "h": 16 }, { "x": 224, "y": 376, "w": 16, "h": 16 }, { "x": 240, "y": 376, "w": 16, "h": 16 }, { "x": 256, "y": 376, "w": 16, "h": 16 }, { "x": 272, "y": 376, "w": 16, "h": 16 }, { "x": 288, "y": 376, "w": 16, "h": 16 }, { "x": 304, "y": 376, "w": 16, "h": 16 }, { "x": 320, "y": 376, "w": 16, "h": 16 }, { "x": 336, "y": 376, "w": 16, "h": 16 }, { "x": 352, "y": 376, "w": 16, "h": 16 }, { "x": 368, "y": 376, "w": 16, "h": 16 }, { "x": 384, "y": 376, "w": 16, "h": 16 }, { "x": 400, "y": 376, "w": 16, "h": 16 }, { "x": 416, "y": 376, "w": 16, "h": 16 }, { "x": 432, "y": 376, "w": 16, "h": 16 }, { "x": 448, "y": 376, "w": 16, "h": 16 }, { "x": 464, "y": 376, "w": 16, "h": 16 }, { "x": 480, "y": 376, "w": 16, "h": 16 }, { "x": 496, "y": 376, "w": 16, "h": 16 }, { "x": 512, "y": 376, "w": 16, "h": 16 }, { "x": 528, "y": 376, "w": 16, "h": 16 }, { "x": 544, "y": 376, "w": 16, "h": 16 }, { "x": 560, "y": 376, "w": 16, "h": 16 }, { "x": 576, "y": 376, "w": 16, "h": 16 }, { "x": 592, "y": 376, "w": 16, "h": 16 }, { "x": 608, "y": 376, "w": 16, "h": 16 }, { "x": 624, "y": 376, "w": 16, "h": 16 }, { "x": 640, "y": 376, "w": 16, "h": 16 }, { "x": 656, "y": 376, "w": 16, "h": 16 }, { "x": 672, "y": 376, "w": 16, "h": 16 }, { "x": 688, "y": 376, "w": 16, "h": 16 }, { "x": 704, "y": 376, "w": 16, "h": 16 }, { "x": 720, "y": 376, "w": 16, "h": 16 }, { "x": 736, "y": 376, "w": 16, "h": 16 }, { "x": 752, "y": 376, "w": 16, "h": 16 }] }, "hurricane": { "name": "Wirbelsturm, Nordhalbkugel", "w": 48, "h": 48, "fps": 8, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 128, "w": 48, "h": 48 }, { "x": 48, "y": 128, "w": 48, "h": 48 }, { "x": 96, "y": 128, "w": 48, "h": 48 }, { "x": 144, "y": 128, "w": 48, "h": 48 }, { "x": 192, "y": 128, "w": 48, "h": 48 }, { "x": 240, "y": 128, "w": 48, "h": 48 }, { "x": 288, "y": 128, "w": 48, "h": 48 }, { "x": 336, "y": 128, "w": 48, "h": 48 }] }, "hurricane_south": { "name": "Wirbelsturm, Südhalbkugel", "w": 48, "h": 48, "fps": 8, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 384, "y": 128, "w": 48, "h": 48 }, { "x": 432, "y": 128, "w": 48, "h": 48 }, { "x": 480, "y": 128, "w": 48, "h": 48 }, { "x": 528, "y": 128, "w": 48, "h": 48 }, { "x": 576, "y": 128, "w": 48, "h": 48 }, { "x": 624, "y": 128, "w": 48, "h": 48 }, { "x": 672, "y": 128, "w": 48, "h": 48 }, { "x": 720, "y": 128, "w": 48, "h": 48 }] }, "tornado": { "name": "Tornado-Trichter", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 192, "y": 224, "w": 16, "h": 32 }, { "x": 208, "y": 224, "w": 16, "h": 32 }, { "x": 224, "y": 224, "w": 16, "h": 32 }, { "x": 240, "y": 224, "w": 16, "h": 32 }, { "x": 256, "y": 224, "w": 16, "h": 32 }, { "x": 272, "y": 224, "w": 16, "h": 32 }] }, "storm_small": { "name": "Sich formender Sturm, Nordhalbkugel", "w": 32, "h": 32, "fps": 4, "loop": 2, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 384, "y": 224, "w": 32, "h": 32 }, { "x": 416, "y": 224, "w": 32, "h": 32 }] }, "storm_small_south": { "name": "Sich formender Sturm, Südhalbkugel", "w": 32, "h": 32, "fps": 4, "loop": 2, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 448, "y": 224, "w": 32, "h": 32 }, { "x": 480, "y": 224, "w": 32, "h": 32 }] }, "fallen_tree": { "name": "Umgestürzter Baum", "w": 16, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 792, "y": 392, "w": 16, "h": 8 }, { "x": 808, "y": 392, "w": 16, "h": 8 }, { "x": 824, "y": 392, "w": 16, "h": 8 }] }, "driftwood": { "name": "Treibgut", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 904, "y": 392, "w": 8, "h": 8 }, { "x": 912, "y": 392, "w": 8, "h": 8 }, { "x": 920, "y": 392, "w": 8, "h": 8 }] }, "dust_puff": { "name": "Staubwölkchen", "w": 16, "h": 16, "fps": 10, "loop": 5, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 480, "y": 392, "w": 16, "h": 16 }, { "x": 496, "y": 392, "w": 16, "h": 16 }, { "x": 512, "y": 392, "w": 16, "h": 16 }, { "x": 528, "y": 392, "w": 16, "h": 16 }, { "x": 544, "y": 392, "w": 16, "h": 16 }] }, "rubble": { "name": "Trümmer über einer Stadt", "w": 16, "h": 16, "fps": 4, "loop": 2, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 736, "y": 392, "w": 16, "h": 16 }, { "x": 752, "y": 392, "w": 16, "h": 16 }] }, "fissure": { "name": "Erdriss, flach: 4 Richtungen (−, |, /, \\) × Mitte, Ende, Abzweigung", "w": 16, "h": 16, "fps": 0, "loop": 12, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 288, "y": 392, "w": 16, "h": 16 }, { "x": 304, "y": 392, "w": 16, "h": 16 }, { "x": 320, "y": 392, "w": 16, "h": 16 }, { "x": 336, "y": 392, "w": 16, "h": 16 }, { "x": 352, "y": 392, "w": 16, "h": 16 }, { "x": 368, "y": 392, "w": 16, "h": 16 }, { "x": 384, "y": 392, "w": 16, "h": 16 }, { "x": 400, "y": 392, "w": 16, "h": 16 }, { "x": 416, "y": 392, "w": 16, "h": 16 }, { "x": 432, "y": 392, "w": 16, "h": 16 }, { "x": 448, "y": 392, "w": 16, "h": 16 }, { "x": 464, "y": 392, "w": 16, "h": 16 }] }, "ruin": { "name": "Ruine", "w": 16, "h": 20, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 480, "y": 352, "w": 16, "h": 20 }, { "x": 496, "y": 352, "w": 16, "h": 20 }, { "x": 512, "y": 352, "w": 16, "h": 20 }] }, "whale_great": { "name": "Blauwal: 2 Richtungen × 8 Frames", "w": 48, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 24, "ay": 12, "anchor": "center", "mouth": [40, 12, 45, 13, 8, 13], "frames": [{ "x": 0, "y": 280, "w": 48, "h": 24 }, { "x": 48, "y": 280, "w": 48, "h": 24 }, { "x": 96, "y": 280, "w": 48, "h": 24 }, { "x": 144, "y": 280, "w": 48, "h": 24 }, { "x": 192, "y": 280, "w": 48, "h": 24 }, { "x": 240, "y": 280, "w": 48, "h": 24 }, { "x": 288, "y": 280, "w": 48, "h": 24 }, { "x": 336, "y": 280, "w": 48, "h": 24 }, { "x": 384, "y": 280, "w": 48, "h": 24 }, { "x": 432, "y": 280, "w": 48, "h": 24 }, { "x": 480, "y": 280, "w": 48, "h": 24 }, { "x": 528, "y": 280, "w": 48, "h": 24 }, { "x": 576, "y": 280, "w": 48, "h": 24 }, { "x": 624, "y": 280, "w": 48, "h": 24 }, { "x": 672, "y": 280, "w": 48, "h": 24 }, { "x": 720, "y": 280, "w": 48, "h": 24 }] }, "whale_baleen": { "name": "Buckelwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [30, 10, 35, 11, 8, 11], "frames": [{ "x": 0, "y": 304, "w": 40, "h": 24 }, { "x": 40, "y": 304, "w": 40, "h": 24 }, { "x": 80, "y": 304, "w": 40, "h": 24 }, { "x": 120, "y": 304, "w": 40, "h": 24 }, { "x": 160, "y": 304, "w": 40, "h": 24 }, { "x": 200, "y": 304, "w": 40, "h": 24 }, { "x": 240, "y": 304, "w": 40, "h": 24 }, { "x": 280, "y": 304, "w": 40, "h": 24 }, { "x": 320, "y": 304, "w": 40, "h": 24 }, { "x": 360, "y": 304, "w": 40, "h": 24 }, { "x": 400, "y": 304, "w": 40, "h": 24 }, { "x": 440, "y": 304, "w": 40, "h": 24 }, { "x": 480, "y": 304, "w": 40, "h": 24 }, { "x": 520, "y": 304, "w": 40, "h": 24 }, { "x": 560, "y": 304, "w": 40, "h": 24 }, { "x": 600, "y": 304, "w": 40, "h": 24 }] }, "whale_sperm": { "name": "Pottwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [37, 8, 37, 12, 8, 12], "frames": [{ "x": 0, "y": 328, "w": 40, "h": 24 }, { "x": 40, "y": 328, "w": 40, "h": 24 }, { "x": 80, "y": 328, "w": 40, "h": 24 }, { "x": 120, "y": 328, "w": 40, "h": 24 }, { "x": 160, "y": 328, "w": 40, "h": 24 }, { "x": 200, "y": 328, "w": 40, "h": 24 }, { "x": 240, "y": 328, "w": 40, "h": 24 }, { "x": 280, "y": 328, "w": 40, "h": 24 }, { "x": 320, "y": 328, "w": 40, "h": 24 }, { "x": 360, "y": 328, "w": 40, "h": 24 }, { "x": 400, "y": 328, "w": 40, "h": 24 }, { "x": 440, "y": 328, "w": 40, "h": 24 }, { "x": 480, "y": 328, "w": 40, "h": 24 }, { "x": 520, "y": 328, "w": 40, "h": 24 }, { "x": 560, "y": 328, "w": 40, "h": 24 }, { "x": 600, "y": 328, "w": 40, "h": 24 }] }, "whale_blow": { "name": "Blas eines Wals", "w": 24, "h": 24, "fps": 10, "loop": 8, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 352, "w": 24, "h": 24 }, { "x": 24, "y": 352, "w": 24, "h": 24 }, { "x": 48, "y": 352, "w": 24, "h": 24 }, { "x": 72, "y": 352, "w": 24, "h": 24 }, { "x": 96, "y": 352, "w": 24, "h": 24 }, { "x": 120, "y": 352, "w": 24, "h": 24 }, { "x": 144, "y": 352, "w": 24, "h": 24 }, { "x": 168, "y": 352, "w": 24, "h": 24 }] }, "whale_blow_sperm": { "name": "Blas des Pottwals, schräg nach vorn: 2 Richtungen × 8 Frames", "w": 24, "h": 24, "fps": 10, "loop": 16, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 640, "y": 328, "w": 24, "h": 24 }, { "x": 664, "y": 328, "w": 24, "h": 24 }, { "x": 688, "y": 328, "w": 24, "h": 24 }, { "x": 712, "y": 328, "w": 24, "h": 24 }, { "x": 736, "y": 328, "w": 24, "h": 24 }, { "x": 760, "y": 328, "w": 24, "h": 24 }, { "x": 784, "y": 328, "w": 24, "h": 24 }, { "x": 808, "y": 328, "w": 24, "h": 24 }, { "x": 832, "y": 328, "w": 24, "h": 24 }, { "x": 856, "y": 328, "w": 24, "h": 24 }, { "x": 880, "y": 328, "w": 24, "h": 24 }, { "x": 904, "y": 328, "w": 24, "h": 24 }, { "x": 928, "y": 328, "w": 24, "h": 24 }, { "x": 952, "y": 328, "w": 24, "h": 24 }, { "x": 976, "y": 328, "w": 24, "h": 24 }, { "x": 1000, "y": 328, "w": 24, "h": 24 }] }, "whale_wake": { "name": "Bugwelle (Osten, Westen) und Fußabdruck-Ring", "w": 24, "h": 16, "fps": 8, "loop": 4, "layer": "object", "ax": 12, "ay": 8, "anchor": "center", "mouth": [18, 7], "frames": [{ "x": 0, "y": 392, "w": 24, "h": 16 }, { "x": 24, "y": 392, "w": 24, "h": 16 }, { "x": 48, "y": 392, "w": 24, "h": 16 }, { "x": 72, "y": 392, "w": 24, "h": 16 }, { "x": 96, "y": 392, "w": 24, "h": 16 }, { "x": 120, "y": 392, "w": 24, "h": 16 }, { "x": 144, "y": 392, "w": 24, "h": 16 }, { "x": 168, "y": 392, "w": 24, "h": 16 }, { "x": 192, "y": 392, "w": 24, "h": 16 }, { "x": 216, "y": 392, "w": 24, "h": 16 }, { "x": 240, "y": 392, "w": 24, "h": 16 }, { "x": 264, "y": 392, "w": 24, "h": 16 }] }, "dolphin_leap": { "name": "Delfinsprung: 2 Richtungen × 16 Frames", "w": 32, "h": 24, "fps": 12, "loop": 32, "layer": "object", "ax": 16, "ay": 12, "anchor": "center", "mouth": [6, 18], "frames": [{ "x": 0, "y": 256, "w": 32, "h": 24 }, { "x": 32, "y": 256, "w": 32, "h": 24 }, { "x": 64, "y": 256, "w": 32, "h": 24 }, { "x": 96, "y": 256, "w": 32, "h": 24 }, { "x": 128, "y": 256, "w": 32, "h": 24 }, { "x": 160, "y": 256, "w": 32, "h": 24 }, { "x": 192, "y": 256, "w": 32, "h": 24 }, { "x": 224, "y": 256, "w": 32, "h": 24 }, { "x": 256, "y": 256, "w": 32, "h": 24 }, { "x": 288, "y": 256, "w": 32, "h": 24 }, { "x": 320, "y": 256, "w": 32, "h": 24 }, { "x": 352, "y": 256, "w": 32, "h": 24 }, { "x": 384, "y": 256, "w": 32, "h": 24 }, { "x": 416, "y": 256, "w": 32, "h": 24 }, { "x": 448, "y": 256, "w": 32, "h": 24 }, { "x": 480, "y": 256, "w": 32, "h": 24 }, { "x": 512, "y": 256, "w": 32, "h": 24 }, { "x": 544, "y": 256, "w": 32, "h": 24 }, { "x": 576, "y": 256, "w": 32, "h": 24 }, { "x": 608, "y": 256, "w": 32, "h": 24 }, { "x": 640, "y": 256, "w": 32, "h": 24 }, { "x": 672, "y": 256, "w": 32, "h": 24 }, { "x": 704, "y": 256, "w": 32, "h": 24 }, { "x": 736, "y": 256, "w": 32, "h": 24 }, { "x": 768, "y": 256, "w": 32, "h": 24 }, { "x": 800, "y": 256, "w": 32, "h": 24 }, { "x": 832, "y": 256, "w": 32, "h": 24 }, { "x": 864, "y": 256, "w": 32, "h": 24 }, { "x": 896, "y": 256, "w": 32, "h": 24 }, { "x": 928, "y": 256, "w": 32, "h": 24 }, { "x": 960, "y": 256, "w": 32, "h": 24 }, { "x": 992, "y": 256, "w": 32, "h": 24 }] } }, "textures": { "lava_hot": { "name": "Lava, glühend", "size": 64, "fps": 8, "rim": [142, 47, 51], "frames": [{ "x": 256, "y": 0, "w": 64, "h": 64 }, { "x": 320, "y": 0, "w": 64, "h": 64 }, { "x": 384, "y": 0, "w": 64, "h": 64 }, { "x": 448, "y": 0, "w": 64, "h": 64 }] }, "lava_dim": { "name": "Lava, dunkelrot", "size": 64, "fps": 6, "rim": [63, 44, 39], "frames": [{ "x": 0, "y": 0, "w": 64, "h": 64 }, { "x": 64, "y": 0, "w": 64, "h": 64 }, { "x": 128, "y": 0, "w": 64, "h": 64 }, { "x": 192, "y": 0, "w": 64, "h": 64 }] }, "lava_crust": { "name": "Lavakruste mit Glutrissen", "size": 64, "fps": 3, "rim": [61, 59, 69], "frames": [{ "x": 128, "y": 64, "w": 64, "h": 64 }, { "x": 192, "y": 64, "w": 64, "h": 64 }] }, "embers": { "name": "Glut unter den Flammen", "size": 64, "fps": 4, "rim": [63, 44, 39], "frames": [{ "x": 512, "y": 0, "w": 64, "h": 64 }, { "x": 576, "y": 0, "w": 64, "h": 64 }] }, "ground_burnt": { "name": "Verbrannte Erde", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 384, "y": 64, "w": 64, "h": 64 }] }, "ground_crater": { "name": "Kraterboden", "size": 64, "fps": 0, "rim": [61, 59, 69], "frames": [{ "x": 448, "y": 64, "w": 64, "h": 64 }] }, "ground_scorched": { "name": "Versengter Boden", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 512, "y": 64, "w": 64, "h": 64 }] }, "ground_ash": { "name": "Asche", "size": 64, "fps": 0, "rim": [93, 90, 98], "frames": [{ "x": 320, "y": 64, "w": 64, "h": 64 }] }, "fallout_film": { "name": "Fahler Schleier (Fallout)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 256, "y": 64, "w": 64, "h": 64 }] }, "flood_mud": { "name": "Rückströmung, schlammig", "size": 64, "fps": 4, "rim": [125, 93, 67], "frames": [{ "x": 768, "y": 0, "w": 64, "h": 64 }, { "x": 832, "y": 0, "w": 64, "h": 64 }] }, "flood_shallow": { "name": "Flutwasser, flach und trüb", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 896, "y": 0, "w": 64, "h": 64 }, { "x": 960, "y": 0, "w": 64, "h": 64 }] }, "flood_water": { "name": "Flutwasser", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 0, "y": 64, "w": 64, "h": 64 }, { "x": 64, "y": 64, "w": 64, "h": 64 }] }, "flood_deep": { "name": "Flutwasser, tief", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 640, "y": 0, "w": 64, "h": 64 }, { "x": 704, "y": 0, "w": 64, "h": 64 }] }, "wet_ground": { "name": "Nasser Boden (Pfützen)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 576, "y": 64, "w": 64, "h": 64 }] } } };
-    SE.FX_ATLAS_PNG = 'data:image/png;base64,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';
+    SE.FX_MANIFEST = { "version": 1, "width": 1536, "height": 616, "sprites": { "smoke_puff": { "name": "Rauchwölkchen", "w": 8, "h": 8, "fps": 8, "loop": 4, "layer": "top", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 376, "y": 596, "w": 8, "h": 8 }, { "x": 384, "y": 596, "w": 8, "h": 8 }, { "x": 392, "y": 596, "w": 8, "h": 8 }, { "x": 400, "y": 596, "w": 8, "h": 8 }] }, "steam_puff": { "name": "Dampfwolke", "w": 16, "h": 16, "fps": 8, "loop": 4, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 64, "y": 596, "w": 16, "h": 16 }, { "x": 80, "y": 596, "w": 16, "h": 16 }, { "x": 96, "y": 596, "w": 16, "h": 16 }, { "x": 112, "y": 596, "w": 16, "h": 16 }] }, "volcano_column": { "name": "Ausbruchssäule mit Lavafontäne", "w": 32, "h": 48, "fps": 10, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 448, "w": 32, "h": 48 }, { "x": 32, "y": 448, "w": 32, "h": 48 }, { "x": 64, "y": 448, "w": 32, "h": 48 }, { "x": 96, "y": 448, "w": 32, "h": 48 }, { "x": 128, "y": 448, "w": 32, "h": 48 }, { "x": 160, "y": 448, "w": 32, "h": 48 }, { "x": 192, "y": 448, "w": 32, "h": 48 }, { "x": 224, "y": 448, "w": 32, "h": 48 }] }, "ash_cloud": { "name": "Aschewolke", "w": 48, "h": 32, "fps": 6, "loop": 4, "layer": "top", "ax": 24, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 640, "y": 448, "w": 48, "h": 32 }, { "x": 688, "y": 448, "w": 48, "h": 32 }, { "x": 736, "y": 448, "w": 48, "h": 32 }, { "x": 784, "y": 448, "w": 48, "h": 32 }, { "x": 832, "y": 448, "w": 48, "h": 32 }, { "x": 880, "y": 448, "w": 48, "h": 32 }, { "x": 928, "y": 448, "w": 48, "h": 32 }] }, "crater_glow": { "name": "Glühender Lavasee im Krater", "w": 16, "h": 16, "fps": 6, "loop": 4, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 596, "w": 16, "h": 16 }, { "x": 16, "y": 596, "w": 16, "h": 16 }, { "x": 32, "y": 596, "w": 16, "h": 16 }, { "x": 48, "y": 596, "w": 16, "h": 16 }] }, "lava_splash": { "name": "Lavaspritzer", "w": 8, "h": 8, "fps": 10, "loop": 4, "layer": "object", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 344, "y": 596, "w": 8, "h": 8 }, { "x": 352, "y": 596, "w": 8, "h": 8 }, { "x": 360, "y": 596, "w": 8, "h": 8 }, { "x": 368, "y": 596, "w": 8, "h": 8 }] }, "flame_small": { "name": "Flamme, klein", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 1408, "y": 552, "w": 16, "h": 20 }, { "x": 1424, "y": 552, "w": 16, "h": 20 }, { "x": 1440, "y": 552, "w": 16, "h": 20 }, { "x": 1456, "y": 552, "w": 16, "h": 20 }, { "x": 1472, "y": 552, "w": 16, "h": 20 }, { "x": 1488, "y": 552, "w": 16, "h": 20 }] }, "flame_medium": { "name": "Flamme, mittel", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 1312, "y": 552, "w": 16, "h": 20 }, { "x": 1328, "y": 552, "w": 16, "h": 20 }, { "x": 1344, "y": 552, "w": 16, "h": 20 }, { "x": 1360, "y": 552, "w": 16, "h": 20 }, { "x": 1376, "y": 552, "w": 16, "h": 20 }, { "x": 1392, "y": 552, "w": 16, "h": 20 }] }, "flame_large": { "name": "Flamme, groß", "w": 16, "h": 20, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 1216, "y": 552, "w": 16, "h": 20 }, { "x": 1232, "y": 552, "w": 16, "h": 20 }, { "x": 1248, "y": 552, "w": 16, "h": 20 }, { "x": 1264, "y": 552, "w": 16, "h": 20 }, { "x": 1280, "y": 552, "w": 16, "h": 20 }, { "x": 1296, "y": 552, "w": 16, "h": 20 }] }, "smoke_plume": { "name": "Rauchfahne, aufrecht", "w": 16, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 224, "y": 496, "w": 16, "h": 32 }, { "x": 240, "y": 496, "w": 16, "h": 32 }, { "x": 256, "y": 496, "w": 16, "h": 32 }, { "x": 272, "y": 496, "w": 16, "h": 32 }, { "x": 288, "y": 496, "w": 16, "h": 32 }, { "x": 304, "y": 496, "w": 16, "h": 32 }] }, "smoke_plume_east": { "name": "Rauchfahne, nach Osten geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 1232, "y": 448, "w": 24, "h": 32 }, { "x": 1256, "y": 448, "w": 24, "h": 32 }, { "x": 1280, "y": 448, "w": 24, "h": 32 }, { "x": 1304, "y": 448, "w": 24, "h": 32 }, { "x": 1328, "y": 448, "w": 24, "h": 32 }, { "x": 1352, "y": 448, "w": 24, "h": 32 }] }, "smoke_plume_west": { "name": "Rauchfahne, nach Westen geneigt", "w": 24, "h": 32, "fps": 8, "loop": 6, "layer": "top", "ax": 12, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 1376, "y": 448, "w": 24, "h": 32 }, { "x": 1400, "y": 448, "w": 24, "h": 32 }, { "x": 1424, "y": 448, "w": 24, "h": 32 }, { "x": 1448, "y": 448, "w": 24, "h": 32 }, { "x": 1472, "y": 448, "w": 24, "h": 32 }, { "x": 1496, "y": 448, "w": 24, "h": 32 }] }, "charred_trunk": { "name": "Verkohlter Stamm", "w": 8, "h": 16, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 208, "y": 596, "w": 8, "h": 16 }, { "x": 216, "y": 596, "w": 8, "h": 16 }, { "x": 224, "y": 596, "w": 8, "h": 16 }] }, "meteor_streak": { "name": "Feuerschweif", "w": 32, "h": 32, "fps": 12, "loop": 4, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 496, "w": 32, "h": 32 }, { "x": 32, "y": 496, "w": 32, "h": 32 }, { "x": 64, "y": 496, "w": 32, "h": 32 }, { "x": 96, "y": 496, "w": 32, "h": 32 }] }, "flash": { "name": "Örtlicher Blitz (Frames 0, 1) und Feuerball ohne Weiß (2)", "w": 32, "h": 32, "fps": 12, "loop": 3, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 128, "y": 496, "w": 32, "h": 32 }, { "x": 160, "y": 496, "w": 32, "h": 32 }, { "x": 192, "y": 496, "w": 32, "h": 32 }] }, "dust_cloud": { "name": "Staubwolke", "w": 48, "h": 48, "fps": 6, "loop": 8, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 704, "y": 384, "w": 48, "h": 48 }, { "x": 752, "y": 384, "w": 48, "h": 48 }, { "x": 800, "y": 384, "w": 48, "h": 48 }, { "x": 848, "y": 384, "w": 48, "h": 48 }, { "x": 896, "y": 384, "w": 48, "h": 48 }, { "x": 944, "y": 384, "w": 48, "h": 48 }, { "x": 992, "y": 384, "w": 48, "h": 48 }, { "x": 1040, "y": 384, "w": 48, "h": 48 }] }, "mushroom": { "name": "Pilzwolke", "w": 32, "h": 48, "fps": 6, "loop": 8, "layer": "object", "ax": 16, "ay": 47, "anchor": "foot", "mouth": null, "frames": [{ "x": 1088, "y": 384, "w": 32, "h": 48 }, { "x": 1120, "y": 384, "w": 32, "h": 48 }, { "x": 1152, "y": 384, "w": 32, "h": 48 }, { "x": 1184, "y": 384, "w": 32, "h": 48 }, { "x": 1216, "y": 384, "w": 32, "h": 48 }, { "x": 1248, "y": 384, "w": 32, "h": 48 }, { "x": 1280, "y": 384, "w": 32, "h": 48 }, { "x": 1312, "y": 384, "w": 32, "h": 48 }] }, "water_fountain": { "name": "Wasserfontäne", "w": 16, "h": 32, "fps": 10, "loop": 6, "layer": "object", "ax": 8, "ay": 31, "anchor": "foot", "mouth": null, "frames": [{ "x": 320, "y": 496, "w": 16, "h": 32 }, { "x": 336, "y": 496, "w": 16, "h": 32 }, { "x": 352, "y": 496, "w": 16, "h": 32 }, { "x": 368, "y": 496, "w": 16, "h": 32 }, { "x": 384, "y": 496, "w": 16, "h": 32 }, { "x": 400, "y": 496, "w": 16, "h": 32 }] }, "crater_rim": { "name": "Kraterrand (frisch, verwittert)", "w": 24, "h": 16, "fps": 0, "loop": 2, "layer": "object", "ax": 12, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 128, "y": 596, "w": 24, "h": 16 }, { "x": 152, "y": 596, "w": 24, "h": 16 }] }, "stump": { "name": "Versengter Stumpf", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 432, "y": 596, "w": 8, "h": 8 }, { "x": 440, "y": 596, "w": 8, "h": 8 }, { "x": 448, "y": 596, "w": 8, "h": 8 }] }, "wave_break": { "name": "Brechende Welle: 8 Richtungen × 6 Frames", "w": 16, "h": 16, "fps": 10, "loop": 48, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 48, "y": 576, "w": 16, "h": 16 }, { "x": 64, "y": 576, "w": 16, "h": 16 }, { "x": 80, "y": 576, "w": 16, "h": 16 }, { "x": 96, "y": 576, "w": 16, "h": 16 }, { "x": 112, "y": 576, "w": 16, "h": 16 }, { "x": 128, "y": 576, "w": 16, "h": 16 }, { "x": 144, "y": 576, "w": 16, "h": 16 }, { "x": 160, "y": 576, "w": 16, "h": 16 }, { "x": 176, "y": 576, "w": 16, "h": 16 }, { "x": 192, "y": 576, "w": 16, "h": 16 }, { "x": 208, "y": 576, "w": 16, "h": 16 }, { "x": 224, "y": 576, "w": 16, "h": 16 }, { "x": 240, "y": 576, "w": 16, "h": 16 }, { "x": 256, "y": 576, "w": 16, "h": 16 }, { "x": 272, "y": 576, "w": 16, "h": 16 }, { "x": 288, "y": 576, "w": 16, "h": 16 }, { "x": 304, "y": 576, "w": 16, "h": 16 }, { "x": 320, "y": 576, "w": 16, "h": 16 }, { "x": 336, "y": 576, "w": 16, "h": 16 }, { "x": 352, "y": 576, "w": 16, "h": 16 }, { "x": 368, "y": 576, "w": 16, "h": 16 }, { "x": 384, "y": 576, "w": 16, "h": 16 }, { "x": 400, "y": 576, "w": 16, "h": 16 }, { "x": 416, "y": 576, "w": 16, "h": 16 }, { "x": 432, "y": 576, "w": 16, "h": 16 }, { "x": 448, "y": 576, "w": 16, "h": 16 }, { "x": 464, "y": 576, "w": 16, "h": 16 }, { "x": 480, "y": 576, "w": 16, "h": 16 }, { "x": 496, "y": 576, "w": 16, "h": 16 }, { "x": 512, "y": 576, "w": 16, "h": 16 }, { "x": 528, "y": 576, "w": 16, "h": 16 }, { "x": 544, "y": 576, "w": 16, "h": 16 }, { "x": 560, "y": 576, "w": 16, "h": 16 }, { "x": 576, "y": 576, "w": 16, "h": 16 }, { "x": 592, "y": 576, "w": 16, "h": 16 }, { "x": 608, "y": 576, "w": 16, "h": 16 }, { "x": 624, "y": 576, "w": 16, "h": 16 }, { "x": 640, "y": 576, "w": 16, "h": 16 }, { "x": 656, "y": 576, "w": 16, "h": 16 }, { "x": 672, "y": 576, "w": 16, "h": 16 }, { "x": 688, "y": 576, "w": 16, "h": 16 }, { "x": 704, "y": 576, "w": 16, "h": 16 }, { "x": 720, "y": 576, "w": 16, "h": 16 }, { "x": 736, "y": 576, "w": 16, "h": 16 }, { "x": 752, "y": 576, "w": 16, "h": 16 }, { "x": 768, "y": 576, "w": 16, "h": 16 }, { "x": 784, "y": 576, "w": 16, "h": 16 }, { "x": 800, "y": 576, "w": 16, "h": 16 }] }, "fallen_tree": { "name": "Umgestürzter Baum", "w": 16, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 296, "y": 596, "w": 16, "h": 8 }, { "x": 312, "y": 596, "w": 16, "h": 8 }, { "x": 328, "y": 596, "w": 16, "h": 8 }] }, "driftwood": { "name": "Treibgut", "w": 8, "h": 8, "fps": 0, "loop": 3, "layer": "object", "ax": 4, "ay": 7, "anchor": "foot", "mouth": null, "frames": [{ "x": 408, "y": 596, "w": 8, "h": 8 }, { "x": 416, "y": 596, "w": 8, "h": 8 }, { "x": 424, "y": 596, "w": 8, "h": 8 }] }, "hurricane": { "name": "Wirbelsturm, Nordhalbkugel: 8 Drehframes, 8 mit Wetterleuchten", "w": 96, "h": 96, "fps": 8, "loop": 8, "layer": "top", "ax": 48, "ay": 48, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 128, "w": 96, "h": 96 }, { "x": 96, "y": 128, "w": 96, "h": 96 }, { "x": 192, "y": 128, "w": 96, "h": 96 }, { "x": 288, "y": 128, "w": 96, "h": 96 }, { "x": 384, "y": 128, "w": 96, "h": 96 }, { "x": 480, "y": 128, "w": 96, "h": 96 }, { "x": 576, "y": 128, "w": 96, "h": 96 }, { "x": 672, "y": 128, "w": 96, "h": 96 }, { "x": 768, "y": 128, "w": 96, "h": 96 }, { "x": 864, "y": 128, "w": 96, "h": 96 }, { "x": 960, "y": 128, "w": 96, "h": 96 }, { "x": 1056, "y": 128, "w": 96, "h": 96 }, { "x": 1152, "y": 128, "w": 96, "h": 96 }, { "x": 1248, "y": 128, "w": 96, "h": 96 }, { "x": 1344, "y": 128, "w": 96, "h": 96 }, { "x": 1440, "y": 128, "w": 96, "h": 96 }] }, "hurricane_south": { "name": "Wirbelsturm, Südhalbkugel: 8 Drehframes, 8 mit Wetterleuchten", "w": 96, "h": 96, "fps": 8, "loop": 8, "layer": "top", "ax": 48, "ay": 48, "anchor": "center", "mouth": null, "frames": [{ "x": 0, "y": 224, "w": 96, "h": 96 }, { "x": 96, "y": 224, "w": 96, "h": 96 }, { "x": 192, "y": 224, "w": 96, "h": 96 }, { "x": 288, "y": 224, "w": 96, "h": 96 }, { "x": 384, "y": 224, "w": 96, "h": 96 }, { "x": 480, "y": 224, "w": 96, "h": 96 }, { "x": 576, "y": 224, "w": 96, "h": 96 }, { "x": 672, "y": 224, "w": 96, "h": 96 }, { "x": 768, "y": 224, "w": 96, "h": 96 }, { "x": 864, "y": 224, "w": 96, "h": 96 }, { "x": 960, "y": 224, "w": 96, "h": 96 }, { "x": 1056, "y": 224, "w": 96, "h": 96 }, { "x": 1152, "y": 224, "w": 96, "h": 96 }, { "x": 1248, "y": 224, "w": 96, "h": 96 }, { "x": 1344, "y": 224, "w": 96, "h": 96 }, { "x": 1440, "y": 224, "w": 96, "h": 96 }] }, "storm_small": { "name": "Sich formender Sturm, Nordhalbkugel", "w": 48, "h": 48, "fps": 6, "loop": 4, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 256, "y": 448, "w": 48, "h": 48 }, { "x": 304, "y": 448, "w": 48, "h": 48 }, { "x": 352, "y": 448, "w": 48, "h": 48 }, { "x": 400, "y": 448, "w": 48, "h": 48 }] }, "storm_small_south": { "name": "Sich formender Sturm, Südhalbkugel", "w": 48, "h": 48, "fps": 6, "loop": 4, "layer": "top", "ax": 24, "ay": 24, "anchor": "center", "mouth": null, "frames": [{ "x": 448, "y": 448, "w": 48, "h": 48 }, { "x": 496, "y": 448, "w": 48, "h": 48 }, { "x": 544, "y": 448, "w": 48, "h": 48 }, { "x": 592, "y": 448, "w": 48, "h": 48 }] }, "lightning": { "name": "Blitzeinschlag: 2 Formen × 6 Frames", "w": 24, "h": 64, "fps": 15, "loop": 12, "layer": "top", "ax": 12, "ay": 63, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 320, "w": 24, "h": 64 }, { "x": 24, "y": 320, "w": 24, "h": 64 }, { "x": 48, "y": 320, "w": 24, "h": 64 }, { "x": 72, "y": 320, "w": 24, "h": 64 }, { "x": 96, "y": 320, "w": 24, "h": 64 }, { "x": 120, "y": 320, "w": 24, "h": 64 }, { "x": 144, "y": 320, "w": 24, "h": 64 }, { "x": 168, "y": 320, "w": 24, "h": 64 }, { "x": 192, "y": 320, "w": 24, "h": 64 }, { "x": 216, "y": 320, "w": 24, "h": 64 }, { "x": 240, "y": 320, "w": 24, "h": 64 }, { "x": 264, "y": 320, "w": 24, "h": 64 }] }, "lightning_glow": { "name": "Glühen am Einschlag", "w": 32, "h": 16, "fps": 12, "loop": 4, "layer": "object", "ax": 16, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 1296, "y": 576, "w": 32, "h": 16 }, { "x": 1328, "y": 576, "w": 32, "h": 16 }, { "x": 1360, "y": 576, "w": 32, "h": 16 }, { "x": 1392, "y": 576, "w": 32, "h": 16 }] }, "rain_veil": { "name": "Regenvorhang: schräg nach links (0–3), nach rechts (4–7)", "w": 32, "h": 32, "fps": 12, "loop": 4, "layer": "top", "ax": 16, "ay": 16, "anchor": "center", "mouth": null, "frames": [{ "x": 976, "y": 448, "w": 32, "h": 32 }, { "x": 1008, "y": 448, "w": 32, "h": 32 }, { "x": 1040, "y": 448, "w": 32, "h": 32 }, { "x": 1072, "y": 448, "w": 32, "h": 32 }, { "x": 1104, "y": 448, "w": 32, "h": 32 }, { "x": 1136, "y": 448, "w": 32, "h": 32 }, { "x": 1168, "y": 448, "w": 32, "h": 32 }, { "x": 1200, "y": 448, "w": 32, "h": 32 }] }, "tornado": { "name": "Tornado-Trichter mit Trümmerkragen", "w": 32, "h": 64, "fps": 12, "loop": 8, "layer": "object", "ax": 16, "ay": 63, "anchor": "foot", "mouth": null, "frames": [{ "x": 288, "y": 320, "w": 32, "h": 64 }, { "x": 320, "y": 320, "w": 32, "h": 64 }, { "x": 352, "y": 320, "w": 32, "h": 64 }, { "x": 384, "y": 320, "w": 32, "h": 64 }, { "x": 416, "y": 320, "w": 32, "h": 64 }, { "x": 448, "y": 320, "w": 32, "h": 64 }, { "x": 480, "y": 320, "w": 32, "h": 64 }, { "x": 512, "y": 320, "w": 32, "h": 64 }] }, "tornado_debris": { "name": "Trümmer im Tornado: 4 Arten × 2 Frames", "w": 8, "h": 8, "fps": 0, "loop": 8, "layer": "object", "ax": 4, "ay": 4, "anchor": "center", "mouth": null, "frames": [{ "x": 232, "y": 596, "w": 8, "h": 8 }, { "x": 240, "y": 596, "w": 8, "h": 8 }, { "x": 248, "y": 596, "w": 8, "h": 8 }, { "x": 256, "y": 596, "w": 8, "h": 8 }, { "x": 264, "y": 596, "w": 8, "h": 8 }, { "x": 272, "y": 596, "w": 8, "h": 8 }, { "x": 280, "y": 596, "w": 8, "h": 8 }, { "x": 288, "y": 596, "w": 8, "h": 8 }] }, "dust_puff": { "name": "Staubwölkchen", "w": 16, "h": 16, "fps": 10, "loop": 5, "layer": "top", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 1424, "y": 576, "w": 16, "h": 16 }, { "x": 1440, "y": 576, "w": 16, "h": 16 }, { "x": 1456, "y": 576, "w": 16, "h": 16 }, { "x": 1472, "y": 576, "w": 16, "h": 16 }, { "x": 1488, "y": 576, "w": 16, "h": 16 }] }, "rubble": { "name": "Trümmer über einer Stadt", "w": 16, "h": 16, "fps": 4, "loop": 2, "layer": "object", "ax": 8, "ay": 15, "anchor": "foot", "mouth": null, "frames": [{ "x": 176, "y": 596, "w": 16, "h": 16 }, { "x": 192, "y": 596, "w": 16, "h": 16 }] }, "fissure": { "name": "Erdriss, flach: 4 Richtungen (−, |, /, \\) × Mitte, Ende, Abzweigung", "w": 16, "h": 16, "fps": 0, "loop": 12, "layer": "object", "ax": 8, "ay": 8, "anchor": "center", "mouth": null, "frames": [{ "x": 1104, "y": 576, "w": 16, "h": 16 }, { "x": 1120, "y": 576, "w": 16, "h": 16 }, { "x": 1136, "y": 576, "w": 16, "h": 16 }, { "x": 1152, "y": 576, "w": 16, "h": 16 }, { "x": 1168, "y": 576, "w": 16, "h": 16 }, { "x": 1184, "y": 576, "w": 16, "h": 16 }, { "x": 1200, "y": 576, "w": 16, "h": 16 }, { "x": 1216, "y": 576, "w": 16, "h": 16 }, { "x": 1232, "y": 576, "w": 16, "h": 16 }, { "x": 1248, "y": 576, "w": 16, "h": 16 }, { "x": 1264, "y": 576, "w": 16, "h": 16 }, { "x": 1280, "y": 576, "w": 16, "h": 16 }] }, "ruin": { "name": "Ruine", "w": 16, "h": 20, "fps": 0, "loop": 3, "layer": "object", "ax": 8, "ay": 19, "anchor": "foot", "mouth": null, "frames": [{ "x": 0, "y": 576, "w": 16, "h": 20 }, { "x": 16, "y": 576, "w": 16, "h": 20 }, { "x": 32, "y": 576, "w": 16, "h": 20 }] }, "whale_great": { "name": "Blauwal: 2 Richtungen × 8 Frames", "w": 48, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 24, "ay": 12, "anchor": "center", "mouth": [40, 12, 45, 13, 8, 13], "frames": [{ "x": 0, "y": 528, "w": 48, "h": 24 }, { "x": 48, "y": 528, "w": 48, "h": 24 }, { "x": 96, "y": 528, "w": 48, "h": 24 }, { "x": 144, "y": 528, "w": 48, "h": 24 }, { "x": 192, "y": 528, "w": 48, "h": 24 }, { "x": 240, "y": 528, "w": 48, "h": 24 }, { "x": 288, "y": 528, "w": 48, "h": 24 }, { "x": 336, "y": 528, "w": 48, "h": 24 }, { "x": 384, "y": 528, "w": 48, "h": 24 }, { "x": 432, "y": 528, "w": 48, "h": 24 }, { "x": 480, "y": 528, "w": 48, "h": 24 }, { "x": 528, "y": 528, "w": 48, "h": 24 }, { "x": 576, "y": 528, "w": 48, "h": 24 }, { "x": 624, "y": 528, "w": 48, "h": 24 }, { "x": 672, "y": 528, "w": 48, "h": 24 }, { "x": 720, "y": 528, "w": 48, "h": 24 }] }, "whale_baleen": { "name": "Buckelwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [30, 10, 35, 11, 8, 11], "frames": [{ "x": 768, "y": 528, "w": 40, "h": 24 }, { "x": 808, "y": 528, "w": 40, "h": 24 }, { "x": 848, "y": 528, "w": 40, "h": 24 }, { "x": 888, "y": 528, "w": 40, "h": 24 }, { "x": 928, "y": 528, "w": 40, "h": 24 }, { "x": 968, "y": 528, "w": 40, "h": 24 }, { "x": 1008, "y": 528, "w": 40, "h": 24 }, { "x": 1048, "y": 528, "w": 40, "h": 24 }, { "x": 1088, "y": 528, "w": 40, "h": 24 }, { "x": 1128, "y": 528, "w": 40, "h": 24 }, { "x": 1168, "y": 528, "w": 40, "h": 24 }, { "x": 1208, "y": 528, "w": 40, "h": 24 }, { "x": 1248, "y": 528, "w": 40, "h": 24 }, { "x": 1288, "y": 528, "w": 40, "h": 24 }, { "x": 1328, "y": 528, "w": 40, "h": 24 }, { "x": 1368, "y": 528, "w": 40, "h": 24 }] }, "whale_sperm": { "name": "Pottwal: 2 Richtungen × 8 Frames", "w": 40, "h": 24, "fps": 8, "loop": 16, "layer": "object", "ax": 20, "ay": 12, "anchor": "center", "mouth": [37, 8, 37, 12, 8, 12], "frames": [{ "x": 0, "y": 552, "w": 40, "h": 24 }, { "x": 40, "y": 552, "w": 40, "h": 24 }, { "x": 80, "y": 552, "w": 40, "h": 24 }, { "x": 120, "y": 552, "w": 40, "h": 24 }, { "x": 160, "y": 552, "w": 40, "h": 24 }, { "x": 200, "y": 552, "w": 40, "h": 24 }, { "x": 240, "y": 552, "w": 40, "h": 24 }, { "x": 280, "y": 552, "w": 40, "h": 24 }, { "x": 320, "y": 552, "w": 40, "h": 24 }, { "x": 360, "y": 552, "w": 40, "h": 24 }, { "x": 400, "y": 552, "w": 40, "h": 24 }, { "x": 440, "y": 552, "w": 40, "h": 24 }, { "x": 480, "y": 552, "w": 40, "h": 24 }, { "x": 520, "y": 552, "w": 40, "h": 24 }, { "x": 560, "y": 552, "w": 40, "h": 24 }, { "x": 600, "y": 552, "w": 40, "h": 24 }] }, "whale_blow": { "name": "Blas eines Wals", "w": 24, "h": 24, "fps": 10, "loop": 8, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 1024, "y": 552, "w": 24, "h": 24 }, { "x": 1048, "y": 552, "w": 24, "h": 24 }, { "x": 1072, "y": 552, "w": 24, "h": 24 }, { "x": 1096, "y": 552, "w": 24, "h": 24 }, { "x": 1120, "y": 552, "w": 24, "h": 24 }, { "x": 1144, "y": 552, "w": 24, "h": 24 }, { "x": 1168, "y": 552, "w": 24, "h": 24 }, { "x": 1192, "y": 552, "w": 24, "h": 24 }] }, "whale_blow_sperm": { "name": "Blas des Pottwals, schräg nach vorn: 2 Richtungen × 8 Frames", "w": 24, "h": 24, "fps": 10, "loop": 16, "layer": "object", "ax": 12, "ay": 23, "anchor": "foot", "mouth": null, "frames": [{ "x": 640, "y": 552, "w": 24, "h": 24 }, { "x": 664, "y": 552, "w": 24, "h": 24 }, { "x": 688, "y": 552, "w": 24, "h": 24 }, { "x": 712, "y": 552, "w": 24, "h": 24 }, { "x": 736, "y": 552, "w": 24, "h": 24 }, { "x": 760, "y": 552, "w": 24, "h": 24 }, { "x": 784, "y": 552, "w": 24, "h": 24 }, { "x": 808, "y": 552, "w": 24, "h": 24 }, { "x": 832, "y": 552, "w": 24, "h": 24 }, { "x": 856, "y": 552, "w": 24, "h": 24 }, { "x": 880, "y": 552, "w": 24, "h": 24 }, { "x": 904, "y": 552, "w": 24, "h": 24 }, { "x": 928, "y": 552, "w": 24, "h": 24 }, { "x": 952, "y": 552, "w": 24, "h": 24 }, { "x": 976, "y": 552, "w": 24, "h": 24 }, { "x": 1000, "y": 552, "w": 24, "h": 24 }] }, "whale_wake": { "name": "Bugwelle (Osten, Westen) und Fußabdruck-Ring", "w": 24, "h": 16, "fps": 8, "loop": 4, "layer": "object", "ax": 12, "ay": 8, "anchor": "center", "mouth": [18, 7], "frames": [{ "x": 816, "y": 576, "w": 24, "h": 16 }, { "x": 840, "y": 576, "w": 24, "h": 16 }, { "x": 864, "y": 576, "w": 24, "h": 16 }, { "x": 888, "y": 576, "w": 24, "h": 16 }, { "x": 912, "y": 576, "w": 24, "h": 16 }, { "x": 936, "y": 576, "w": 24, "h": 16 }, { "x": 960, "y": 576, "w": 24, "h": 16 }, { "x": 984, "y": 576, "w": 24, "h": 16 }, { "x": 1008, "y": 576, "w": 24, "h": 16 }, { "x": 1032, "y": 576, "w": 24, "h": 16 }, { "x": 1056, "y": 576, "w": 24, "h": 16 }, { "x": 1080, "y": 576, "w": 24, "h": 16 }] }, "dolphin_leap": { "name": "Delfinsprung: 2 Richtungen × 16 Frames", "w": 32, "h": 24, "fps": 12, "loop": 32, "layer": "object", "ax": 16, "ay": 12, "anchor": "center", "mouth": [6, 18], "frames": [{ "x": 416, "y": 496, "w": 32, "h": 24 }, { "x": 448, "y": 496, "w": 32, "h": 24 }, { "x": 480, "y": 496, "w": 32, "h": 24 }, { "x": 512, "y": 496, "w": 32, "h": 24 }, { "x": 544, "y": 496, "w": 32, "h": 24 }, { "x": 576, "y": 496, "w": 32, "h": 24 }, { "x": 608, "y": 496, "w": 32, "h": 24 }, { "x": 640, "y": 496, "w": 32, "h": 24 }, { "x": 672, "y": 496, "w": 32, "h": 24 }, { "x": 704, "y": 496, "w": 32, "h": 24 }, { "x": 736, "y": 496, "w": 32, "h": 24 }, { "x": 768, "y": 496, "w": 32, "h": 24 }, { "x": 800, "y": 496, "w": 32, "h": 24 }, { "x": 832, "y": 496, "w": 32, "h": 24 }, { "x": 864, "y": 496, "w": 32, "h": 24 }, { "x": 896, "y": 496, "w": 32, "h": 24 }, { "x": 928, "y": 496, "w": 32, "h": 24 }, { "x": 960, "y": 496, "w": 32, "h": 24 }, { "x": 992, "y": 496, "w": 32, "h": 24 }, { "x": 1024, "y": 496, "w": 32, "h": 24 }, { "x": 1056, "y": 496, "w": 32, "h": 24 }, { "x": 1088, "y": 496, "w": 32, "h": 24 }, { "x": 1120, "y": 496, "w": 32, "h": 24 }, { "x": 1152, "y": 496, "w": 32, "h": 24 }, { "x": 1184, "y": 496, "w": 32, "h": 24 }, { "x": 1216, "y": 496, "w": 32, "h": 24 }, { "x": 1248, "y": 496, "w": 32, "h": 24 }, { "x": 1280, "y": 496, "w": 32, "h": 24 }, { "x": 1312, "y": 496, "w": 32, "h": 24 }, { "x": 1344, "y": 496, "w": 32, "h": 24 }, { "x": 1376, "y": 496, "w": 32, "h": 24 }, { "x": 1408, "y": 496, "w": 32, "h": 24 }] } }, "textures": { "lava_hot": { "name": "Lava, glühend", "size": 64, "fps": 8, "rim": [142, 47, 51], "frames": [{ "x": 800, "y": 320, "w": 64, "h": 64 }, { "x": 864, "y": 320, "w": 64, "h": 64 }, { "x": 928, "y": 320, "w": 64, "h": 64 }, { "x": 992, "y": 320, "w": 64, "h": 64 }] }, "lava_dim": { "name": "Lava, dunkelrot", "size": 64, "fps": 6, "rim": [63, 44, 39], "frames": [{ "x": 544, "y": 320, "w": 64, "h": 64 }, { "x": 608, "y": 320, "w": 64, "h": 64 }, { "x": 672, "y": 320, "w": 64, "h": 64 }, { "x": 736, "y": 320, "w": 64, "h": 64 }] }, "lava_crust": { "name": "Lavakruste mit Glutrissen", "size": 64, "fps": 3, "rim": [61, 59, 69], "frames": [{ "x": 256, "y": 384, "w": 64, "h": 64 }, { "x": 320, "y": 384, "w": 64, "h": 64 }] }, "embers": { "name": "Glut unter den Flammen", "size": 64, "fps": 4, "rim": [63, 44, 39], "frames": [{ "x": 1056, "y": 320, "w": 64, "h": 64 }, { "x": 1120, "y": 320, "w": 64, "h": 64 }] }, "ground_burnt": { "name": "Verbrannte Erde", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 512, "y": 384, "w": 64, "h": 64 }] }, "ground_crater": { "name": "Kraterboden", "size": 64, "fps": 0, "rim": [61, 59, 69], "frames": [{ "x": 576, "y": 384, "w": 64, "h": 64 }] }, "ground_scorched": { "name": "Versengter Boden", "size": 64, "fps": 0, "rim": [63, 44, 39], "frames": [{ "x": 640, "y": 384, "w": 64, "h": 64 }] }, "ground_ash": { "name": "Asche", "size": 64, "fps": 0, "rim": [93, 90, 98], "frames": [{ "x": 448, "y": 384, "w": 64, "h": 64 }] }, "fallout_film": { "name": "Fahler Schleier (Fallout)", "size": 64, "fps": 0, "rim": null, "frames": [{ "x": 384, "y": 384, "w": 64, "h": 64 }] }, "flood_mud": { "name": "Rückströmung, schlammig", "size": 64, "fps": 4, "rim": [125, 93, 67], "frames": [{ "x": 1312, "y": 320, "w": 64, "h": 64 }, { "x": 1376, "y": 320, "w": 64, "h": 64 }] }, "flood_shallow": { "name": "Flutwasser, flach und trüb", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 0, "y": 384, "w": 64, "h": 64 }, { "x": 64, "y": 384, "w": 64, "h": 64 }] }, "flood_water": { "name": "Flutwasser", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 128, "y": 384, "w": 64, "h": 64 }, { "x": 192, "y": 384, "w": 64, "h": 64 }] }, "flood_deep": { "name": "Flutwasser, tief", "size": 64, "fps": 4, "rim": [128, 200, 204], "frames": [{ "x": 1184, "y": 320, "w": 64, "h": 64 }, { "x": 1248, "y": 320, "w": 64, "h": 64 }] }, "wet_ground": { "name": "Nasser Boden (Pfützen)", "size": 128, "fps": 0, "rim": null, "frames": [{ "x": 0, "y": 0, "w": 128, "h": 128 }] } } };
+    SE.FX_ATLAS_PNG = 'data:image/png;base64,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';
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — the effect atlas on screen
@@ -38248,6 +39957,31 @@ var SE;
 (function (SE) {
     const scarGround = (kind) => (w, i) => w.hazards.scar[i] === kind && SE.scarShowsGround(w, i);
     const tileIs = (t) => (w, i) => w.hazards.tile[i] === t;
+    /** Share of the other soaked tiles that show puddles too. */
+    const PUDDLE_EXTRA = 0.2;
+    /**
+     * Soaked ground shows puddles where water gathers: in hollows (lower than
+     * its four neighbours on average), along rivers and in a few other spots.
+     * The edge masks fray these tiles into patches, so a storm's wet strip is
+     * no even carpet of puddles.
+     */
+    const puddled = (w, i) => {
+        if (w.hazards.tile[i] !== SE.HazardTile.Wet)
+            return false;
+        if (w.riverLevel[i] > 0 || SE.landHash(i, 0, 91) < PUDDLE_EXTRA)
+            return true;
+        const x = i % SE.GRID_W;
+        const y = (i / SE.GRID_W) | 0;
+        let sum = 0;
+        let n = 0;
+        for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+            if (y + dy < 0 || y + dy >= SE.GRID_H)
+                continue;
+            sum += w.elevation[SE.idx(SE.wrapX(x + dx), y + dy)];
+            n++;
+        }
+        return w.elevation[i] <= sum / n;
+    };
     const lavaAt = (stage) => (w, i) => w.hazards.tile[i] === SE.HazardTile.Lava && SE.lavaStage(w.hazards.level[i]) === stage;
     /**
      * World tick of the map's base picture. It redraws at most every 250 ms, so freshly settled lava keeps
@@ -38279,7 +40013,7 @@ var SE;
         { tex: 'ground_scorched', has: scarGround(SE.ScarKind.Scorched) },
         { tex: 'ground_burnt', has: scarGround(SE.ScarKind.Burnt) },
         { tex: 'ground_crater', has: scarGround(SE.ScarKind.Crater) },
-        { tex: 'wet_ground', has: tileIs(SE.HazardTile.Wet) },
+        { tex: 'wet_ground', has: puddled },
         { tex: 'flood_shallow', has: floodIs(1 /* FloodLook.Shallow */) },
         { tex: 'flood_water', has: floodIs(2 /* FloodLook.Water */) },
         { tex: 'flood_deep', has: floodIs(3 /* FloodLook.Deep */) },
@@ -39751,54 +41485,18 @@ var SE;
     };
 })(SE || (SE = {}));
 /* =============================================================================
- * SimEarth 2.0 — tidal wave and hurricane on screen
+ * SimEarth 2.0 — tidal wave on screen
  * -----------------------------------------------------------------------------
- * docs/ereignisse-spec.md §3.4, §3.5:
- *   tidal wave  omen: the sea draws back round the tile, foam left behind;
- *               it fades as the wave sets out, the water heaping up where
- *               it leaves. A wave set off by a quake starts as a dome of
- *               water lifting, one from a meteor as a crater in the sea.
- *               The travelling wave itself is the sea surface (fxseawave.ts),
- *               its coast the shore (fxshore.ts); flood water is ground
- *               (fxground.ts), the driftwood in the mud a scar object.
- *   hurricane   omen: a small spiral gathers, the first rain falls; then the
- *               spiral cloud with its eye turns over the eye's tile for as
- *               long as the storm moves, gliding between its tick positions
- *               in real time, rain streaks under it; its tornadoes glide
- *               inland with dust whirling round their feet. Wet ground and
- *               fallen trees are ground and scar objects again.
+ * docs/ereignisse-spec.md §3.5: omen: the sea draws back round the tile, foam
+ * left behind; it fades as the wave sets out, the water heaping up where it
+ * leaves. A wave set off by a quake starts as a dome of water lifting, one
+ * from a meteor as a crater in the sea. The travelling wave itself is the sea
+ * surface (fxseawave.ts), its coast the shore (fxshore.ts); flood water is
+ * ground (fxground.ts), the driftwood in the mud a scar object. The hurricane
+ * is fxstorm.ts.
  * ========================================================================== */
 var SE;
 (function (SE) {
-    const RAIN = [SE.fxColor('ice', 4), SE.fxColor('ice', 3), SE.fxColor('ice', 2)];
-    /** Below this strength a storm shows as the small spiral. */
-    const STORM_BIG = 1.5;
-    /** Art pixels round the eye where rain falls, reaching past the cloud's edge, and streaks a second per strength. */
-    const RAIN_RADIUS = 26;
-    const RAIN_RATE = 30;
-    const SPENT_MS = 800;
-    const DUST = [SE.fxColor('sand', 1), SE.fxColor('soil', 2), SE.fxColor('soil', 1)];
-    /** How many of something that happens `rate` times a second fall into this frame. */
-    function due(rate, dt) {
-        const n = rate * dt;
-        return Math.floor(n) + (Math.random() < n - Math.floor(n) ? 1 : 0);
-    }
-    function frameOf(id, now) {
-        const sp = SE.FX_MANIFEST.sprites[id];
-        return sp ? Math.floor(now / (1000 / Math.max(1, sp.fps))) % sp.loop : 0;
-    }
-    /** Rain streaks, two pixels falling together, over a disc round (x, y). */
-    function rain(s, x, y, radius, rate) {
-        for (let k = due(rate, s.dt); k > 0; k--) {
-            const a = Math.random() * Math.PI * 2;
-            const r = Math.sqrt(Math.random()) * radius;
-            const px = x + Math.cos(a) * r;
-            const py = y + Math.sin(a) * r * 0.85;
-            const life = 0.16 + Math.random() * 0.14;
-            s.particles.spawn(px, py, -10, 80, life, 0, RAIN);
-            s.particles.spawn(px, py + 1, -10, 80, life, 0, RAIN);
-        }
-    }
     /** Art px radius of the drawdown round a tidal wave's origin, its omen `p` of the way. */
     function drawRadius(p) {
         return 4 + 12 * (1 - (1 - p) * (1 - p));
@@ -39852,8 +41550,91 @@ var SE;
             }
         },
     };
-    /** Each storm's eye at the last frame, in art pixels: its main animation rains there. */
-    const eyes = new Map();
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the hurricane on screen
+ * -----------------------------------------------------------------------------
+ * docs/ereignisse-spec.md §3.4. Omen: a small spiral gathers, the first rain
+ * falls. Then the great spiral cloud turns over the eye's tile for as long as
+ * the storm moves, gliding between its tick positions in real time:
+ *   rain       curtains of rain under the bands, slanting with the wind round
+ *              the eye, and streaks falling between them
+ *   lightning  the cloud flickers from inside; the bolts the simulation
+ *              decides on (stormStrikes) come down at their moment in the tick
+ *              with a glow, sparks and thunder where they hit
+ *   tornadoes  each funnel tears soil out of the ground round its foot, debris
+ *              spirals up round it and is flung out, flying off in an arc and
+ *              landing in a puff of dust
+ * Draw order on the top layer: rain curtains, then the cloud (bands hide the
+ * rain under them), then bolts, funnels and debris, so they show through it.
+ * "Effekte reduzieren": no flicker, the bolts only in their dim frames.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Below this strength a storm shows as the small spiral. */
+    const STORM_BIG = 1.5;
+    /** Art pixels round the eye where rain falls, and streaks a second per strength. */
+    const RAIN_RADIUS = 44;
+    const RAIN_RATE = 60;
+    const RAIN = [SE.fxColor('ice', 4), SE.fxColor('ice', 3), SE.fxColor('ice', 2)];
+    /** Rain curtains per strength, their reach round the eye (art px) and how fast they turn with the storm (rad/s). */
+    const VEILS_PER_STRENGTH = 2;
+    const VEIL_RADIUS_MIN = 16;
+    const VEIL_RADIUS_MAX = 40;
+    const VEIL_TURN = 0.35;
+    const VEIL_FPS = 12;
+    const SPENT_MS = 800;
+    /** Sheet lightning inside the cloud: chance per window and strength, window and flash length in ms. */
+    const FLICKER_CHANCE = 0.1;
+    const FLICKER_WINDOW_MS = 330;
+    const FLICKER_MS = 90;
+    /** A bolt: frames per shape, its speed, when in the tick it may come down (shares of the tick). */
+    const BOLT_FRAMES = 6;
+    const BOLT_FPS = 15;
+    const BOLT_FROM = 0.05;
+    const BOLT_SPAN = 0.8;
+    /** Frames of a bolt that are the strike itself, and the calm ones shown with reduced effects. */
+    const BOLT_STRIKE = 1;
+    const BOLT_CALM = [3, 3, 3, 3, 5, 5];
+    /** How long the cloud lights up round a strike, ms; at least this long between two claps of thunder. */
+    const BOLT_FLASH_MS = 120;
+    const THUNDER_GAP_MS = 250;
+    /** Ground glow length, ms (4 frames). */
+    const GLOW_MS = 333;
+    const SPARKS = 6;
+    const DUST = [SE.fxColor('sand', 1), SE.fxColor('soil', 2), SE.fxColor('soil', 1)];
+    const SOIL = [SE.fxColor('soil', 3), SE.fxColor('soil', 2), SE.fxColor('soil', 1)];
+    /**
+     * Tornado: the funnel of the `tornado` sprite (tools/fx/twister.js), from its foot up to the wall cloud, and its
+     * half width at the foot and the top, art px: it stays a rope most of the way and flares under the cloud.
+     * Debris orbits it, rising per second, turning the way its stripes turn (counterclockwise seen from above).
+     */
+    const FUNNEL_H = 50;
+    const FUNNEL_FOOT_R = 2.5;
+    const FUNNEL_TOP_R = 9;
+    const FUNNEL_FLARE = 2.5;
+    /** Inside the dust collar at the foot, debris circles at least this far out, so it shows outside the dust. */
+    const COLLAR_H = 6;
+    const COLLAR_R = 9;
+    const DEBRIS_SLOTS = 12;
+    const DEBRIS_RISE = 22;
+    const DEBRIS_SPIN = 6;
+    /** The far side of the orbit is squashed into the view's slight tilt. */
+    const ORBIT_TILT = 0.25;
+    /** Flung debris: speed out (art px/s), up, gravity, and soil torn out of the ground per second. */
+    const FLING_OUT = 30;
+    const FLING_UP = 22;
+    const GRAVITY = 70;
+    const TEAR_RATE = 18;
+    /** How many of something that happens `rate` times a second fall into this frame. */
+    function due(rate, dt) {
+        const n = rate * dt;
+        return Math.floor(n) + (Math.random() < n - Math.floor(n) ? 1 : 0);
+    }
+    function frameOf(id, now) {
+        const sp = SE.FX_MANIFEST.sprites[id];
+        return sp ? Math.floor(now / (1000 / Math.max(1, sp.fps))) % sp.loop : 0;
+    }
     /** The centre between the last two tiles of `path`, `phase` of the way. */
     function eyeAt(path, phase) {
         const n = path.length;
@@ -39869,58 +41650,243 @@ var SE;
         const dy = ((b / SE.GRID_W) | 0) - ay;
         return [(ax + dx * phase) * 16 + 8, (ay + dy * phase) * 16 + 8];
     }
-    /** The small spiral turning the right way for its hemisphere. */
-    function smallStorm(y) {
-        return SE.latitudeDeg(y) < 0 ? 'storm_small_south' : 'storm_small';
+    /**
+     * The storm's eye in world art pixels, `phase` of the way from the last tick to this one along its real track
+     * (StormTrack.offsets): the poleward drift and the slow turn are gathered smoothly, so the eye glides on evenly
+     * instead of lurching when its tile steps.
+     */
+    function stormEye(st, phase) {
+        const at = (k) => {
+            const i = st.path[k];
+            return [(i % SE.GRID_W + 0.5 + (st.offsets[2 * k] ?? 0)) * 16, (((i / SE.GRID_W) | 0) + 0.5 + (st.offsets[2 * k + 1] ?? 0)) * 16];
+        };
+        const n = st.path.length;
+        const [ax, ay] = at(Math.max(0, n - 2));
+        const [bx, by] = at(n - 1);
+        const span = SE.GRID_W * 16;
+        let dx = bx - ax;
+        if (dx > span / 2)
+            dx -= span;
+        else if (dx < -span / 2)
+            dx += span;
+        return [ax + dx * phase, ay + (by - ay) * phase];
     }
-    /** The storm's funnels gliding inland, dust whirling round their feet; one lifting fades into a burst of dust. */
+    const southern = (y) => SE.latitudeDeg(y) < 0;
+    const smallStorm = (y) => (southern(y) ? 'storm_small_south' : 'storm_small');
+    /** Rain streaks, two pixels falling together, over a disc round (x, y), blown sideways by the wind turning round the eye. */
+    function rain(s, x, y, radius, rate) {
+        for (let k = due(rate, s.dt); k > 0; k--) {
+            const a = Math.random() * Math.PI * 2;
+            const r = Math.sqrt(Math.random()) * radius;
+            const px = x + Math.cos(a) * r;
+            const py = y + Math.sin(a) * r * 0.85;
+            // The wind turns round the eye: its sideways pull is the tangent's x.
+            const wind = Math.sin(a) * 26 * (southern(Math.floor(y / 16)) ? -1 : 1);
+            const life = 0.16 + Math.random() * 0.14;
+            s.particles.spawn(px, py, wind, 80, life, 0, RAIN);
+            s.particles.spawn(px, py + 1, wind, 80, life, 0, RAIN);
+        }
+    }
+    /** Curtains of rain round the eye, turning with the storm; they slant the way the wind blows where they hang. */
+    function veils(s, h, x, y, strength) {
+        const sp = SE.FX_MANIFEST.sprites.rain_veil;
+        if (!sp)
+            return;
+        const south = southern(Math.floor(y / 16));
+        const turn = (south ? 1 : -1) * VEIL_TURN * (s.now / 1000);
+        const n = Math.round(VEILS_PER_STRENGTH * strength);
+        for (let j = 0; j < n; j++) {
+            const a = (j / n) * Math.PI * 2 + turn + SE.landHash(h.id, j, 81) * 0.6;
+            const r = VEIL_RADIUS_MIN + (VEIL_RADIUS_MAX - VEIL_RADIUS_MIN) * SE.landHash(h.id, j, 82);
+            const right = (Math.sin(a) > 0) !== south;
+            const f = (right ? 4 : 0) + (Math.floor(s.now / (1000 / VEIL_FPS) + j) & 3);
+            const vx = x + Math.cos(a) * r;
+            const vy = y + Math.sin(a) * r * 0.85;
+            s.add({ id: 'rain_veil', frame: f, x: vx, y: vy, foot: -2e6 + vy });
+        }
+    }
+    /** Bolts on their way down or glowing out, in world art pixels. */
+    let bolts = [];
+    /** When each storm's cloud last lit up from a strike. */
+    const lit = new Map();
+    let lastThunder = 0;
+    /** Thunder for a strike in view, louder the closer the camera. */
+    function thunder(s) {
+        if (s.now - lastThunder < THUNDER_GAP_MS)
+            return;
+        lastThunder = s.now;
+        SE.playSfx('thunder', SE.clamp(s.pixel / 2, 0.35, 1));
+    }
+    /** The strikes the simulation decided on for this tick, each coming down at its own moment in it. */
+    function strikes(s, world, h) {
+        const tick = world.ticks;
+        const tiles = SE.stormStrikes(world, h, tick);
+        for (let k = 0; k < tiles.length; k++) {
+            const at = BOLT_FROM + BOLT_SPAN * SE.landHash(h.id, tick * 8 + k, 77);
+            if (s.phase < at)
+                continue;
+            const i = tiles[k];
+            const tx = i % SE.GRID_W;
+            const ty = (i / SE.GRID_W) | 0;
+            if (!s.once(`${h.id}:bolt:${tick}:${k}`) || !s.sees(tx, ty))
+                continue;
+            const x = tx * 16 + 3 + Math.floor(SE.landHash(i, tick, 78) * 10);
+            const y = ty * 16 + 4 + Math.floor(SE.landHash(i, tick, 79) * 10);
+            bolts.push({ x, y, born: s.now, shape: SE.landHash(i, tick, 80) < 0.5 ? 0 : 1, storm: h.id, sea: world.isWater(i) });
+        }
+    }
+    /** Every bolt in its current frame; the strike frame lights the cloud, throws sparks and claps thunder. */
+    function drawBolts(s) {
+        const ms = 1000 / BOLT_FPS;
+        bolts = bolts.filter((b) => s.now - b.born < Math.max(BOLT_FRAMES * ms, ms * BOLT_STRIKE + GLOW_MS));
+        for (const b of bolts) {
+            const age = s.now - b.born;
+            const f = Math.floor(age / ms);
+            if (f === BOLT_STRIKE && s.once(`strike:${b.storm}:${b.x}:${b.y}:${b.born}`)) {
+                lit.set(b.storm, s.now);
+                thunder(s);
+                for (let k = 0; k < SPARKS; k++) {
+                    s.particles.spawn(b.x, b.y - 1, (Math.random() - 0.5) * 40, -10 - Math.random() * 25, 0.3 + Math.random() * 0.3, 90, SE.FX_EMBER);
+                }
+            }
+            if (f < BOLT_FRAMES)
+                s.add({ id: 'lightning', frame: b.shape * BOLT_FRAMES + (s.reduce ? BOLT_CALM[f] : f), x: b.x, y: b.y, foot: b.y });
+            const g = age - ms * BOLT_STRIKE;
+            const glow = Math.floor((g / GLOW_MS) * 4);
+            if (g >= 0 && g < GLOW_MS && (!b.sea || glow < 2))
+                s.add({ id: 'lightning_glow', frame: glow, x: b.x, y: b.y, foot: b.y });
+        }
+    }
+    /** Whether the cloud shows its lit frames now: right after a strike, or sheet lightning flickering inside it. */
+    function flickers(s, h, strength) {
+        if (s.reduce)
+            return false;
+        if (s.now - (lit.get(h.id) ?? -1e9) < BOLT_FLASH_MS)
+            return true;
+        const window = Math.floor(s.now / FLICKER_WINDOW_MS);
+        return s.now - window * FLICKER_WINDOW_MS < FLICKER_MS && SE.landHash(h.id, window, 83) < FLICKER_CHANCE * strength;
+    }
+    /** Debris thrown out of a funnel, flying until it lands. */
+    let flung = [];
+    /** Radius of the funnel at height z above its foot. */
+    function funnelRadius(z) {
+        return FUNNEL_FOOT_R + (FUNNEL_TOP_R - FUNNEL_FOOT_R) * Math.pow(SE.clamp(z / FUNNEL_H, 0, 1), FUNNEL_FLARE);
+    }
+    /**
+     * A funnel at foot (x, y): soil torn out round its foot, debris spiralling
+     * up round it (behind the funnel on the far side, in front on the near one)
+     * and flung out when it reaches its height.
+     */
+    function twister(s, key, seed, x, y) {
+        // Funnel and debris are object sprites put on the top layer, so the cloud's bands don't hide them.
+        s.tops.push({ id: 'tornado', frame: frameOf('tornado', s.now + seed * 37), x, y, foot: y });
+        for (let k = due(TEAR_RATE, s.dt); k > 0; k--) {
+            const a = Math.random() * Math.PI * 2;
+            const r = 7 + Math.random() * 5;
+            const px = x + Math.cos(a) * r;
+            const py = y + Math.sin(a) * r * ORBIT_TILT;
+            s.particles.spawn(px, py, (x - px) * 2.2, -10 - Math.random() * 14, 0.35 + Math.random() * 0.25, 0, SOIL);
+        }
+        const sp = SE.FX_MANIFEST.sprites.tornado_debris;
+        if (!sp)
+            return;
+        const t = s.now / 1000;
+        for (let k = 0; k < DEBRIS_SLOTS; k++) {
+            const top = FUNNEL_H * (0.45 + 0.5 * SE.landHash(seed, k, 84));
+            const cycle = top / DEBRIS_RISE;
+            const run = t / cycle + SE.landHash(seed, k, 85);
+            const lap = Math.floor(run);
+            const z = (run - lap) * top;
+            const a = SE.landHash(seed, k, 86) * Math.PI * 2 - DEBRIS_SPIN * t;
+            let r = funnelRadius(z) + 2 + 3 * SE.landHash(seed, k, 87);
+            if (z < COLLAR_H)
+                r = Math.max(r, COLLAR_R);
+            const kind = Math.floor(SE.landHash(seed, k, 88) * 4);
+            const dx = Math.cos(a) * r;
+            const near = Math.sin(a) > 0;
+            const tumble = (Math.floor(t * 8 + k) & 1);
+            s.tops.push({ id: 'tornado_debris', frame: kind * 2 + tumble, x: x + dx, y: y - z + Math.sin(a) * r * ORBIT_TILT, foot: y + (near ? 1 : -1) });
+            // At the top of its climb the piece is flung out along its orbit and flies off.
+            // On the orbit a turns by −spin per second, so the piece moves along (sin a, −cos a): flung out that way.
+            if (z > top * 0.92 && s.once(`${key}:fling:${k}:${lap}`)) {
+                const out = FLING_OUT * (0.7 + 0.6 * Math.random());
+                flung.push({
+                    x: x + dx, y: y + Math.sin(a) * r * ORBIT_TILT, z,
+                    vx: Math.sin(a) * out + Math.cos(a) * 8, vy: (-Math.cos(a) * out + Math.sin(a) * 8) * 0.5,
+                    vz: FLING_UP * Math.random(), kind, born: s.now,
+                });
+            }
+        }
+    }
+    /** Flung debris falls in its arc and lands in a puff of dust. */
+    function drawFlung(s) {
+        const dt = s.dt;
+        flung = flung.filter((p) => {
+            p.vz -= GRAVITY * dt;
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.z += p.vz * dt;
+            if (p.z <= 0) {
+                for (let k = 0; k < 4; k++)
+                    s.particles.spawn(p.x, p.y, (Math.random() - 0.5) * 16, -4 - Math.random() * 6, 0.3 + Math.random() * 0.2, 20, DUST);
+                return false;
+            }
+            const tumble = Math.floor((s.now - p.born) / 90) & 1;
+            s.tops.push({ id: 'tornado_debris', frame: p.kind * 2 + tumble, x: p.x, y: p.y - p.z, foot: p.y });
+            return true;
+        });
+    }
+    /** The storm's funnels gliding inland; one lifting throws out what it carries in a burst of dust. */
     function tornadoes(s, h, st, phase) {
         for (const t of st.tornadoes) {
             const [x, cy] = eyeAt(t.path, phase);
             if (!s.sees(SE.wrapX(Math.floor(x / 16)), Math.floor(cy / 16)))
                 continue;
             const y = cy + 7;
+            const key = `${h.id}:${t.path[0]}`;
             if (t.left <= 0 && phase > 0.75) {
-                if (s.once(`${h.id}:lift:${t.path[0]}`))
+                if (s.once(`${key}:lift`)) {
                     for (let k = 0; k < 10; k++)
                         s.particles.spawn(x, y - 2, (Math.random() - 0.5) * 30, -8 - Math.random() * 12, 0.5 + Math.random() * 0.4, 20, DUST);
+                    for (let k = 0; k < 5; k++) {
+                        const a = Math.random() * Math.PI * 2;
+                        flung.push({ x, y, z: 10 + Math.random() * 30, vx: Math.cos(a) * FLING_OUT, vy: Math.sin(a) * FLING_OUT * 0.4, vz: 10, kind: k & 3, born: s.now });
+                    }
+                }
                 continue;
             }
             // One roar per storm's touchdown, even when it sets down two funnels.
             if (s.once(`${h.id}:tornado-sound`))
                 SE.playSfx('tornado');
-            // Each funnel turns out of step with the others.
-            s.add({ id: 'tornado', frame: frameOf('tornado', s.now + t.path[0] * 37), x, y, foot: y });
-            for (let k = due(14, s.dt); k > 0; k--) {
-                const side = Math.random() < 0.5 ? -1 : 1;
-                s.particles.spawn(x + side * (3 + Math.random() * 3), y - Math.random() * 3, side * (8 + Math.random() * 10), -6 - Math.random() * 10, 0.4 + Math.random() * 0.3, 20, DUST);
-            }
+            twister(s, key, t.path[0], x, y);
         }
     }
+    /** How loud the storm's wind should be, 0..1 before the zoom: the strongest storm in view; `at` when last measured. */
+    SE.STORM_SOUND = { presence: 0, at: -1e9 };
     SE.FX_SCRIPTS[SE.EventKind.Hurricane] = {
+        reset() {
+            bolts = [];
+            flung = [];
+            lit.clear();
+        },
         omen(s, x, y, t) {
             const cx = x * 16 + 8;
             const cy = y * 16 + 8;
             const id = smallStorm(y);
-            s.add({ id, frame: frameOf(id, s.now), x: cx, y: cy, foot: cy + 16 });
-            rain(s, cx, cy, 14, (RAIN_RATE * 2 * t) / SE.HAZARD_OMEN_MS[SE.EventKind.Hurricane]);
+            s.add({ id, frame: frameOf(id, s.now), x: cx, y: cy, foot: -1e6 + cy });
+            rain(s, cx, cy, 20, (RAIN_RATE * t) / SE.HAZARD_OMEN_MS[SE.EventKind.Hurricane]);
         },
-        main(s, st) {
-            // live() draws the storm, which knows where the eye has gone; its first seconds pour.
-            const at = eyes.get(st.id);
-            if (at)
-                rain(s, at[0], at[1], RAIN_RADIUS, RAIN_RATE * 2);
-        },
+        // live() draws the storm, which knows where the eye has gone.
+        main() { },
         live(s, world) {
             const phase = s.phase;
-            eyes.clear();
+            let presence = 0;
             for (const h of world.hazards.list) {
                 const st = h.storm;
                 if (!st)
                     continue;
-                const [x, y] = eyeAt(st.path, st.moving ? phase : 1);
+                const [x, y] = stormEye(st, st.moving ? phase : 1);
                 tornadoes(s, h, st, phase);
-                eyes.set(h.id, [x, y]);
                 if (!s.sees(SE.wrapX(Math.floor(x / 16)), Math.floor(y / 16)))
                     continue;
                 if (!st.moving) {
@@ -39929,11 +41895,27 @@ var SE;
                         s.spawn({ id: smallStorm(h.y), x, y, vx: 0, vy: 0, life: SPENT_MS, mode: 'loop' });
                     continue;
                 }
+                presence = Math.max(presence, SE.clamp(st.strength / SE.HURRICANE_MAX, 0.4, 1));
+                strikes(s, world, h);
                 const small = st.strength < STORM_BIG;
-                const id = small ? smallStorm(h.y) : SE.latitudeDeg(h.y) < 0 ? 'hurricane_south' : 'hurricane';
-                s.add({ id, frame: frameOf(id, s.now), x, y, foot: y + 24 });
-                rain(s, x, y, small ? 16 : RAIN_RADIUS, RAIN_RATE * Math.max(1, st.strength));
+                const ty = Math.floor(y / 16);
+                if (small) {
+                    const id = smallStorm(ty);
+                    s.add({ id, frame: frameOf(id, s.now), x, y, foot: -1e6 + y });
+                    rain(s, x, y, 20, RAIN_RATE * 0.5);
+                    continue;
+                }
+                const id = southern(ty) ? 'hurricane_south' : 'hurricane';
+                const sp = SE.FX_MANIFEST.sprites[id];
+                const flashing = !!sp && sp.frames.length > sp.loop && flickers(s, h, st.strength);
+                s.add({ id, frame: frameOf(id, s.now) + (flashing && sp ? sp.loop : 0), x, y, foot: -1e6 + y });
+                veils(s, h, x, y, st.strength);
+                rain(s, x, y, RAIN_RADIUS, RAIN_RATE * st.strength);
             }
+            drawBolts(s);
+            drawFlung(s);
+            SE.STORM_SOUND.presence = presence;
+            SE.STORM_SOUND.at = s.now;
         },
     };
 })(SE || (SE = {}));
@@ -40439,6 +42421,8 @@ var SE;
     const SLOW_STEP = 4 * TIME_STEP;
     const CHUNK_PX = SE.LAND_CHUNK * 16;
     const WORLD_PX = SE.GRID_W * 16;
+    /** Ladder position of each lagoon turquoise (waterWarm), by lightness. */
+    const LAGOON_LADDER = [5, 6, 6, 7];
     /** Ladder positions above the water ramp. */
     const P_ICE2 = 8;
     const P_ICE3 = 9;
@@ -40558,6 +42542,9 @@ var SE;
                 this.ladderOf = art;
                 const ice = art.manifest.ramps.ice;
                 art.water.forEach((p, k) => { this.ladder[k] = p; this.pos[p] = k; });
+                // Lagoon turquoise climbs the ladder from the water step of its lightness.
+                art.waterWarm.forEach((p, k) => { if (art.water.indexOf(p) < 0)
+                    this.pos[p] = LAGOON_LADDER[k]; });
                 this.ladder[P_ICE2] = ice[2];
                 this.ladder[P_ICE3] = ice[3];
                 this.ladder[P_ICE4] = ice[4];
@@ -42319,7 +44306,9 @@ var SE;
     SE.fitCanvas = fitCanvas;
     /* -------------------------------------------------------- shared colour -- */
     /** River water as the overview map draws it, over any land colour. */
-    const RIVER_MAP_COLOR = [70, 150, 235];
+    SE.RIVER_MAP_COLOR = [70, 150, 235];
+    /** Land on the seafloor map: one flat ground colour, so the whole scale is spent on depth. */
+    SE.SEAFLOOR_LAND_COLOR = [110, 104, 94];
     /* --------------------------------------------------------- relief shading -- */
     /**
      * Degrees of shading per unit of cross-tile slope.
@@ -42416,7 +44405,7 @@ var SE;
                 case SE.MapMode.Oceans:
                 case SE.MapMode.Biomes:
                 case SE.MapMode.Rainfall:
-                    return RIVER_MAP_COLOR;
+                    return SE.RIVER_MAP_COLOR;
                 default:
                     break;
             }
@@ -42436,8 +44425,8 @@ var SE;
                 return [SE.lerp(60, 240, t), SE.lerp(90, 120, 1 - Math.abs(t - 0.5) * 2), SE.lerp(240, 60, t)];
             }
             case SE.MapMode.Oceans:
-                // "Hide oceans" — show the bare crust under the sea.
-                return SE.sampleRamp(SE.ELEV_RAMP, water ? world.elevation[i] * 0.4 : world.elevation[i]);
+                // "Hide oceans" — the bare crust under the sea, coloured by its depth.
+                return water ? SE.sampleRamp(SE.DEPTH_RAMP, world.elevation[i]) : SE.SEAFLOOR_LAND_COLOR;
             case SE.MapMode.OceanTemp:
                 return water ? SE.sampleRamp(SE.TEMP_RAMP, world.temperature[i]) : [40, 40, 40];
             case SE.MapMode.OceanCurrents: {
@@ -42455,7 +44444,8 @@ var SE;
                 return c.dx > 0 ? [200, 200, 120] : [110, 130, 180];
             }
             case SE.MapMode.Biomes:
-                return water && world.biome[i] !== SE.Biome.Arctic ? SE.sampleRamp(SE.DEPTH_RAMP, world.elevation[i]) : SE.BIOME_COLORS[world.biome[i]];
+                // The sea in the main map's two classes: no depth.
+                return SE.BIOME_COLORS[world.biome[i]];
             case SE.MapMode.LifeMap: {
                 // The overview map stays area-filling on purpose: it answers "where is
                 // this species", which is exactly what the sparse Edit view cannot.
@@ -42605,12 +44595,13 @@ var SE;
             const m = this.layers.life ? this.herds.markerOn(i) : null;
             if (!m)
                 return null;
-            const special = SE.animalSpecialist(this.regions, world, i, m.c, m.stage);
+            const stage = SE.reefShownStage(world, i, m.c, m.stage);
+            const special = SE.animalSpecialist(this.regions, world, i, m.c, stage);
             const sp = SE.SPECIES[m.c];
-            const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[m.stage]?.art;
+            const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[stage]?.art;
             if (!art)
                 return null;
-            return { key: `${m.c}:${m.stage}:${special}:${+m.flip}`, draw: () => SE.rasterArt(art, 32, SE.CREATURE_LOOK, m.flip, true) };
+            return { key: `${m.c}:${stage}:${special}:${+m.flip}`, draw: () => SE.rasterArt(art, 32, SE.CREATURE_LOOK, m.flip, true) };
         }
         /** Force a full redraw on the next frame (after a tool changed the world). */
         markDirty() {
@@ -42760,6 +44751,7 @@ var SE;
                     this.dirtyTiles = null;
                     this.drawBase(world, dpr);
                     this.drawCost = performance.now() - t0;
+                    SE.perfHud.drawBase(this.drawCost);
                     this.baseKey = key;
                     this.baseTick = world.ticks;
                     this.baseTime = now;
@@ -42915,6 +44907,17 @@ var SE;
             const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
             return this.bubbles.presence() * zoom * zoom;
         }
+        /**
+         * How loud a hurricane's wind should be, 0..1: the strongest storm the
+         * effect layer drew in view (fxstorm.ts) in the last half second, softer
+         * zoomed out but still heard: a storm is a big sound.
+         */
+        stormPresence(now) {
+            if (!this.layers.events || now - SE.STORM_SOUND.at > 500)
+                return 0;
+            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+            return SE.STORM_SOUND.presence * (0.35 + 0.65 * zoom);
+        }
         /** The last full picture, scaled and moved to where the new zoom puts it. */
         drawZoomPreview(dpr) {
             const k = this.tilePx / this.baseTilePx;
@@ -43059,11 +45062,11 @@ var SE;
             const big = size * SE.SHADOW_SPAN;
             // --- ground, with its relief shaded in ---
             if (water && !this.layers.oceans) {
-                ctx.fillStyle = SE.rgbCss(SE.sampleRamp(SE.ELEV_RAMP, world.elevation[i] * 0.4));
+                ctx.fillStyle = SE.depthStyleAt(SE.depthStep(world.elevation[i]));
                 ctx.fillRect(px, py, size, size);
             }
             else if (water && biome !== SE.Biome.Arctic) {
-                ctx.drawImage(tiles.sea(SE.depthStep(world.elevation[i]), biome === SE.Biome.Coast, variant), px, py, size, size);
+                ctx.drawImage(tiles.sea(biome === SE.Biome.Coast, variant), px, py, size, size);
                 const shore = SE.shoreMask(world, i % SE.GRID_W, (i / SE.GRID_W) | 0);
                 if (shore !== 0)
                     ctx.drawImage(tiles.surf(shore), px, py, size, size);
@@ -43714,6 +45717,10 @@ var SE;
         box.append(bar, marks);
         host.appendChild(box);
     }
+    /** "−3.500 m": an elevation as a legend mark, to 10 m. */
+    function metersLabel(elevation) {
+        return `${SE.fmt.int(Math.round(SE.elevationMeters(elevation) / 10) * 10).replace('-', '−')} m`;
+    }
     function renderMapLegend(host, world, mode, values) {
         host.innerHTML = '';
         if (values) {
@@ -43733,9 +45740,14 @@ var SE;
         }
         switch (mode) {
             case SE.MapMode.Terrain:
+                strip(host, -1, 1, (v) => SE.sampleRamp(v < 0 ? SE.DEPTH_RAMP : SE.ELEV_RAMP, v), [-1, 0, 1].map(metersLabel));
+                swatch(host, 'Flüsse', SE.RIVER_MAP_COLOR);
+                break;
             case SE.MapMode.Oceans:
-                strip(host, -1, 1, (v) => SE.sampleRamp(v < 0 ? SE.DEPTH_RAMP : SE.ELEV_RAMP, v), ['Tiefsee', 'Küste', 'Gipfel']);
-                swatch(host, 'Flüsse', [70, 150, 235]);
+                // Open sea and coastal sea get half the strip each, so the middle label sits on the shelf edge.
+                strip(host, 0, 1, (v) => SE.sampleRamp(SE.DEPTH_RAMP, v < 0.5 ? SE.lerp(-1, SE.COAST_DEPTH, v * 2) : SE.lerp(SE.COAST_DEPTH, 0, v * 2 - 1)), [-1, SE.COAST_DEPTH, 0].map(metersLabel));
+                swatch(host, 'Land', SE.SEAFLOOR_LAND_COLOR);
+                swatch(host, 'Flüsse', SE.RIVER_MAP_COLOR);
                 break;
             case SE.MapMode.Biomes:
                 for (let b = 0; b < SE.BIOME_COUNT; b++)
@@ -45908,32 +47920,195 @@ var SE;
  * SimEarth 2.0 — Gaia
  * -----------------------------------------------------------------------------
  * The planet's face, as in the original: her expression tracks the health of
- * the biosphere and her eyes follow the pointer. Her face is the planet — the
- * oceans bluer and the continents greener the better she feels — and below
- * it the four things her mood is made of, so the player can see why.
+ * the biosphere and her eyes follow the pointer. Her body is the player's own
+ * planet, the pixel globe of the title screen turning slowly; on it a face
+ * pixelled by hand, one for each of her six moods, and around it what weighs
+ * on her: sweat when she is hot, snow when cold, smog when the air is foul.
+ * She talks about each of her troubles in turn, worst first, cheers or gasps
+ * when her mood changes, dozes off while the game is paused, and she can be
+ * poked — up to a point.
+ * Below, the four things her mood is made of, so the player can see why.
  * ========================================================================== */
 var SE;
 (function (SE) {
-    /** Continents on her face, as polygons in unit-disc coordinates. */
-    const CONTINENTS = [
-        [-0.92, -0.18, -0.66, -0.58, -0.28, -0.66, -0.12, -0.46, -0.38, -0.3, -0.58, 0.02, -0.86, 0.12],
-        [0.28, -0.82, 0.66, -0.6, 0.86, -0.24, 0.6, -0.12, 0.4, -0.34],
-        [-0.62, 0.5, -0.2, 0.62, 0.22, 0.66, 0.1, 0.92, -0.4, 0.86],
-        [0.6, 0.24, 0.92, 0.3, 0.82, 0.62, 0.52, 0.56],
-    ];
     const FACTORS = [
         { key: 'climate', label: 'Klima', icon: 'temperature' },
         { key: 'life', label: 'Belebtheit', icon: 'biomass' },
         { key: 'diversity', label: 'Vielfalt', icon: 'diversity' },
         { key: 'clean', label: 'Reine Luft', icon: 'co2' },
     ];
-    const mix = (a, b, t) => `rgb(${Math.round(SE.lerp(a[0], b[0], t))},${Math.round(SE.lerp(a[1], b[1], t))},${Math.round(SE.lerp(a[2], b[2], t))})`;
+    /** Her six moods, worst first; `moodLevel` picks one. */
+    const LABELS = ['Entsetzt', 'Besorgt', 'Unruhig', 'Ruhig', 'Zufrieden', 'Glückselig'];
+    const moodLevel = (mood) => [0.18, 0.34, 0.5, 0.68, 0.85].filter((t) => mood > t).length;
+    /** What she says: about her troubles while any weighs on her, else about her mood. */
+    const LINES = {
+        hot: ['Puh! Ich schwitze wie ein Vulkan.', 'Ist das heiß hier – oder liegt das an mir?'],
+        cold: ['B-b-bitterkalt hier …', 'Kann mal jemand die Sonne aufdrehen?'],
+        life: ['Hallo? Ist da jemand?', 'So leer hier. Ein bisschen Leben wär nett.'],
+        diversity: ['Immer dieselben Gesichter …', 'Ein paar neue Arten, bitte!'],
+        clean: ['*hust* Wer hat hier so gequalmt?', 'Ich krieg kaum Luft!'],
+        calm: ['Alles im grünen Bereich … fast.', 'Ich dreh mich einfach weiter.'],
+        content: ['Läuft bei mir.', 'Ein schöner Tag zum Rotieren.'],
+        blissful: ['Ich könnte die ganze Galaxis umarmen!', 'So viel Leben – ich bin so stolz!'],
+        better: ['Oh! Schon besser!', 'Jaa, weiter so!'],
+        worse: ['Oh nein …', 'Hey! Was war das denn?!'],
+        poked: ['Hihi, das kitzelt!', 'Huch! Hallo du.', 'Nicht so fest – ich dreh mich doch schon.'],
+        pokedSad: ['Autsch! Hilf mir lieber.', 'Lass das. Ich hab gerade andere Sorgen.', 'Nicht jetzt …'],
+        annoyed: ['Jetzt reicht’s aber!', 'Ich bin ein Planet, kein Knopf!'],
+        asleep: ['Zzz …', 'Nur noch fünf Minuten …'],
+    };
+    const MOOD_LINES = ['calm', 'calm', 'calm', 'calm', 'content', 'blissful'];
+    /** Stage pixels wanted along its short side; each is drawn as a whole number of device pixels. */
+    const STAGE_PX = 96;
+    /** Fewer stage pixels than this and her face would not fit her: the pixels get finer instead. */
+    const STAGE_MIN = 80;
+    /** Her radius as a share of the stage's short side, and at most, in stage pixels: her face is drawn for this size. */
+    const BODY = 0.41;
+    const BODY_MAX = 42;
+    /** Pixel art moves in steps: one frame this long. */
+    const FRAME_MS = 90;
+    /** A poke squeezes her eyes this long; a poke or a change of mood is talked about this long. */
+    const POKE_MS = 700;
+    const SAY_MS = 2600;
+    /** Pokes in a row, each within this of the last, until she has had enough. */
+    const POKE_CHAIN_MS = 2500;
+    const POKES_TOO_MANY = 5;
+    /** She moves on to her next trouble, or her next line, this often. */
+    const LINE_MS = 10000;
+    /** She dozes off when the game has been paused this long, untouched. */
+    const SLEEP_MS = 8000;
+    /** Her surface follows the planet's changes this often at most. */
+    const RETEXTURE_MS = 8000;
+    /** Her turn, in radians per ms: once round in about 90 s. */
+    const SPIN = 0.00007;
+    /** Sprite colours from the game's palettes: ink, eye white, mouth, pink, white, water, red, gold, orange, smog dark and light. */
+    const COLOURS = {
+        k: '#0c1a14', w: '#f6f1df', m: '#8e2f33', p: '#e98fb0', t: '#f2efe2',
+        b: '#80c8cc', r: '#c4453f', y: '#f0c64a', o: '#df8a3a', g: '#807b7c', G: '#a59f97',
+    };
+    // Eyes, 11 × 13, drawn with their top left at (centre − 5, centre − 6). The pupil shows only on the eye white.
+    const EYE = [
+        '...kkkkk...', '..kwwwwwk..', '.kwwwwwwwk.', '.kwwwwwwwk.', 'kwwwwwwwwwk', 'kwwwwwwwwwk', 'kwwwwwwwwwk',
+        'kwwwwwwwwwk', 'kwwwwwwwwwk', '.kwwwwwwwk.', '.kwwwwwwwk.', '..kwwwwwk..', '...kkkkk...',
+    ];
+    /** Lid half down: blinking, or unimpressed. */
+    const EYE_HALF = [
+        '', '', '', '', '', 'kkkkkkkkkkk', 'kwwwwwwwwwk', 'kwwwwwwwwwk', 'kwwwwwwwwwk', '.kwwwwwwwk.', '.kwwwwwwwk.', '..kwwwwwk..', '...kkkkk...',
+    ];
+    const EYE_SHUT = ['', '', '', '', '', '', '', 'kk.......kk', '.kkkkkkkkk.'];
+    const EYE_HAPPY = ['', '', '', '', '....kkk....', '..kkkkkkk..', '.kkk...kkk.', 'kk.......kk', 'k.........k'];
+    /** The left eye's ">"; mirrored it is the right eye's "<". */
+    const EYE_SQUEEZE = ['', '', 'kk.........', '.kkk.......', '...kkk.....', '.....kkk...', '.......kkk.', '.....kkk...', '...kkk.....', '.kkk.......', 'kk.........'];
+    /** 5 × 6 with a glint, its top left at eye column 3, row 4 when she looks straight ahead. */
+    const PUPIL = ['.kkk.', 'ktkkk', 'kkkkk', 'kkkkk', 'kkkkk', '.kkk.'];
+    // Mouths, centred, their top row on the mouth line.
+    const GRIN = [
+        'kkkkkkkkkkkkkkkkkkk', 'ktttttttttttttttttk', '.kmmmmmmmmmmmmmmmk.', '..kmmmmmmmmmmmmmk..',
+        '...kmmmmpppmmmmk...', '....kkmpppppmkk....', '......kkkkkkk......',
+    ];
+    const SMILE = ['kk...............kk', '.kk.............kk.', '..kkk.........kkk..', '....kkkkkkkkkkk....', '......kkkkkkk......'];
+    const SLIGHT = ['kk...........kk', '.kkk.......kkk.', '...kkkkkkkkk...'];
+    const WAVY = ['.....kkk.....kkk.', 'k...kkkkk...kkkkk', 'kkkkk...kkkkk...k', '.kkk.....kkk.....'];
+    const FROWN = ['.....kkkkkkk.....', '...kkkkkkkkkkk...', '.kkkk.......kkkk.', 'kk.............kk'];
+    const SCREAM = [
+        '...kkkkk...', '..kmmmmmk..', '.kmmmmmmmk.', '.kmmmmmmmk.', 'kmmmmmmmmmk', 'kmmmmmmmmmk',
+        'kmmmmmmmmmk', 'kmmmpppmmmk', '.kmpppppmk.', '.kpppppppk.', '..kkkkkkk..',
+    ];
+    const CHATTER = ['kkkkkkkkkkkkkkk', 'ktktktktktktktk', 'ktktktktktktktk', 'kkkkkkkkkkkkkkk'];
+    const OOH = ['..kkk..', '.kmmmk.', 'kmmmmmk', 'kmmmmmk', 'kmmmmmk', '.kmmmk.', '..kkk..'];
+    const SNORE = ['.kkk.', 'kmmmk', 'kmmmk', '.kkk.'];
+    /** Mouth by mood, worst first. */
+    const MOUTHS = [SCREAM, FROWN, WAVY, SLIGHT, SMILE, GRIN];
+    /** Brows by mood: [lift, how much higher the inner end, extra lift of the left brow]. */
+    const BROWS = [[3, 2, 0], [1, 3, 0], [0, 1, 2], [0, 0, 0], [1, 0, 0], [2, 0, 0]];
+    // What floats around her.
+    const BLUSH = ['.pppp.', 'pppppp'];
+    const FLUSH = ['.rrrr.', 'rrrrrr'];
+    /** Heat rising off her, 2 px thick; mirrored every few frames it wavers. */
+    const HEAT = ['.oo.', 'oo..', 'oo..', '.oo.', '..oo', '..oo', '.oo.'];
+    const ZED = ['ttttt', '...tt', '..tt.', '.tt..', 'ttttt'];
+    const ZED_SMALL = ['tttt', '..t.', '.t..', 'tttt'];
+    const HEART = ['.rr.rr.', 'rtrrrrr', 'rrrrrrr', '.rrrrr.', '..rrr..', '...r...'];
+    const SPARK = ['..y..', '..y..', 'yytyy', '..y..', '..y..'];
+    const TWINKLE = ['.y.', 'yty', '.y.'];
+    const NOTE = ['.tt.', '.t.t', '.t..', '.t..', 'tt..', 'tt..'];
+    const DROP = ['..k..', '.kbk.', '.kbk.', 'kbbbk', 'kbtbk', 'kbbbk', '.kkk.'];
+    const FLAKE = ['.t.', 'ttt', '.t.'];
+    const PUFF = ['..gGg...', '.gGGGgg.', 'gGGGGGGg', '.gggggg.'];
+    const BANG = ['rr', 'rr', 'rr', 'rr', '', 'rr'];
+    const ANGER = ['rr.....rr', 'rrr...rrr', '.rr...rr.', '', '.rr...rr.', 'rrr...rrr', 'rr.....rr'];
+    /** A bounce, one frame each; a poke or good news plays it once, bliss over and over. */
+    const HOP = [0, -1, -2, -3, -3, -2, -1, 0];
+    /** Where an uneasy Gaia looks, in turns. */
+    const DART = [0, -2, -2, 0, 2, 2, 0, 0];
+    function blit(ctx, s, x, y, mirror = false) {
+        for (let j = 0; j < s.length; j++) {
+            const row = s[j];
+            for (let i = 0; i < row.length; i++) {
+                const c = row[mirror ? row.length - 1 - i : i];
+                if (c === '.')
+                    continue;
+                ctx.fillStyle = COLOURS[c];
+                ctx.fillRect(x + i, y + j, 1, 1);
+            }
+        }
+    }
+    /** The pupil at eye column `px`, row `py`, drawn only where the eye `eye` (top left at x, y) shows white. */
+    function pupil(ctx, eye, x, y, s, px, py) {
+        for (let j = 0; j < s.length; j++) {
+            for (let i = 0; i < s[j].length; i++) {
+                const c = s[j][i];
+                if (c === '.' || eye[py + j]?.[px + i] !== 'w')
+                    continue;
+                ctx.fillStyle = COLOURS[c];
+                ctx.fillRect(x + px + i, y + py + j, 1, 1);
+            }
+        }
+    }
     class GaiaPanel {
         constructor(host) {
             this.rows = new Map();
             this.pointer = { x: 0.5, y: 0.5 };
             this.sig = '';
+            this.frame = -1;
+            /** Her mood as shown, with a little hysteresis; −1 before the first look. */
+            this.level = -1;
+            this.reactAt = -Infinity;
+            this.reactUp = false;
+            this.pokedAt = -Infinity;
+            this.pokes = 0;
+            /** When the game was paused; −1 while it runs. */
+            this.pausedAt = -1;
+            /** Which of a few lines a poke or a reaction gets. */
+            this.pick = 0;
+            this.textureAt = -Infinity;
+            this.textureKey = '';
+            this.line = '';
+            this.lineAt = 0;
+            this.typed = -1;
+            /** The canvas size and place last set, to touch its style only on a change. */
+            this.placed = '';
+            this.stage = SE.make('div', 'gaia-stage');
             this.canvas = SE.make('canvas', 'gaia-face');
+            // The canvas sizes itself to the stage, so it must never size the stage: it floats over it, and the
+            // stage takes what the column leaves. Set here rather than in the stylesheet: with an outdated
+            // stylesheet the two grew each other every frame and the window scrolled away without end.
+            this.stage.style.cssText = 'position: relative; flex: 1 1 0; min-height: 0; overflow: hidden';
+            this.canvas.style.cssText = 'position: absolute; min-height: 0; image-rendering: pixelated';
+            this.canvas.setAttribute('role', 'img');
+            this.canvas.title = 'Gaia anstupsen';
+            const ctx = this.canvas.getContext('2d');
+            if (!ctx)
+                throw new Error('SimEarth: 2D context unavailable for Gaia');
+            this.ctx = ctx;
+            // Her globe is painted off-screen at exactly her size and copied onto the stage pixel for pixel.
+            this.globe = new SE.TitleGlobe(SE.make('canvas'), true);
+            this.stage.appendChild(this.canvas);
+            // Typed out letter by letter; the rest is already there, invisible, so nothing reflows and screen readers get it all.
+            this.say = SE.make('p', 'gaia-say');
+            this.sayTyped = SE.make('span');
+            this.sayRest = SE.make('span', 'gaia-say-rest');
+            this.say.append(this.sayTyped, this.sayRest);
             const head = SE.make('div', 'gaia-mood');
             this.moodLabel = SE.make('span', 'gaia-mood-label');
             this.moodValue = SE.make('span', 'gaia-mood-value');
@@ -45950,9 +48125,15 @@ var SE;
                 const text = SE.make('span', 'gaia-factor-text');
                 li.append(SE.img(SE.resIcon(f.icon), 'ico'), SE.make('span', 'gaia-factor-label', f.label), text, meter);
                 list.appendChild(li);
-                this.rows.set(f.key, { fill, text });
+                this.rows.set(f.key, { li, fill, text });
             }
-            host.append(this.canvas, head, list);
+            host.append(this.stage, this.say, head, list);
+            this.canvas.addEventListener('pointerdown', () => {
+                const now = performance.now();
+                this.pokes = now - this.pokedAt < POKE_CHAIN_MS ? this.pokes + 1 : 1;
+                this.pokedAt = now;
+                this.pick = Math.floor(Math.random() * 1000);
+            });
             window.addEventListener('pointermove', (e) => {
                 const rect = this.canvas.getBoundingClientRect();
                 if (rect.width <= 0)
@@ -45962,29 +48143,50 @@ var SE;
             });
         }
         static moodLabel(mood) {
-            if (mood > 0.85)
-                return 'Glückselig';
-            if (mood > 0.68)
-                return 'Zufrieden';
-            if (mood > 0.5)
-                return 'Ruhig';
-            if (mood > 0.34)
-                return 'Unruhig';
-            if (mood > 0.18)
-                return 'Besorgt';
-            return 'Entsetzt';
+            return LABELS[moodLevel(mood)];
         }
-        render(world, now) {
-            this.drawFace(world.gaiaMood, now);
+        /** `still`: no hopping or shaking (the player's reduce-effects setting); `paused`: the game stands still. */
+        render(world, now, still = false, paused = false) {
+            const mood = world.gaiaMood;
+            if (!paused)
+                this.pausedAt = -1;
+            else if (this.pausedAt < 0)
+                this.pausedAt = now;
+            // She keeps her mood until it is clearly past a border, so she does not flicker on one; a change she reacts to.
+            if (this.level < 0)
+                this.level = moodLevel(mood);
+            else if (this.level < moodLevel(mood - 0.015) || this.level > moodLevel(mood + 0.015)) {
+                const next = moodLevel(mood);
+                this.reactUp = next > this.level;
+                this.reactAt = now;
+                this.pick = Math.floor(Math.random() * 1000);
+                this.level = next;
+            }
+            const level = this.level;
             const f = world.gaiaFactors();
-            const sig = `${Math.round(world.gaiaMood * 100)}|${[f.climate, f.life, f.diversity, f.clean].map((v) => Math.round(v * 50)).join(',')}|` +
-                `${SE.fmt.one(world.globalTemp)}|${SE.fmt.int(world.co2)}|${f.groups}`;
+            const hot = world.globalTemp > 15;
+            // A paused world sends her to sleep, unless she is too worried; a poke or a change of mood wakes her.
+            const asleep = this.pausedAt >= 0 && level >= 2 && now - Math.max(this.pausedAt, this.pokedAt, this.reactAt) > SLEEP_MS;
+            // What troubles her, worst first; she talks about one after the other.
+            const troubles = FACTORS.filter((d) => f[d.key] < 0.5).sort((a, b) => f[a.key] - f[b.key]).map((d) => d.key);
+            const turn = Math.floor(now / LINE_MS);
+            const about = asleep || !troubles.length ? '' : troubles[turn % troubles.length];
+            const frame = Math.floor(now / FRAME_MS);
+            if (frame !== this.frame) {
+                this.frame = frame;
+                this.draw(world, now, level, f, hot, still, asleep);
+            }
+            const topic = asleep ? 'asleep' : about === 'climate' ? (hot ? 'hot' : 'cold') : about;
+            this.speak(topic, level, now, Math.floor(turn / Math.max(1, troubles.length)));
+            const sig = `${Math.round(mood * 100)}|${level}|${[f.climate, f.life, f.diversity, f.clean].map((v) => Math.round(v * 50)).join(',')}|` +
+                `${SE.fmt.one(world.globalTemp)}|${SE.fmt.int(world.co2)}|${f.groups}|${about}`;
             if (sig === this.sig)
                 return;
             this.sig = sig;
-            this.moodLabel.textContent = GaiaPanel.moodLabel(world.gaiaMood);
-            this.moodValue.textContent = `${Math.round(world.gaiaMood * 100)} %`;
-            this.moodMark.style.left = `${Math.round(world.gaiaMood * 1000) / 10}%`;
+            this.moodLabel.textContent = LABELS[level];
+            this.canvas.setAttribute('aria-label', `Gaia: ${LABELS[level]}`);
+            this.moodValue.textContent = `${Math.round(mood * 100)} %`;
+            this.moodMark.style.left = `${Math.round(mood * 1000) / 10}%`;
             const texts = {
                 climate: `${SE.fmt.one(world.globalTemp)} °C`,
                 life: `${SE.fmt.pct(world.lifeCover)} belebt`,
@@ -45999,134 +48201,247 @@ var SE;
                 r.fill.style.width = `${Math.round(v * 100)}%`;
                 r.fill.style.background = v > 0.66 ? 'var(--ok)' : v > 0.33 ? 'var(--amber)' : 'var(--warn)';
                 r.text.textContent = texts[def.key];
+                // The row she is talking about.
+                r.li.classList.toggle('is-trouble', def.key === about);
             }
         }
-        drawFace(mood, now) {
-            if (!SE.fitCanvas(this.canvas))
+        /** `topic`: her sleep or the trouble she is on, '' for none; `turn` picks which of its lines. */
+        speak(topic, level, now, turn) {
+            // Her topic or her mood; a poke or a change of mood for a moment instead.
+            let key = topic || MOOD_LINES[level];
+            if (now - this.pokedAt < SAY_MS) {
+                key = this.pokes >= POKES_TOO_MANY ? 'annoyed' : level >= 3 ? 'poked' : 'pokedSad';
+                turn = this.pick;
+            }
+            else if (now - this.reactAt < SAY_MS) {
+                key = this.reactUp ? 'better' : 'worse';
+                turn = this.pick;
+            }
+            const pool = LINES[key];
+            const text = pool[turn % pool.length];
+            if (text !== this.line) {
+                this.line = text;
+                this.lineAt = now;
+                this.typed = -1;
+            }
+            const n = Math.min(text.length, Math.floor((now - this.lineAt) / 30));
+            if (n === this.typed)
                 return;
-            const ctx = this.canvas.getContext('2d');
-            if (!ctx)
-                return;
+            this.typed = n;
+            this.sayTyped.textContent = text.slice(0, n);
+            this.sayRest.textContent = text.slice(n);
+            this.say.classList.toggle('done', n === text.length);
+        }
+        /** Size the canvas to the stage, whole device pixels per stage pixel, centred; false while it has no room. */
+        fit() {
+            const box = this.stage.getBoundingClientRect();
+            if (box.width <= 0 || box.height <= 0)
+                return false;
             const dpr = window.devicePixelRatio || 1;
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            const w = this.canvas.width / dpr;
-            const h = this.canvas.height / dpr;
-            ctx.clearRect(0, 0, w, h);
-            const cx = w / 2;
-            const cy = h / 2;
-            const r = Math.min(w, h) * 0.38;
-            // Her aura: green when well, a sickly red when not.
-            const halo = ctx.createRadialGradient(cx, cy, r * 0.9, cx, cy, r * 1.45);
-            halo.addColorStop(0, `rgba(${Math.round(SE.lerp(255, 110, mood))},${Math.round(SE.lerp(120, 220, mood))},${Math.round(SE.lerp(110, 200, mood))},0.4)`);
-            halo.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = halo;
-            ctx.fillRect(0, 0, w, h);
-            // The planet: ocean, continents, then light and shadow over both.
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(cx, cy, r, 0, Math.PI * 2);
-            ctx.clip();
-            ctx.fillStyle = mix([110, 112, 124], [42, 132, 196], mood);
-            ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
-            ctx.fillStyle = mix([150, 116, 84], [98, 176, 92], mood);
-            ctx.globalAlpha = 0.85;
-            for (const poly of CONTINENTS) {
-                ctx.beginPath();
-                for (let k = 0; k < poly.length; k += 2) {
-                    const x = cx + poly[k] * r;
-                    const y = cy + poly[k + 1] * r;
-                    if (k === 0)
-                        ctx.moveTo(x, y);
-                    else
-                        ctx.lineTo(x, y);
-                }
-                ctx.closePath();
-                ctx.fill();
-            }
-            ctx.globalAlpha = 1;
-            const light = ctx.createRadialGradient(cx - r * 0.45, cy - r * 0.5, r * 0.1, cx, cy, r * 1.05);
-            light.addColorStop(0, 'rgba(255,255,255,0.32)');
-            light.addColorStop(0.55, 'rgba(255,255,255,0)');
-            light.addColorStop(1, 'rgba(0,10,20,0.45)');
-            ctx.fillStyle = light;
-            ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
-            ctx.restore();
-            ctx.strokeStyle = `rgba(150,220,255,${0.35 + mood * 0.35})`;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(cx, cy, r + 1, 0, Math.PI * 2);
-            ctx.stroke();
-            this.drawFeatures(ctx, cx, cy, r, mood, now);
+            const d = Math.min(box.width, box.height) * dpr;
+            const scale = Math.max(1, Math.min(Math.round(d / STAGE_PX), Math.floor(d / STAGE_MIN)));
+            const w = Math.floor((box.width * dpr) / scale);
+            const h = Math.floor((box.height * dpr) / scale);
+            const left = Math.floor((box.width * dpr - w * scale) / 2);
+            const top = Math.floor((box.height * dpr - h * scale) / 2);
+            const placed = `${w}|${h}|${scale}|${left}|${top}|${dpr}`;
+            if (placed === this.placed)
+                return true;
+            this.placed = placed;
+            this.canvas.width = w;
+            this.canvas.height = h;
+            const s = this.canvas.style;
+            s.width = `${(w * scale) / dpr}px`;
+            s.height = `${(h * scale) / dpr}px`;
+            s.left = `${left / dpr}px`;
+            s.top = `${top / dpr}px`;
+            return true;
         }
-        drawFeatures(ctx, cx, cy, r, mood, now) {
-            const ink = '#0c1a14';
-            const gaze = Math.min(r * 0.07, 5);
-            const gx = SE.clamp((this.pointer.x - 0.5) * 2, -1, 1) * gaze;
-            const gy = SE.clamp((this.pointer.y - 0.45) * 2, -1, 1) * gaze;
-            // She blinks now and then.
-            const blink = now % 4200 < 130;
-            const worry = SE.clamp((0.5 - mood) * 2, 0, 1);
-            for (const side of [-1, 1]) {
-                const ex = cx + side * r * 0.34;
-                const ey = cy - r * 0.12;
-                const rx = r * 0.15;
-                const ry = r * 0.17;
-                if (blink) {
-                    ctx.strokeStyle = ink;
-                    ctx.lineWidth = Math.max(2, r * 0.05);
-                    ctx.lineCap = 'round';
-                    ctx.beginPath();
-                    ctx.moveTo(ex - rx, ey);
-                    ctx.quadraticCurveTo(ex, ey + ry * 0.5, ex + rx, ey);
-                    ctx.stroke();
-                }
-                else {
-                    ctx.fillStyle = '#f6f1df';
-                    ctx.beginPath();
-                    ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.fillStyle = ink;
-                    ctx.beginPath();
-                    ctx.arc(ex + gx, ey + gy, r * 0.075, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-                    ctx.beginPath();
-                    ctx.arc(ex + gx - r * 0.025, ey + gy - r * 0.03, r * 0.022, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-                // Brows rise in the middle when she worries.
-                ctx.strokeStyle = ink;
-                ctx.lineWidth = Math.max(2, r * 0.045);
-                ctx.lineCap = 'round';
-                ctx.beginPath();
-                ctx.moveTo(ex - side * rx * 1.05, ey - ry * 1.45 + worry * ry * 0.5);
-                ctx.lineTo(ex + side * rx * 1.05, ey - ry * 1.45 - worry * ry * 0.35);
-                ctx.stroke();
-                // A blush when she is happy.
-                if (mood > 0.6) {
-                    ctx.fillStyle = `rgba(255,140,150,${(mood - 0.6) * 0.9})`;
-                    ctx.beginPath();
-                    ctx.ellipse(ex + side * rx * 0.4, cy + r * 0.2, rx * 0.8, ry * 0.42, 0, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-            }
-            const my = cy + r * 0.38;
-            if (mood < 0.18) {
-                // Horror: the mouth falls open.
-                ctx.fillStyle = ink;
-                ctx.beginPath();
-                ctx.ellipse(cx, my + r * 0.02, r * 0.14, r * 0.17, 0, 0, Math.PI * 2);
-                ctx.fill();
+        draw(world, now, level, f, hot, still, asleep) {
+            if (!this.fit())
                 return;
+            const ctx = this.ctx;
+            const { width: w, height: h } = this.canvas;
+            const frame = this.frame;
+            ctx.clearRect(0, 0, w, h);
+            const sincePoke = now - this.pokedAt;
+            const annoyed = sincePoke < SAY_MS && this.pokes >= POKES_TOO_MANY;
+            const poke = !annoyed && sincePoke < POKE_MS ? Math.floor(sincePoke / FRAME_MS) : -1;
+            const react = now - this.reactAt < 1200 ? Math.floor((now - this.reactAt) / FRAME_MS) : -1;
+            const cheer = react >= 0 && this.reactUp;
+            const gasp = react >= 0 && !this.reactUp;
+            const cold = f.climate < 0.6 && !hot;
+            const sweltering = f.climate < 0.6 && hot;
+            // An even number of globe pixels, so she sits on whole pixels.
+            const g = 2 * Math.round(Math.min(Math.min(w, h) * BODY, BODY_MAX) / SE.GLOBE_DISC / 2);
+            const r = g * SE.GLOBE_DISC;
+            const R = Math.round(r);
+            let bob = 0;
+            let dx = 0;
+            let dy = 0;
+            if (!still && asleep)
+                bob = Math.floor(now / 1500) % 2 ? -1 : 0;
+            else if (!still) {
+                if (poke >= 0)
+                    bob = HOP[Math.min(poke, HOP.length - 1)];
+                else if (cheer)
+                    bob = HOP[Math.min(react, HOP.length - 1)];
+                else if (level === 5)
+                    bob = HOP[frame % 16] ?? 0;
+                else if (level >= 3)
+                    bob = Math.floor(now / (level === 4 ? 800 : 1200)) % 2 ? -1 : 0;
+                // Horror and bad news shake her, worry and anger make her tremble, cold makes her shiver.
+                if (level === 0 || gasp) {
+                    dx = (frame % 3) - 1;
+                    dy = ((frame >> 1) % 3) - 1;
+                }
+                else if (level === 1 || annoyed)
+                    dx = frame % 4 < 2 ? 0 : 1;
+                else if (cold)
+                    dx = frame % 2;
             }
-            const curve = (mood - 0.5) * 2;
-            ctx.strokeStyle = ink;
-            ctx.lineCap = 'round';
-            ctx.lineWidth = Math.max(2.5, r * 0.075);
-            ctx.beginPath();
-            ctx.moveTo(cx - r * 0.34, my);
-            ctx.quadraticCurveTo(cx, my + curve * r * 0.34, cx + r * 0.34, my);
-            ctx.stroke();
+            const cx = (w >> 1) + dx;
+            const cy = (h >> 1) + 2 + bob + dy;
+            // Her body: the player's planet, turning.
+            this.globe.size = g;
+            // ponytail: a whole repaint of her surface costs ~16 ms, so at most every RETEXTURE_MS; paint it in slices if that hitch shows.
+            if (now - this.textureAt > RETEXTURE_MS) {
+                this.textureAt = now;
+                this.textureKey = `${world.revision}|${world.seed}`;
+            }
+            this.globe.spin = 2.4 + now * SPIN;
+            this.globe.render(world, this.textureKey);
+            this.globe.drawTo(ctx, cx, cy, r);
+            // Her face.
+            const ex = Math.round(r * 0.35);
+            const ey = cy - Math.round(r * 0.14);
+            const blinkAt = frame % 47;
+            const blink = blinkAt === 0 || blinkAt === 3 ? EYE_HALF : blinkAt < 3 ? EYE_SHUT : null;
+            let eye = level === 5 ? EYE_HAPPY : EYE;
+            if (poke >= 0)
+                eye = EYE_SQUEEZE;
+            else if (asleep)
+                eye = EYE_SHUT;
+            else if (annoyed)
+                eye = EYE_HALF;
+            else if (blink && level >= 1 && level <= 4)
+                eye = blink;
+            const [lift, worry, skew] = annoyed ? [0, -3, 0] : asleep ? [0, 0, 0] : BROWS[level];
+            const gx = level === 2 ? DART[Math.floor(now / 600) % DART.length] : Math.round(SE.clamp((this.pointer.x - 0.5) * 2, -1, 1) * 2);
+            const gy = level === 2 ? 0 : Math.round(SE.clamp((this.pointer.y - 0.45) * 2, -1, 1) * 2.5);
+            for (const side of [-1, 1]) {
+                const x = cx + side * ex;
+                const top = ey - 6;
+                blit(ctx, eye, x - 5, top, side > 0 && eye === EYE_SQUEEZE);
+                // Pinpoint pupils that tremble in horror; else they follow the pointer.
+                if (level === 0 && eye === EYE)
+                    pupil(ctx, eye, x - 5, top, ['kk', 'kk'], 4 + (frame % 3) - 1, 5);
+                else if (eye === EYE || eye === EYE_HALF)
+                    pupil(ctx, eye, x - 5, top, PUPIL, 3 + gx, 4 + gy);
+                // Brows, outer end to inner end; worry lifts the inner end, anger drops it. Closed arcs need none.
+                if (eye !== EYE_HAPPY && eye !== EYE_SQUEEZE) {
+                    ctx.fillStyle = COLOURS.k;
+                    const up = lift + (side < 0 ? skew : 0);
+                    for (let i = 0; i < 9; i++)
+                        ctx.fillRect(x + side * (4 - i), Math.round(top - 3 - up - (worry * i) / 8), 1, 2);
+                }
+                // Flushed in the heat, rosy when happy.
+                if (sweltering && !asleep)
+                    blit(ctx, FLUSH, x - 3 + side * 3, ey + 8);
+                else if (!annoyed && (level >= 4 || ((poke >= 0 || cheer) && level >= 3)))
+                    blit(ctx, BLUSH, x - 3 + side * 3, ey + 8);
+                // Tears run when she is horrified.
+                if (level === 0)
+                    blit(ctx, DROP, x - 2 + side * 2, ey + 5 + ((frame * 2 + (side > 0 ? 7 : 0)) % 14));
+            }
+            let mouth = MOUTHS[level];
+            if (poke >= 0)
+                mouth = level >= 3 ? GRIN : OOH;
+            else if (asleep)
+                mouth = SNORE;
+            else if (annoyed)
+                mouth = FROWN;
+            else if (react >= 0 && react < 9)
+                mouth = cheer ? GRIN : OOH;
+            else if (cold && level >= 1 && level <= 3)
+                mouth = CHATTER;
+            blit(ctx, mouth, cx - (mouth[0].length >> 1) + (mouth === CHATTER ? frame % 2 : 0), cy + Math.round(r * 0.27));
+            // Around her; sleep and anger put an end to hearts, sparkles and whistling.
+            const glad = !asleep && !annoyed;
+            if (level === 5 && glad) {
+                for (let k = 0; k < 3; k++) {
+                    const t = ((now + k * 900) % 2700) / 2700;
+                    if (t > 0.8 && frame % 2)
+                        continue;
+                    const far = R + 3 + (k === 2 ? 9 : 0);
+                    const x = k === 1 ? cx + far : cx - far - 7;
+                    blit(ctx, HEART, x + Math.round(Math.sin(t * 9) * 1.5), cy + 4 - Math.round(t * R * 1.1));
+                }
+            }
+            if (level >= 4 && glad) {
+                for (let k = 0; k < 4; k++) {
+                    const p = (frame + k * 6) % 24;
+                    if (p > 4)
+                        continue;
+                    const a = 0.5 + k * 1.6;
+                    const s = p === 2 ? SPARK : TWINKLE;
+                    blit(ctx, s, cx + Math.round(Math.cos(a) * (R + 8)) - (s.length >> 1), cy + Math.round(Math.sin(a) * (R + 4)) - (s.length >> 1));
+                }
+            }
+            if (cheer && react < 9) {
+                // Good news: a ring of sparks flying out.
+                for (let k = 0; k < 6; k++) {
+                    const a = (k / 6) * Math.PI * 2 + 0.3;
+                    const d = R + 4 + react * 2;
+                    blit(ctx, react < 6 ? SPARK : TWINKLE, cx + Math.round(Math.cos(a) * d) - 2, cy + Math.round(Math.sin(a) * d) - 2);
+                }
+            }
+            if (level === 3 && glad && poke < 0 && !cold && f.clean >= 0.5) {
+                // She whistles.
+                for (let k = 0; k < 2; k++) {
+                    const t = ((now + k * 1600) % 3200) / 3200;
+                    if (t < 0.75)
+                        blit(ctx, NOTE, cx + R + Math.round(t * 12), cy - 4 - Math.round(t * R * 0.9));
+                }
+            }
+            if (!asleep && (sweltering || level === 1 || level === 2)) {
+                const slide = Math.round(((now % 1600) / 1600) * 8);
+                blit(ctx, DROP, cx + Math.round(r * 0.55), ey - 12 + slide);
+                if (sweltering)
+                    blit(ctx, DROP, cx - Math.round(r * 0.55) - 4, ey - 8 + ((slide + 4) % 8));
+            }
+            if (sweltering) {
+                // Heat wavering up off her.
+                for (let k = 0; k < 3; k++) {
+                    const t = ((now + k * 700) % 2100) / 2100;
+                    if (t > 0.8 && frame % 2)
+                        continue;
+                    blit(ctx, HEAT, cx - 16 + k * 14, cy - R + 3 - Math.round(t * 9), (frame >> 2) % 2 === 1);
+                }
+            }
+            if (asleep) {
+                // Zs drifting up, growing as they go.
+                for (let k = 0; k < 2; k++) {
+                    const t = ((now + k * 1500) % 3000) / 3000;
+                    blit(ctx, t < 0.45 ? ZED_SMALL : ZED, cx + Math.round(r * 0.45 + t * 14), cy - Math.round(r * 0.5 + t * 18));
+                }
+            }
+            if (cold) {
+                for (let k = 0; k < 5; k++) {
+                    const x = cx + (k % 2 ? 1 : -1) * (R + 5 + ((k * 7) % 12)) - 1;
+                    blit(ctx, FLAKE, x + (Math.floor(now / 400 + k) % 2), ((Math.floor(now / 60) + k * 17) % (h + 4)) - 3);
+                }
+            }
+            if (f.clean < 0.5) {
+                for (let k = 0, n = f.clean < 0.25 ? 5 : 3; k < n; k++) {
+                    const a = now / 2600 + (k * Math.PI * 2) / n;
+                    blit(ctx, PUFF, cx + Math.round(Math.cos(a) * (R + 3)) - 4, cy + Math.round(Math.sin(a) * R * 0.7) - 2);
+                }
+            }
+            if ((level === 0 || (gasp && react < 12)) && frame % 6 < 4)
+                blit(ctx, BANG, cx + R - 3, cy - R - 5);
+            if (annoyed && frame % 8 < 6)
+                blit(ctx, ANGER, cx + Math.round(r * 0.4), cy - Math.round(r * 0.85));
         }
     }
     SE.GaiaPanel = GaiaPanel;
@@ -51171,18 +53486,25 @@ var SE;
     /* ----------------------------------------------------------------- chime -- */
     let audio = null;
     /**
-     * A short, bright arpeggio. Browsers only allow sound after the player has
-     * interacted with the page; until then this stays silent rather than fail.
+     * The shared audio context, resumed. Browsers only allow sound after the
+     * player has interacted with the page; until then the chimes stay silent
+     * rather than fail. Null without Web Audio.
      */
-    function playChime(spontaneous, volume = 1) {
+    function audioContext() {
         const Ctor = window.AudioContext ?? window.webkitAudioContext;
         if (!Ctor)
-            return;
+            return null;
+        audio ?? (audio = new Ctor());
+        if (audio.state === 'suspended')
+            void audio.resume();
+        return audio;
+    }
+    /** A short, bright arpeggio. */
+    function playChime(spontaneous, volume = 1) {
         try {
-            audio ?? (audio = new Ctor());
-            if (audio.state === 'suspended')
-                void audio.resume();
-            const ac = audio;
+            const ac = audioContext();
+            if (!ac)
+                return;
             const start = ac.currentTime + 0.03;
             // A major arpeggio; a step that arose on its own rings a third higher.
             const notes = spontaneous ? [659.25, 830.61, 987.77, 1318.51] : [523.25, 659.25, 783.99, 1046.5];
@@ -51208,6 +53530,64 @@ var SE;
         }
     }
     SE.playChime = playChime;
+    /**
+     * A new species: two soft mallet notes rising a fourth (G5, C6) and a quiet
+     * sparkle of the C major triad two octaves up, in a small filtered echo.
+     * Gentler than a step's chime, so frequent discoveries never nag. Sine
+     * tones only, with a short bright overtone for the strike (a marimba's
+     * fourth partial), so nothing sounds harsh at any volume.
+     */
+    function playDiscoveryChime(volume) {
+        if (volume <= 0 || document.hidden)
+            return;
+        try {
+            const ac = audioContext();
+            if (!ac)
+                return;
+            const t0 = ac.currentTime + 0.02;
+            const out = ac.createGain();
+            out.gain.value = volume;
+            out.connect(ac.destination);
+            // The room: an echo after 190 ms, darker and softer each time.
+            const delay = ac.createDelay(1);
+            delay.delayTime.value = 0.19;
+            const damp = ac.createBiquadFilter();
+            damp.type = 'lowpass';
+            damp.frequency.value = 2600;
+            const feedback = ac.createGain();
+            feedback.gain.value = 0.3;
+            const wet = ac.createGain();
+            wet.gain.value = 0.32;
+            out.connect(delay);
+            delay.connect(damp);
+            damp.connect(feedback).connect(delay);
+            damp.connect(wet).connect(ac.destination);
+            const tone = (freq, t, peak, attack, decay) => {
+                const osc = ac.createOscillator();
+                const gain = ac.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(peak, t + attack);
+                gain.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+                osc.connect(gain).connect(out);
+                osc.start(t);
+                osc.stop(t + attack + decay + 0.05);
+            };
+            const mallet = (freq, t, peak, decay) => {
+                tone(freq, t, peak, 0.005, decay);
+                tone(freq * 2, t, peak * 0.12, 0.005, decay * 0.45);
+                tone(freq * 4, t, peak * 0.22, 0.003, 0.07);
+            };
+            mallet(783.99, t0, 0.15, 0.9);
+            mallet(1046.5, t0 + 0.11, 0.14, 1.3);
+            [2093, 2637.02, 3135.96].forEach((freq, k) => tone(freq, t0 + 0.2 + k * 0.07, 0.022, 0.03, 0.55));
+        }
+        catch {
+            // No audio device or a blocked context: the notice works without sound.
+        }
+    }
+    SE.playDiscoveryChime = playDiscoveryChime;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — the evolution showcase
@@ -52274,7 +54654,8 @@ var SE;
         return b;
     }
     function examineAnimal(world, i, c, actions) {
-        const stage = world.stage(i, c);
+        // Corals only in warm water: elsewhere the class's highest form that builds no reef, as on the map.
+        const stage = SE.reefShownStage(world, i, c, world.stage(i, c));
         const density = world.density(i, c);
         const { el, body } = entry(`life:${c}`, SE.faunaPicture(c, stage, true, ''), SE.subspeciesName(c, stage), `${SE.fmt.int(density * 100)} %`);
         body.append(SE.make('div', 'ex-group', `${SE.LIFE[c].name} · ${SE.faunaStageLabel(stage)}`));
@@ -52385,7 +54766,8 @@ var SE;
             const river = world.riverLevel[i] > 0 ? `Fluss · ${SE.fmt.int(SE.RiverSystem.discharge(world, i))} m³/s` : '';
             const event = world.eventTtl[i] > 0 ? `Ereignis: ${SE.EVENT_NAMES[world.eventKind[i]]}` : '';
             const scar = SE.hazardLabel(world, i);
-            const sig = [tileSig, SE.fmt.pct(world.vegetation[i]), city, river, event, scar,
+            const reef = SE.reefNotes(world, i);
+            const sig = [tileSig, SE.fmt.pct(world.vegetation[i]), city, river, event, scar, ...reef,
                 species.map(c => `${c}:${world.stage(i, c)}:${SE.fmt.int(world.density(i, c) * 100)}:${SE.LifeSystem.habitatLabel(world.density(i, c))}:${SE.fmt.pct(world.lifeCounts[c] / SE.TILE_COUNT)}:${SE.examineAge(world, world.lifeFirstSeen[c])}`).join(','),
                 plants.map(g => `${g}:${SE.fmt.pct(world.floraCounts[g] / SE.TILE_COUNT)}:${SE.examineAge(world, world.evo.developed.get(SE.FLORA[g].id)?.years ?? -1)}`).join(','),
                 world.floraTop[i], SE.growsAsCacti(world, i) ? 'cacti' : '',
@@ -52424,6 +54806,8 @@ var SE;
             const notes = SE.make('div', 'ex-notes');
             if (river)
                 notes.append(SE.make('p', undefined, river));
+            for (const line of reef)
+                notes.append(SE.make('p', undefined, line));
             if (city) {
                 const line = SE.make('p', undefined, city);
                 const tribe = SE.cityTribeColor(world, i);
@@ -52461,7 +54845,7 @@ var SE;
             else
                 picture.append(SE.img(SE.habitatAsset(SE.BIOME_ICONS[world.biome[i]]), 'ex-picture-fallback'));
             const meta = SE.make('div', 'ex-meta');
-            const name = world.isWater(i) ? SE.BIOME_NAMES[world.biome[i]] : SE.isBeach(world, i) ? 'Sandstrand' : SE.LANDSCAPE_NAMES[world.landscape[i]];
+            const name = world.isWater(i) ? SE.BIOME_NAMES[world.biome[i]] : SE.LANDSCAPE_NAMES[world.landscape[i]];
             const heading = SE.make('h3', 'ex-place', name);
             heading.title = [SE.landscapeLabel(world, i), SE.altitudeBelt(world, i)].filter(Boolean).join(' · ');
             meta.append(heading, SE.make('div', 'ex-state', `· ${state.toLocaleLowerCase('de')}`));
@@ -52549,14 +54933,18 @@ var SE;
 /* =============================================================================
  * SimEarth 2.0 — discovery notices
  * -----------------------------------------------------------------------------
- * A small card in the corner whenever the planet produces a sub-species the
- * lexicon has not seen before. One at a time and never on top of a film or
- * milestone; when several wait, they are announced together, so a burst of
- * discoveries (a loaded planet, fast play) never floods the screen.
+ * A banner under the top bar whenever the planet produces a sub-species the
+ * lexicon has not seen before: it drops in with a soft chime, stays a few
+ * seconds (longer while the pointer rests on it) and fades away; the game
+ * runs on. One at a time and never on top of a film or milestone; when
+ * several wait, they are announced together, so a burst of discoveries (a
+ * loaded planet, fast play) never floods the screen.
  * ========================================================================== */
 var SE;
 (function (SE) {
-    const DISCOVERY_MS = 5000;
+    const DISCOVERY_MS = 4000;
+    /** How long the banner takes to fade away (css/fauna.css `discovery-out`). */
+    const DISCOVERY_FADE_MS = 900;
     /** From this many waiting discoveries on, all of them share one notice. */
     const DISCOVERY_BUNDLE = 3;
     /** Names a shared notice spells out before "und n weitere". */
@@ -52569,6 +54957,8 @@ var SE;
             this.hooks = hooks;
             this.queue = [];
             this.card = null;
+            /** The last banner is still fading: the next one waits for it. */
+            this.fading = false;
             /** Re-reads what holds the notice on screen (hover, focus, a film). */
             this.resync = null;
             this.pumpHandle = 0;
@@ -52611,11 +55001,10 @@ var SE;
             if (this.card) {
                 this.card.remove();
                 this.card = null;
-                this.hooks.closed(false);
             }
         }
         showNext() {
-            if (this.card || this.queue.length === 0 || this.hooks.held())
+            if (this.card || this.fading || this.queue.length === 0 || this.hooks.held())
                 return;
             if (this.queue.length >= DISCOVERY_BUNDLE)
                 this.showBundle(this.queue.splice(0));
@@ -52678,11 +55067,11 @@ var SE;
                 this.resync = null;
                 const hadFocus = card.contains(document.activeElement);
                 card.classList.add('leaving');
-                window.setTimeout(() => card.remove(), 260);
+                window.setTimeout(() => card.remove(), DISCOVERY_FADE_MS);
                 if (hadFocus && !clicked)
                     document.querySelector('.world-canvas')?.focus({ preventScroll: true });
-                this.hooks.closed(clicked);
-                this.pump();
+                this.fading = true;
+                window.setTimeout(() => { this.fading = false; this.pump(); }, DISCOVERY_FADE_MS);
             };
             const expire = () => {
                 // Under a film the notice would run out unseen.
@@ -53742,7 +56131,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.9.1';
+    SE.APP_VERSION = '0.9.2';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -53878,7 +56267,7 @@ var SE;
     /** Globe pixels across the canvas; each is drawn as a whole number of device pixels. */
     const GLOBE_PX = 144;
     /** Disc radius as a share of the canvas side; the CSS glows around it assume 0.46. */
-    const DISC = 0.46;
+    SE.GLOBE_DISC = 0.46;
     /** Sunlight from the upper left, a little toward the viewer (screen y points down). */
     const SUN = [-0.62, -0.5, 0.6].map((c, _, v) => c / Math.hypot(...v));
     /** 4×4 ordered dither, 0..1: the terminator and the haze step in pixel patterns. */
@@ -53888,6 +56277,16 @@ var SE;
     const AIR = [126, 206, 255];
     /** Clouds turn this much faster than the ground below them. */
     const CLOUD_DRIFT = 1.25;
+    /** A sea tile seen from space: coastal sea or open ocean as the map shows them, a lagoon mixed towards turquoise by its level. */
+    function seaFromSpace(world, reefs, i) {
+        const b = world.biome[i];
+        const sea = SE.BIOME_COLORS[b === SE.Biome.Ocean || (b === SE.Biome.Arctic && world.elevation[i] <= SE.COAST_DEPTH) ? SE.Biome.Ocean : SE.Biome.Coast];
+        const g = reefs.lagoon[i];
+        if (g === 0)
+            return sea;
+        const t = g === 1 ? 0.25 : g === 2 ? 0.5 : 1;
+        return [SE.lerp(sea[0], SE.LAGOON_RGB[0], t), SE.lerp(sea[1], SE.LAGOON_RGB[1], t), SE.lerp(sea[2], SE.LAGOON_RGB[2], t)];
+    }
     /** Smooth value noise over the grid, 0..1, wrapping east–west. */
     function smoothNoise(rng) {
         const sum = new Float32Array(SE.TILE_COUNT);
@@ -53937,10 +56336,14 @@ var SE;
      * a rim of air and its own clouds. Only the turn is computed per frame.
      */
     class TitleGlobe {
-        constructor(canvas) {
+        /** `bare`: the disc alone, without its rim of air and the haze on its limb (Gaia's body). */
+        constructor(canvas, bare = false) {
             this.canvas = canvas;
+            this.bare = bare;
             /** Longitude offset in radians. */
             this.spin = 2.4;
+            /** Pixels across, for a globe that is only copied onto other canvases (drawTo); 0 fits it to its box on screen. */
+            this.size = 0;
             this.texture = null;
             this.clouds = null;
             this.textureKey = '';
@@ -53959,10 +56362,10 @@ var SE;
                 throw new Error('SimEarth: 2D context unavailable for the title globe');
             this.ctx = ctx;
         }
-        render(world) {
+        /** `key`: the surface is repainted only when it changes; a running game passes a slower one than every tick. */
+        render(world, key = `${world.ticks}|${world.revision}|${world.seed}`) {
             if (!this.fit())
                 return;
-            const key = `${world.ticks}|${world.revision}|${world.seed}`;
             if (key !== this.textureKey) {
                 this.textureKey = key;
                 this.texture = this.paintTexture(world);
@@ -54016,7 +56419,7 @@ var SE;
         drawTo(ctx, cx, cy, r) {
             if (!this.side)
                 return;
-            const size = (2 * r) / (2 * DISC);
+            const size = (2 * r) / (2 * SE.GLOBE_DISC);
             ctx.imageSmoothingEnabled = false;
             ctx.drawImage(this.canvas, cx - size / 2, cy - size / 2, size, size);
         }
@@ -54025,11 +56428,16 @@ var SE;
             const turn = (this.spin / (Math.PI * 2) + 0.5) * SE.GRID_W;
             return [((Math.round(turn) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W, SE.GRID_H >> 1];
         }
-        /** Terrain colours; rivers mixed into the land beside them, which at this size reads better than bright lines. */
+        /**
+         * Terrain colours on land; the sea as seen from space, coastal sea and
+         * open ocean flat with the lagoons turquoise, no depth. Rivers mixed into
+         * the land beside them, which at this size reads better than bright lines.
+         */
         paintTexture(world) {
             const tex = new Uint8ClampedArray(SE.TILE_COUNT * 4);
+            const reefs = SE.reefMap(world);
             for (let i = 0; i < SE.TILE_COUNT; i++) {
-                const [r, g, b] = SE.mapColor(world, i, SE.MapMode.Terrain);
+                const [r, g, b] = world.isWater(i) ? seaFromSpace(world, reefs, i) : SE.mapColor(world, i, SE.MapMode.Terrain);
                 tex[i * 4] = r;
                 tex[i * 4 + 1] = g;
                 tex[i * 4 + 2] = b;
@@ -54045,16 +56453,19 @@ var SE;
         }
         /** Size the canvas to whole device pixels per globe pixel; false while it has no room. */
         fit() {
-            const box = this.canvas.parentElement?.getBoundingClientRect();
-            if (!box || box.width <= 0 || box.height <= 0)
-                return false;
-            const dpr = window.devicePixelRatio || 1;
-            const device = Math.min(box.width, box.height) * dpr;
-            const scale = Math.max(1, Math.round(device / GLOBE_PX));
-            const side = Math.max(16, Math.floor(device / scale));
-            const css = `${(side * scale) / dpr}px`;
-            if (this.canvas.style.width !== css)
-                this.canvas.style.width = this.canvas.style.height = css;
+            let side = this.size;
+            if (!side) {
+                const box = this.canvas.parentElement?.getBoundingClientRect();
+                if (!box || box.width <= 0 || box.height <= 0)
+                    return false;
+                const dpr = window.devicePixelRatio || 1;
+                const device = Math.min(box.width, box.height) * dpr;
+                const scale = Math.max(1, Math.round(device / GLOBE_PX));
+                side = Math.max(16, Math.floor(device / scale));
+                const css = `${(side * scale) / dpr}px`;
+                if (this.canvas.style.width !== css)
+                    this.canvas.style.width = this.canvas.style.height = css;
+            }
             if (side === this.side)
                 return true;
             this.side = this.canvas.width = this.canvas.height = side;
@@ -54069,7 +56480,7 @@ var SE;
             this.col = new Float32Array(count);
             this.light = new Float32Array(count);
             this.haze = new Float32Array(count);
-            const r = n * DISC;
+            const r = n * SE.GLOBE_DISC;
             const c = n / 2;
             for (let py = 0; py < n; py++) {
                 for (let px = 0; px < n; px++) {
@@ -54079,6 +56490,10 @@ var SE;
                     const d2 = nx * nx + ny * ny;
                     const dither = BAYER[(py & 3) * 4 + (px & 3)] - 0.5;
                     if (d2 > 1) {
+                        if (this.bare) {
+                            this.row[p] = -1;
+                            continue;
+                        }
                         // Two pixels of air around the disc, bright on the sunny side.
                         const out = (Math.sqrt(d2) - 1) * r;
                         const lit = SE.clamp((nx * SUN[0] + ny * SUN[1]) / Math.sqrt(d2) + 0.25, 0, 1);
@@ -54095,7 +56510,7 @@ var SE;
                     this.light[p] = BANDS.find(([lo]) => sun > lo)[1];
                     // Haze on the limb, thicker toward the edge, only where the sun shines.
                     const edge = 1 - nz;
-                    this.haze[p] = sun > 0 ? (edge + dither * 0.1 > 0.8 ? 0.4 : edge + dither * 0.1 > 0.62 ? 0.18 : 0) : 0;
+                    this.haze[p] = sun > 0 && !this.bare ? (edge + dither * 0.1 > 0.8 ? 0.4 : edge + dither * 0.1 > 0.62 ? 0.18 : 0) : 0;
                 }
             }
         }
@@ -54330,6 +56745,8 @@ var SE;
             planet.panel.querySelector('.title-custom-head')?.after(modes);
             const buttons = SE.make('div', 'title-buttons');
             buttons.append(start, titleButton('Spielstände …', 'slot', 'title-saves', () => void this.saves()), titleButton('Einstellungen', 'menu-options', 'title-settings', () => void hooks.openSettings()));
+            if (SE.DEV_MODE_AVAILABLE)
+                buttons.appendChild(SE.devModeToggle()); // DEVMODE
             const panel = SE.make('div', 'title-panel');
             panel.append(logo, SE.make('p', 'title-lead', LEAD));
             if (resume)
@@ -54568,6 +56985,8 @@ var SE;
     SE.SURF_VOLUME = 0.16;
     /** Loudest the oxygen bubbling gets (zoomed fully in on a pearling coast): the nearer sound, above the surf. */
     SE.BUBBLE_VOLUME = 0.3;
+    /** Loudest a hurricane's wind gets, with the storm in view and the camera close. */
+    SE.STORM_WIND_VOLUME = 0.5;
     /** How quickly an ambient loop follows the view, ms to cover most of a change. */
     const AMBIENT_EASE_MS = 1500;
     /**
@@ -54597,7 +57016,7 @@ var SE;
                 if (!this.audio.paused)
                     this.audio.pause();
             }
-            else if (this.audio.paused && !document.hidden && now >= this.retryAt) {
+            else if (this.audio.paused && !this.audio.error && !document.hidden && now >= this.retryAt) {
                 this.retryAt = now + 1000;
                 this.audio.play().catch(() => undefined);
             }
@@ -54616,14 +57035,15 @@ var SE;
         'vulkan-explosion': 1,
         'cracking-earthquake': 1,
         'tornado': 1,
+        'thunder': 0.8,
         // Mastered loud (the bang peaks near full scale), so it sits lower.
         'siren-and-nuke': 0.9,
     };
     /** Where the bang sits in siren-and-nuke.mp3, after the siren: measured from the file's loudness. */
     SE.NUKE_BOOM_MS = 12150;
-    /** One-shot effect sound; false when it stays silent (sound off, tab hidden). */
-    function playSfx(name) {
-        const volume = (SFX_LEVELS[name] ?? 0.5) * SE.SFX.volume();
+    /** One-shot effect sound, `gain` 0..1 on top of its level; false when it stays silent (sound off, tab hidden). */
+    function playSfx(name, gain = 1) {
+        const volume = (SFX_LEVELS[name] ?? 0.5) * SE.SFX.volume() * gain;
         if (volume <= 0 || document.hidden)
             return false;
         const audio = new Audio(`assets/audio/sfx/${name}.mp3`);
@@ -54668,6 +57088,7 @@ var SE;
 (function (SE) {
     /** Overall level (times SFX.volume()). */
     const TF_LEVEL = 0.1;
+    const TF_RUMBLE_LEVEL = 1;
     /** Time constant of every parameter glide, s. */
     const TF_GLIDE = 0.07;
     const TF_ATTACK = 0.05;
@@ -54747,6 +57168,7 @@ var SE;
          */
         constructor(ac, dest) {
             this.dest = dest;
+            this.rumble = null;
             this.bus = null;
             this.voice = null;
             /** Random walk -1..1, nudging filters so a long stroke never loops audibly. */
@@ -54762,13 +57184,29 @@ var SE;
             this.heardDir = 0;
             this.nextStage = 0;
             this.ac = ac ?? null;
+            if (!ac && typeof document !== 'undefined') {
+                // Media elements preload local MP3s over file:// without fetch/decodeAudioData.
+                this.rumble = new Audio('assets/audio/sfx/rumble-bass.mp3');
+                this.rumble.preload = 'auto';
+                this.rumble.loop = true;
+                this.rumble.volume = 0;
+                document.addEventListener('visibilitychange', () => { if (document.hidden)
+                    this.stop(); });
+                window.addEventListener('blur', () => this.stop());
+            }
         }
         /** Pointer down with the brush. */
         start(sign) {
+            this.rumble?.pause();
             if (this.voice)
                 this.release();
             if (SE.SFX.volume() <= 0 || tfHidden())
                 return;
+            if (this.rumble) {
+                this.rumble.volume = tfClamp01(TF_RUMBLE_LEVEL * SE.SFX.volume());
+                this.rumble.currentTime = 0;
+                this.rumble.play().catch(() => undefined);
+            }
             const ac = this.context();
             if (!ac)
                 return;
@@ -54787,6 +57225,8 @@ var SE;
         }
         /** Every dab: `dab` as terraformDab returned it, `work` 0..1 how hard the brush pushes this frame. */
         update(dab, work) {
+            if (this.rumble)
+                this.rumble.volume = tfHidden() ? 0 : tfClamp01(TF_RUMBLE_LEVEL * SE.SFX.volume());
             const v = this.voice;
             const ac = this.ac;
             if (!v || !ac)
@@ -54833,6 +57273,7 @@ var SE;
         }
         /** Pointer up, or the tool changed. */
         stop() {
+            this.rumble?.pause();
             this.release();
         }
         /**
@@ -55374,7 +57815,7 @@ var SE;
         }
         /** "Hügel · 1.240 m" in a dark pixel box beside the ring; it pops when the stage changes under a stroke. */
         drawLabel(ctx, cam, x, y, stage, elevation, now) {
-            const meters = Math.round((elevation * SE.ELEVATION_KM * 1000) / 10) * 10;
+            const meters = Math.round(SE.elevationMeters(elevation) / 10) * 10;
             const text = `${SE.TERRAFORM_STAGES[stage].name} · ${SE.fmt.int(meters).replace('-', '−')} m`;
             const pop = Math.max(0, 1 - (now - this.popAt) / POP_MS);
             const scale = 1 + 0.3 * pop * pop;
@@ -57267,6 +59708,8 @@ var SE;
             this.surfTarget = 0;
             this.bubbling = new SE.AmbientLoop('assets/audio/sfx/simmering-water.mp3', SE.BUBBLE_VOLUME);
             this.bubblingTarget = 0;
+            this.stormWind = new SE.AmbientLoop('assets/audio/sfx/hurricane-wind.mp3', SE.STORM_WIND_VOLUME);
+            this.stormWindTarget = 0;
             this.lastSurfCheck = 0;
             this.toolButtons = new Map();
             this.layerButtons = [];
@@ -57310,7 +59753,6 @@ var SE;
             this.speedBeforeMilestone = 3;
             this.fauna = new SE.FaunaDex();
             this.screenHeld = false;
-            this.discoveryPaused = false;
             this.lastFrame = 0;
             this.accumulator = 0;
             this.lastUi = 0;
@@ -57319,19 +59761,25 @@ var SE;
             this.toolRevision = -1;
             this.speedCycle = null;
             this.frame = (now) => {
-                const delta = Math.min(250, now - this.lastFrame);
+                const start = performance.now();
+                const gap = now - this.lastFrame;
+                const delta = Math.min(250, gap);
                 this.lastFrame = now;
                 const tickMs = SPEED_TICK_MS[this.speed];
                 if (tickMs > 0) {
                     this.accumulator += delta;
                     let steps = 0;
-                    while (this.accumulator >= tickMs && steps < SE.MAX_TICKS_PER_FRAME) {
+                    // The first due tick always runs, more only within the frame's budget.
+                    while (this.accumulator >= tickMs && steps < SE.MAX_TICKS_PER_FRAME && (steps === 0 || performance.now() - start < SE.SIM_BUDGET_MS)) {
+                        const t0 = performance.now();
                         this.tick();
+                        SE.perfHud.tick(performance.now() - t0);
                         this.accumulator -= tickMs;
                         steps++;
                     }
-                    if (this.accumulator > tickMs * SE.MAX_TICKS_PER_FRAME)
-                        this.accumulator = 0;
+                    // Too slow a machine runs the planet slower than set instead of freezing on ticks it can never catch up on.
+                    this.accumulator = Math.min(this.accumulator, tickMs * SE.SIM_BACKLOG_TICKS);
+                    SE.perfHud.ticksInFrame(steps);
                     // Effects play between two ticks by this; paused, it stays where it was.
                     // A pause from inside a tick (milestone) leaves the accumulator below 0.
                     this.editView.tickPhase = SE.clamp(this.accumulator / tickMs, 0, 0.999);
@@ -57353,9 +59801,11 @@ var SE;
                     this.lastSurfCheck = now;
                     this.surfTarget = this.title || !this.settings.ambient ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
                     this.bubblingTarget = this.title || !this.settings.ambient ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
+                    this.stormWindTarget = this.title || !this.settings.ambient ? 0 : this.editView.stormPresence(now) * this.settings.ambientVolume;
                 }
                 this.surf.update(this.surfTarget, delta, now);
                 this.bubbling.update(this.bubblingTarget, delta, now);
+                this.stormWind.update(this.stormWindTarget, delta, now);
                 if (this.windows.isVisible('map')) {
                     if (this.mapView.globe) {
                         if (now - this.lastMapRender > 50) {
@@ -57369,7 +59819,7 @@ var SE;
                     }
                 }
                 if (this.windows.isVisible('gaia'))
-                    this.gaiaPanel.render(this.world, now);
+                    this.gaiaPanel.render(this.world, now, this.settings.reduceEffects, this.speed === 0);
                 if (now - this.lastUi > 100) {
                     this.lastUi = now;
                     this.updateUi();
@@ -57379,6 +59829,7 @@ var SE;
                     this.lastAutosave = now;
                     void this.writeSave(SE.AUTOSAVE_KEY, true);
                 }
+                SE.perfHud.frame(gap, performance.now() - start);
                 window.requestAnimationFrame(this.frame);
             };
             this.stage = SE.el('desktop');
@@ -57412,8 +59863,7 @@ var SE;
                 open: (c, s) => { this.speciesInfo.show(c, s); this.windows.show('species'); },
                 openLexicon: () => this.windows.show('lexicon'),
                 held: () => this.screenHeld,
-                shown: (events) => { this.fauna.markAnnounced(events); this.onDiscovery(true); },
-                closed: (clicked) => this.onDiscovery(false, clicked),
+                shown: (events) => { this.fauna.markAnnounced(events); SE.playDiscoveryChime(SE.SFX.volume()); },
             });
             this.buildStage();
             this.buildMapWindow();
@@ -57878,7 +60328,7 @@ var SE;
         }
         buildInfoWindows() {
             // Gaia
-            const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: SE.uiIcon('gaia'), x: -12, y: 424, width: 300, height: 470 });
+            const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: SE.uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 424, width: 300, height: 530 });
             const gaiaWrap = SE.make('div', 'gaia-layout');
             gaia.body.appendChild(gaiaWrap);
             this.gaiaPanel = new SE.GaiaPanel(gaiaWrap);
@@ -57994,6 +60444,7 @@ var SE;
             const omega = chip(SE.resIcon('energy'), 'Energie (Ω) für Werkzeuge – füllt sich, während die Zeit läuft', 'hud-omega');
             const omegaBar = SE.make('span', 'hud-bar');
             omegaBar.appendChild(SE.make('span'));
+            const devTag = omega.el.appendChild(SE.make('span', 'hud-tag', 'DEV')); // DEVMODE
             omega.el.appendChild(omegaBar);
             const ep = chip(SE.resIcon('ep'), 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', 'hud-ep');
             const epRate = SE.make('span', 'hud-sub');
@@ -58002,8 +60453,8 @@ var SE;
             o2.el.appendChild(SE.make('span', 'hud-tag', 'Luft'));
             const oceanO2 = chip(SE.uiIcon('layer-oceans'), 'O₂ Meer: gelöster Sauerstoff, in Prozent der heutigen Sättigung. Er steigt erst, wenn das gelöste Eisen im Meer verbraucht ist.', 'hud-minor hud-o2');
             oceanO2.el.appendChild(SE.make('span', 'hud-tag', 'Meer'));
-            const co2 = chip(SE.resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor');
-            const temp = chip(SE.resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor');
+            const co2 = chip(SE.resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor hud-co2');
+            const temp = chip(SE.resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor hud-temp');
             // The gas chips open the air composition window.
             for (const c of [o2, oceanO2, co2]) {
                 c.el.setAttribute('role', 'button');
@@ -58054,6 +60505,7 @@ var SE;
                 omega: omega.value, omegaBar: omegaBar.firstChild, ep: ep.value, epRate,
                 o2: o2.value, co2: co2.value, temp: temp.value, date, scale, play, evoBadge, evoBtn,
                 oceanO2: oceanO2.value,
+                devTag, // DEVMODE
             };
             this.syncSpeedButtons();
         }
@@ -58216,6 +60668,12 @@ var SE;
             document.addEventListener('keydown', shift);
             document.addEventListener('keyup', shift);
             document.addEventListener('keyup', (e) => { this.panKeys.delete(e.code); });
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'F3')
+                    return;
+                e.preventDefault();
+                SE.perfHud.toggle();
+            });
             // A key released outside the window never sends its keyup.
             window.addEventListener('blur', () => this.panKeys.clear());
             document.addEventListener('keydown', (e) => {
@@ -58439,7 +60897,7 @@ var SE;
                     break;
                 case SE.Tool.PlantBiome: {
                     const selected = SE.nodeForFlora(s.flora);
-                    if (!selected || !this.world.evo.isDeveloped(selected.id)) {
+                    if (!selected || !(SE.isDevMode() || this.world.evo.isDeveloped(selected.id))) { // DEVMODE
                         const first = SE.EVO_NODES.find((n) => n.flora !== undefined && this.world.evo.isDeveloped(n.id));
                         if (first && first.flora !== undefined)
                             s.flora = first.flora;
@@ -58448,7 +60906,7 @@ var SE;
                         if (n.flora === undefined)
                             continue;
                         const g = n.flora;
-                        const dev = this.world.evo.isDeveloped(n.id);
+                        const dev = SE.isDevMode() || this.world.evo.isDeveloped(n.id); // DEVMODE
                         option({
                             label: n.name, icon: SE.evoIcon(n.id), cost: dev ? SE.BIOME_COST : undefined,
                             active: dev && !s.clearing && s.flora === g,
@@ -58469,7 +60927,7 @@ var SE;
                             if (n.life === undefined)
                                 continue;
                             const c = n.life;
-                            const dev = this.world.evo.isDeveloped(n.id);
+                            const dev = SE.isDevMode() || this.world.evo.isDeveloped(n.id); // DEVMODE
                             option({
                                 label: n.name, icon: SE.evoIcon(n.id), cost: dev ? SE.LIFE[c].cost : undefined, active: s.life === c,
                                 sub: n.habitat.text, locked: dev ? undefined : 'Erst im Evolutionsbaum entwickeln',
@@ -58553,6 +61011,8 @@ var SE;
         }
         /** Charge the Ω pool, reporting failure. */
         spend(cost) {
+            if (SE.isDevMode())
+                return true; // DEVMODE
             if (this.world.omega < cost) {
                 this.notifier.message(`Zu wenig Energie – ${SE.fmt.int(cost)} Ω benötigt, ${SE.fmt.int(this.world.omega)} Ω vorhanden.`, 'warn');
                 return false;
@@ -58585,6 +61045,8 @@ var SE;
                 return;
             const w = this.world;
             const t = this.terraform;
+            if (SE.isDevMode())
+                w.omega = SE.OMEGA_MAX; // DEVMODE: the brush never runs dry
             // The brush slows down to what the energy left can pay, from what the last frame cost per second.
             const perSecond = t.perSecond * SE.TERRAFORM_COST_PER_UNIT;
             if (w.omega < 1) {
@@ -58799,7 +61261,7 @@ var SE;
                 return;
             }
             const n = SE.nodeForFlora(s.flora);
-            if (!n || !w.evo.isDeveloped(n.id)) {
+            if (!n || !(SE.isDevMode() || w.evo.isDeveloped(n.id))) { // DEVMODE
                 this.notifier.message('Diese Pflanzengruppe ist noch nicht entwickelt.', 'warn');
                 return;
             }
@@ -58832,7 +61294,7 @@ var SE;
             if (s.lifeMode === 'life') {
                 const def = SE.LIFE[s.life];
                 const node = SE.nodeForLife(s.life);
-                if (!node || !w.evo.isDeveloped(node.id)) {
+                if (!node || !(SE.isDevMode() || w.evo.isDeveloped(node.id))) { // DEVMODE
                     this.notifier.message(`${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`, 'warn');
                     return;
                 }
@@ -59141,18 +61603,6 @@ var SE;
             SE.flyTo(this.editView, x, y, () => this.editView.ping(x, y, SE.KINGDOM_COLOR[SE.nodeForLife(c)?.kingdom ?? 'animal']));
             return true;
         }
-        /** Pause for a discovery notice; resume unless the player opened it. */
-        onDiscovery(shown, clicked = false) {
-            if (shown && this.speed !== 0) {
-                this.setSpeed(0, true);
-                this.discoveryPaused = true;
-            }
-            else if (!shown && this.discoveryPaused) {
-                this.discoveryPaused = false;
-                if (!clicked && this.speed === 0)
-                    this.setSpeed(this.lastRunningSpeed, true);
-            }
-        }
         onMilestone(open) {
             if (!this.settings.pauseOnMilestone)
                 return;
@@ -59271,7 +61721,7 @@ var SE;
             // Keep the phase, so a speed change never throws a moving effect back.
             this.accumulator = this.editView.tickPhase * SPEED_TICK_MS[i];
             if (i !== 0)
-                this.milestonePaused = this.discoveryPaused = false;
+                this.milestonePaused = false;
             this.syncSpeedButtons();
             if (!quiet)
                 this.notifier.message(i === 0 ? 'Pausiert.' : `Tempo: ${SPEED_NAMES[i]}`);
@@ -59314,6 +61764,9 @@ var SE;
             this.advanceTimeScale();
             this.history.sample(w);
             this.recordCiv();
+            // First reef and first white beach: from the map's own derivation (reefs.ts), not from the simulation.
+            for (const e of SE.reefMilestones(w))
+                this.evolution.record(w, e);
         }
         /** Hand the civilization's news to the chronicle, or else to the message bar. */
         civNews() {
@@ -59400,6 +61853,11 @@ var SE;
             h.omega.textContent = SE.fmt.int(w.omega);
             h.omegaBar.style.width = `${Math.round((w.omega / SE.OMEGA_MAX) * 100)}%`;
             h.ep.textContent = SE.fmt.int(w.evo.ep);
+            if (SE.isDevMode()) {
+                h.omega.textContent = h.ep.textContent = '∞';
+                h.omegaBar.style.width = '100%';
+            } // DEVMODE
+            h.devTag.hidden = !SE.isDevMode(); // DEVMODE
             const rate = this.evolution.epRate(w, this.params);
             h.epRate.textContent = rate > 0 ? `+${SE.fmt.two(rate)}` : '';
             h.o2.textContent = `${SE.fmt.one(w.o2)} %`;
@@ -59612,6 +62070,7 @@ var SE;
             }
         }
         afterLoad() {
+            SE.PixelTerrain.shared().field.forget();
             this.notifier.clear();
             this.discoveries.clear();
             this.evolution.pending.length = 0;
@@ -59622,6 +62081,11 @@ var SE;
             this.windows.hide('examine');
             this.sliderPanels.forEach((p) => p.sync());
             this.evolution.refresh(this.world, this.params, true);
+            // Reefs and white beaches the planet already has are history, not news.
+            for (const e of SE.reefMilestones(this.world)) {
+                this.world.evo.chronicle.push(e);
+                this.world.evo.reported.add(e.key);
+            }
             this.editView.markDirty();
             this.examinePanel.invalidate();
             this.chroniclePanel.update(this.world, true);

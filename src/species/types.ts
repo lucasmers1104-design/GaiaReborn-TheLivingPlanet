@@ -99,6 +99,10 @@ namespace SE {
     /** First appearance, million years ago. Drives when the stage can appear. */
     readonly ma: number;
     readonly art: Art;
+    /** Builds reefs in warm shallow sea; the map draws them (src/reefs.ts). */
+    readonly reefBuilder?: 'rugose' | 'stony';
+    /** Grazes reefs and grinds their lime to sand; once it has evolved, its whole class does (src/reefs.ts). */
+    readonly reefGrazer?: true;
   }
 
   export interface Specialist {

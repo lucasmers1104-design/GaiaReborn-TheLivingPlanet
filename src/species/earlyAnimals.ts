@@ -141,7 +141,7 @@ namespace SE {
       //   end-Permian). A single curved horn-shaped cup with growth wrinkles standing on its tip, a
       //   crown of short tentacles at the top opening. Farben: grey-brown horn, orange tentacles.
       {
-        name: 'Runzelkorallen', ma: 460, art: [
+        name: 'Runzelkorallen', ma: 460, reefBuilder: 'rugose', art: [
           line('orange', 2.2, 'M11 9 L7.5 4.5'),
           line('orange', 2.2, 'M13.5 8 L12 3'),
           line('orange', 2.2, 'M16 7.5 L16.5 2.5'),
@@ -160,7 +160,7 @@ namespace SE {
       //   reef builders). A branching staghorn colony like antlers, pale polyp tips. Farben: coral
       //   orange/pink branches, pale tips.
       {
-        name: 'Steinkorallen', ma: 240, art: [
+        name: 'Steinkorallen', ma: 240, reefBuilder: 'stony', art: [
           line('shell', 2.8, 'M16 22 L16.5 12 L14.5 4.5'),
           line('coral', 3.4, 'M16 29.5 L16 21.5'),
           line('coral', 2.8, 'M16 22 L9.5 15.5 L7 5'),

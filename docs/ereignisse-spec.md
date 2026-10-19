@@ -205,7 +205,7 @@ Die ausführliche Fassung entsteht in Stufe 1 als `docs/ereignisse-2026-10/stil.
 | Vulkanausbruch | Land oder Schelf | 6 | Lavastrom bergab, ≤ 12 Kacheln | Basalt, Schlot mit Krater | 20 Ticks nackt; Schlot bleibt |
 | Meteorit | überall | 2 (Bild 4) | keine; Staubwolke nur Bild | Krater, versengter Ring | 8 / 30 Ticks |
 | Flächenbrand | Land mit Pflanzendecke | 10, ≤ 90 Kacheln | Zellautomat | verbrannte Erde, Stämme | 8 Ticks bis Gras |
-| Wirbelsturm | überall | Bahn ≤ 24, Streifen 5 breit | Zugbahn 1 Kachel/Tick | Windwurf, nass, Schlamm | 10 Ticks |
+| Wirbelsturm | überall | Bahn ≤ 40, Streifen 5 breit | Zugbahn 1 Kachel/Tick | Windwurf, nass, Schlamm | 10 Ticks |
 | Flutwelle | Meer | 32 übers Wasser (schwächere Wellen weniger), 6 landeinwärts | Wellenfront, Auflaufen | Schlamm, Treibgut | 10 Ticks |
 | Erdbeben | überall | 4 | Erdrutsche 1–3 Ticks | Riss, Schutt, Ruinen | 30 / 10 Ticks |
 | Atomschlag | überall | 3 + Fahne 3 | Fallout mit dem Wind | Asche, fahle Zone | 150 Ticks |
@@ -341,8 +341,12 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
   - Gerasterter Wolkenschatten nach unten rechts, wie bei den Umgebungswolken.
 - **Ausbreitung (Zugbahn, eine Kachel je Tick):**
   - Richtung: unter 30° Breite westwärts (`windDirection`) mit polwärtiger Drift (0,3 Kachel/Tick, Hash-Akkumulator);
-    ab 30° biegt er nach Osten um.
-  - Stärke: warmes Meer +0,25/Tick bis 4, kühles Meer −0,3, Land −0,8. Er endet bei S ≤ 0 oder nach 24 Ticks.
+    ab 30° biegt er nach Osten um, in einem Bogen: seine Ost-West-Geschwindigkeit ändert sich um höchstens
+    0,25 Kachel/Tick je Tick (`HURRICANE_TURN`), auch sie wird in Kachelbruchteilen gesammelt.
+  - Die gesammelten Bruchteile stehen je Tick in `StormTrack.offsets`; der Bildschirm zieht das Auge entlang dieser
+    stetigen Bahn, ohne Ruck, wenn die Kachel springt.
+  - Stärke: warmes Meer +0,25/Tick bis 4, kühles Meer −0,3, Land −0,2 (ein starker Sturm zieht weit über einen
+    Kontinent und regnet sich dabei ab). Er endet bei S ≤ 0 oder nach 40 Ticks.
   - Wirkung je Tick in Auge und Ring 1:
     - Feuchte +0,3, Leben −0,08 · S.
     - Wald bei S ≥ 2: Windwurf (Pflanzendecke × 0,7, umgestürzte Stämme).
@@ -354,17 +358,40 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
     das Auge auf (`hazardtornado.ts`). Jeder zieht 2–4 Kacheln geradeaus landeinwärts, höchstens eine Richtungsstufe
     von der Zugrichtung abweichend, eine Kachel je Tick. Auf seinem Weg: Windwurf ab Landschaftsstufe 3, Leben −0,3,
     Städte −20 %.
-- **Nachwirkung:** nasse Kacheln trocknen, Windwurf heilt in 10–16 Ticks, an Sturmflut-Kacheln bleibt Schlamm.
+  - **Blitze (Stufe 2, umgesetzt, `hazardstorm.ts`):** Solange der Sturm zieht, schlagen je Tick Blitze ein, bei S < 2
+    0–1, bei S 2–3 1–2, ab S 3 2–4. Sie fallen in Ring 1–3 um das Auge dieses Ticks (30 % Ring 1, 30 % Ring 2, 40 %
+    Ring 3, nie ins Auge), auf Land und Meer. Wo, ist ein Hash aus Seed, Ereignis und Alter (`stormStrikes`).
+    - Die Folgen kommen im nächsten Schritt, nachdem der Bildschirm den Blitz gezeigt hat: an Land versengter Boden
+      (nur wo Pflanzen wachsen, Pflanzendecke ≥ 0,2, auf Kacheln ohne Bodenzustand und nicht auf Städten), Leben −0,15, Städte −5 %. Blitze ins
+      Meer sind nur Darstellung.
+    - Trifft ein Blitz trockene Vegetation (Pflanzendecke ≥ 0,35, Feuchte < 0,4, nicht nass), zündet sie mit 50 %
+      (Hash): Flächenbrand als Kettenreaktion (§3.9). Der Sturm durchnässt seinen Streifen, darum zünden fast nur
+      Blitze in den äußeren Bändern.
+  - **Regenflut:** Über Land bei S ≥ 2 (Stärke beim Eintreffen) steht in Auge und Ring 1 auf tiefem Land (Höhe
+    < 0,08 oder Flusskachel, keine Stadt) flaches Wasser (Tiefe 0,008). Es steigt im laufenden Tick, läuft nach 4–7
+    Ticks ab und lässt Schlamm zurück; Schaden und Darstellung wie bei der Sturmflut (`hazardStandWater`).
+- **Nachwirkung:** nasse Kacheln trocknen, Windwurf heilt in 10–16 Ticks, an Sturmflut- und Regenflut-Kacheln bleibt
+  Schlamm, Blitzeinschläge hinterlassen versengten Boden.
 - **Simulation:** Feuchte nur im Bahnstreifen statt heute auf einen Schlag im Radius 8.
 
 | Sprite | Größe | Frames | Ebene | Stufe |
 |---|---|---|---|---|
-| Spiralwolke mit Auge | 48×48 | 8 je Halbkugel (Stufe 1: 4) | oben | 1 |
-| kleine Spirale (Vorzeichen) | 32×32 | 2 | oben | 1 |
-| Regenschliere | 1×2 px | – | Partikel | 1 |
+| Spiralwolke mit Auge (`hurricane`, `hurricane_south`) | 96×96 | 8 Drehframes + 8 mit Wetterleuchten, je Halbkugel | oben | 1 |
+| kleine Spirale (Vorzeichen, Ende) | 48×48 | 4 | oben | 1 |
+| Regenvorhang (`rain_veil`) | 32×32 | 4 je Neigung (links, rechts) | oben, unter der Wolke | 1 |
+| Regenschliere | 1×2 px | – | Partikel, vom Wind um das Auge seitlich getrieben | 1 |
+| Blitz (`lightning`) | 24×64 | 2 Formen × 6 | oben, über der Wolke | 1 |
+| Glühen am Einschlag (`lightning_glow`) | 32×16 | 4 (auf dem Meer nur 0–1) | Objekt | 1 |
 | Nässe | 64×64 | 1 | Boden-Effekt | 1 |
 | umgestürzter Baum (Objekt) | 16×8 | 3 Varianten | Gelände | 1 |
-| Tornado-Trichter | 16×32 | 6 | Objekt | 2 |
+| Tornado-Trichter mit Trümmerkragen | 32×64 | 8 | oben, über der Wolke | 2 |
+| Trümmer im Tornado (`tornado_debris`) | 8×8 | 4 Arten × 2 | oben; kreisen um den Trichter, fliegen im Bogen davon | 2 |
+
+Drehbuch `src/fxstorm.ts`: Die Wolke flackert bei Einschlägen und zufällig von innen (Wetterleuchten). Jeder Blitz aus
+`stormStrikes` fällt zu seinem eigenen Zeitpunkt im Tick, mit Funken und Donner (`thunder.mp3`, lauter je näher der
+Zoom). Solange ein Sturm im Bild ist, läuft Wind (`hurricane-wind.mp3`, am Umgebungsregler, gezoomt lauter). Um den
+Fuß eines Tornados wird Erde aus dem Boden gerissen; Trümmer steigen spiralig am Trichter auf und werden oben
+hinausgeschleudert, beim Landen staubt es. „Effekte reduzieren“: kein Flackern, Blitze nur in ihren gedämpften Frames.
 
 ### 3.5 Flutwelle
 
@@ -524,6 +551,8 @@ Die Seuche kommt schleichend, ohne Vorzeichen und ohne Hauptanimation.
 - Lava eines Vulkans oder Ring 2 eines Meteoriten neben trockener Vegetation (Pflanzendecke ≥ 0,35, Feuchte < 0,4)
   → Flächenbrand.
 - Vorschlag K4: Meteorit ins Meer → Flutwelle statt Brand.
+- Blitz eines Wirbelsturms auf trockene Vegetation (dieselben Schwellen, nicht nass) → Flächenbrand mit 50 % Chance
+  je Treffer (§3.4).
 - Höchstens eine Folge je Ereignis (`chainUsed`). Folgeereignisse lösen selbst nichts mehr aus (`cause = 'chain'`).
 
 ---
@@ -537,11 +566,11 @@ endet.
 | Zustand | entsteht durch | Gelände | Sukzession | endet, wenn |
 |---|---|---|---|---|
 | verbrannt | Feuer | Material „verbrannt“ + verkohlte Stämme | mind. 8 Ticks, Haltezeit × 2 | Landschaftsstufe ≥ 3; ab Stufe 2 nur noch Stämme |
-| versengt | Ring von Meteorit und Atomschlag | Material „versengt“ + Stümpfe | mind. 8 Ticks | Stufe ≥ 2 |
+| versengt | Ring von Meteorit und Atomschlag, Blitzeinschlag | Material „versengt“ + Stümpfe | mind. 8 Ticks | Stufe ≥ 2 |
 | Basalt | Lava | Material „Basalt“ | mind. 20 Ticks | Boden ≥ Erde-Schwelle oder Stufe ≥ 2 |
 | Schlot | Vulkan | Basalt + Kegel mit Krater | – | dauerhaft |
 | Krater | Meteorit | Material „Kraterboden“ + Rand-Objekt | mind. 30 Ticks | Boden nach Sukzession; Rand nach ~200 Ticks |
-| Schlamm | Flutwelle, Sturmflut | Material „Schlamm“ (vorhanden) + Treibgut | mind. 10 Ticks | Stufe ≥ 2 |
+| Schlamm | Flutwelle, Sturmflut, Regenflut | Material „Schlamm“ (vorhanden) + Treibgut | mind. 10 Ticks | Stufe ≥ 2 |
 | Windwurf | Wirbelsturm, Tornado | Landschaft bleibt; umgestürzte Bäume ersetzen einen Teil der Bäume | – | nach 10–16 Ticks |
 | Riss (4 Arten, je Richtung) | Erdbeben | Riss-Objekt mit Stufenkante | mind. 30 Ticks | Stufe ≥ 2 |
 | Schutt | Erdrutsch | Material „Schutt“ | mind. 10 Ticks | Stufe ≥ 1 |

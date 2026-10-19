@@ -2,8 +2,8 @@
  * SimEarth 2.0 — chain reactions: one disaster setting off another
  * -----------------------------------------------------------------------------
  * docs/ereignisse-spec.md §3.9. A quake under the sea and a meteor into it
- * raise a tidal wave (K4); lava or a meteor's blast beside dry plants sets
- * them on fire. HazardSystem asks after the start and after every tick; each
+ * raise a tidal wave (K4); lava, a meteor's blast or a hurricane's lightning
+ * beside or on dry plants sets them on fire. HazardSystem asks after the start and after every tick; each
  * hazard sets off at most one other (chainUsed), and a chained one none.
  * ========================================================================== */
 
@@ -51,6 +51,10 @@ namespace SE {
   // Ring 2 of the blast and the tiles beside it.
   HAZARD_CHAINS[EventKind.Meteor] = (world, h) =>
     atSea(world, h) ? { kind: EventKind.TidalWave, x: h.x, y: h.y } : fireAmong(world, h, ringTiles(h.x, h.y, 2, 3));
+
+  // A bolt of the tick before on dry plants; the storm has soaked its strip, so mostly one in the bands.
+  HAZARD_CHAINS[EventKind.Hurricane] = (world, h) =>
+    fireAmong(world, h, stormStrikesAt(world, h, h.age - 1).filter((i) => hazardRoll(world.seed ^ h.id, i, h.age) < STORM_FIRE_CHANCE));
 
   // Only beside lava that has stopped and above its surface: the flow would bury a fire anywhere else.
   HAZARD_CHAINS[EventKind.Volcano] = (world, h) => {

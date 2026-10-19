@@ -90,7 +90,7 @@ namespace SE {
       //   fin, gill cover and symmetric forked tail. Farben: green-gold with dark vertical bars,
       //   orange fins.
       {
-        name: 'Echte Knochenfische', ma: 240, art: [
+        name: 'Echte Knochenfische', ma: 240, reefGrazer: true, art: [
           { f: 'orange', d: 'M8.5 16 L3 9.6 L5.5 16 L3 22.4 Z' },
           { f: 'orange', d: 'M11.5 11.5 L13 7 L14.5 9.8 L16 6.5 L17.5 9.6 L19 7 L20.5 10.5 Z' },
           { f: 'orange', d: 'M15 21.2 L14 25 L18.2 21.8 Z' },

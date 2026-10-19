@@ -7,15 +7,19 @@
  *      its four corner tiles; the lowest ground fills it, each higher one
  *      draws through the shared frayed edge mask — water is rank 0, so coasts
  *      fray the same way as any other border;
- *   2. water (landwater.ts): depth on the water ramp, dithered, with ripples;
+ *   2. water (landwater.ts): open ocean and coastal sea with their ripples,
+ *      turquoise lagoons over and behind the reefs;
  *   3. ground: the 16×16 window of its seamless texture at the world position,
  *      shifted along its ramp by relief and macro variation — a cubic
  *      B-spline through the tiles' shading, so no tile edge shows, plus
  *      crags in the mountains — dithered in 2×2 blocks;
- *   4. shore (landwater.ts): foam on the water side, a wet rim on the land side;
+ *   4. shore (landwater.ts): beach sand (landshore.ts), foam on the water
+ *      side, a wet rim on the land side;
  *   5. rivers as smoothed lines (landrivers.ts), the mountain ranges lifted in
  *      3/4 view (landridgedraw.ts), then objects row by row with their
- *      shadows, standing on the lifted ground.
+ *      shadows, standing on the lifted ground — corals under the water's
+ *      ripples, no plant but palms on the beach — and the foam where waves
+ *      break on the reefs.
  * Pure arithmetic on typed arrays — no DOM — so tests run it in Node.
  * ========================================================================== */
 
@@ -132,11 +136,13 @@ namespace SE {
     private readonly riverRows: LandBuffer = { px: new Uint8Array(0), water: new Uint8Array(0), w: 0, h: 0 };
     private occupied = new Uint8Array(0);
     private done = new Uint8Array(0);
-    /** Buffer offsets of cells where water meets ground. */
+    /** Buffer offsets of cells where water meets ground, and of cells with a reef corner. */
     private readonly shores: number[] = [];
+    private readonly reefCells: number[] = [];
+    /** Per pixel of a reef cell: inside the reef (1), open water (2); see paintSea. */
+    private reefBits = new Uint8Array(0);
     private readonly placements: LandPlacement[] = [];
     private readonly order = new Uint8Array(4);
-    private readonly steps = new Uint8Array(16);
     private readonly ctl = new Float32Array(16);
     private readonly rows = new Float32Array(32);
     /** Cell columns of the rows below the tiles that a range lifts into view. */
@@ -169,6 +175,7 @@ namespace SE {
       this.ground(f, tx0, ty0, tw, th, Math.max(0, below));
       const b = this.buf;
       if (!seaColor) {
+        paintBeaches(b, this.art, f, ox, oy, this.shores, this.done);
         paintShore(b, this.art, this.shores, this.done);
         // Rivers only on the rows composed: what lies below them stays out of view.
         const rows = this.riverRows;
@@ -232,11 +239,14 @@ namespace SE {
           for (let dx = -1; dx <= 1; dx++) if (lines[row + wrapX(tx + dx)] !== 0) { river = true; break; }
         }
         if (river && f.paths.near(p.fx + 0.5, p.fy + 0.5, RIVER_CLEARANCE)) continue;
+        // With the Oceans layer off no beach is drawn, so nothing is kept off it.
+        if (!seaColor && landObjectOnBeach(f, this.art, p)) continue;
         lifts[n] = z;
         placed[n++] = p;
       }
       placed.length = n;
       drawLandObjects(this.placements, this.art, b.px, b.water, this.occupied, b.w, b.h, ox, oy, rise, lifts, f.shade);
+      if (!seaColor) paintReefEdges(b, this.art, this.reefCells, this.reefBits, ox, oy);
       this.motion = seaColor ? NO_LAND_MOTION : collectLandMotion(b, this.art, this.shores, f.paths.sig, PAD, tx0, ty0, tw, th);
       this.emit(out, margin, tw, th, tx0, ty0, seaColor);
     }
@@ -250,12 +260,15 @@ namespace SE {
         b.water = new Uint8Array(w * h);
         this.occupied = new Uint8Array(w * h);
         this.done = new Uint8Array(w * h);
+        this.reefBits = new Uint8Array(w * h);
       } else {
         this.occupied.fill(0);
         this.done.fill(0);
         b.water.fill(0);
+        for (const base of this.reefCells) for (let y = 0; y < 16; y++) this.reefBits.fill(0, base + y * w, base + y * w + 16);
       }
       this.shores.length = 0;
+      this.reefCells.length = 0;
     }
 
     /* ------------------------------------------------------------ ground -- */
@@ -293,8 +306,9 @@ namespace SE {
             const v = order[layer];
             const mask = layer === 0 ? null : this.art.masks[
               (k0 >= v ? 1 : 0) | (k1 >= v ? 2 : 0) | (k2 >= v ? 4 : 0) | (k3 >= v ? 8 : 0)][variant];
-            if (v === 0) paintSea(this.buf, this.art, f.depth, c0, c1, c2, c3, mask, base, wx, wy, this.steps);
-            else this.land(v, mask, base, wx, wy, (k0 === v && f.algae[c0]) || (k1 === v && f.algae[c1]) ||
+            if (v === 0) {
+              if (paintSea(this.buf, this.art, f, c0, c1, c2, c3, mask, base, wx, wy, this.reefBits)) this.reefCells.push(base);
+            } else this.land(v, mask, base, wx, wy, (k0 === v && f.algae[c0]) || (k1 === v && f.algae[c1]) ||
               (k2 === v && f.algae[c2]) || (k3 === v && f.algae[c3]) ? this.art.algae : null, sea);
           }
           if (sea && n > 1) this.shores.push(base);

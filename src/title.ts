@@ -113,6 +113,7 @@ namespace SE {
         titleButton('Spielstände …', 'slot', 'title-saves', () => void this.saves()),
         titleButton('Einstellungen', 'menu-options', 'title-settings', () => void hooks.openSettings()),
       );
+      if (DEV_MODE_AVAILABLE) buttons.appendChild(devModeToggle()); // DEVMODE
 
       const panel = make('div', 'title-panel');
       panel.append(logo, make('p', 'title-lead', LEAD));

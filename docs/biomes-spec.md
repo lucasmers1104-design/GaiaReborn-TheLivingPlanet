@@ -365,7 +365,7 @@ Die verbliebenen Einzelkacheln sind fast nur frisch gestörte Kacheln, die in we
   | Grün | Wiese (gelbgrün), Laub (mittelgrün), Nadel (dunkel-blaugrün), Tropen (sattgrün), Moos (oliv-gelbgrün), Farn (blaugrün) |
   | Erd- und Naturtöne | Stroh/Steppe, Sand, Erde, Fels (warmgrau), Eis/Schnee (blauweiß), Moor (oliv-braun), Holz |
   | Akzente | Blüte (rosa, gelb, weiß) |
-  | Wasser | Wasser-Tiefen (aus `DEPTH_RAMP`, auf 8 Stufen gerastert) |
+  | Wasser | `water` (8 Stufen; Hochsee, Küstenmeer, Rippel, Flüsse, Schaum), `waterWarm` (Lagunen-Türkis), `reefUnder` (Korallen und Riffsand unter Wasser) |
 
   Palette und Rampen stehen im Manifest. Code und Werkzeuge lesen nur von dort.
 - **Licht:** von oben links, für Boden, Objekte und Relief (passt zur heutigen Hangschattierung aus Nordwest).
@@ -386,7 +386,7 @@ Die verbliebenen Einzelkacheln sind fast nur frisch gestörte Kacheln, die in we
 ### 4.2 Ebenen und Zeichenreihenfolge
 
 1. **Wasser:**
-   - Tiefenfarbe der Palette in 8 Stufen mit Bayer-Übergang, dazu eine nahtlose Rippel-Textur.
+   - Zwei flache Klassen ohne Tiefenverlauf: Hochsee (`water2`) und Küstenmeer (`water4`), am Schelfrand ein 3–4 px breiter Bayer-Übergang; dazu die Rippel-Textur der Klasse. Lagunen mischen Türkis per Bayer ein (Stufe 1 ein Viertel, 2 die Hälfte, 3 voll). Tiefe zeigen nur die Tiefenansichten (Ebene „Ozeane“ aus, Übersichtskarte „Gelände“ und „Meeresboden“).
    - Gezeichnet für Wasserkacheln **und** für Landkacheln mit Wassernachbarn, damit unter ausgefransten Landrändern Wasser liegt.
 2. **Boden (Dual-Grid, nach Rang aufsteigend):**
    - Jede Darstellungszelle ist um eine halbe Kachel versetzt und hat 4 Eckkacheln.
@@ -517,14 +517,19 @@ Die verbliebenen Einzelkacheln sind fast nur frisch gestörte Kacheln, die in we
   - Objekte sind handgezeichnete Zeichenraster wie in `sprites.ts`.
 - **Regeländerung:** `AGENTS.md` sagt „Assets are SVG only“ und `assets/README.md` beschreibt nur SVG. Beide werden für `assets/terrain/` um die Pixel-PNG-Ausnahme ergänzt.
 
-### 4.10 Strände (17. 10.)
+### 4.10 Riffe, Lagunen, Strände und Palmen (18. 10.)
 
-Nur Darstellung: Die Simulation kennt keine Strände, gespeichert wird nichts. Regeln in `src/beaches.ts`, Werte `BEACH_*`/`PALM_*` in `constants.ts`.
+Nur Darstellung: Alles wird beim Zeichnen aus vorhandenen Werten abgeleitet (Unterart-Stufe, Dichte, Wassertemperatur, `world.biome`, `riverFlow`, Kalender). Kein Speicherfeld, kein Tick-Schritt, keine Zufallszahlen. Regeln in `src/reefs.ts`, Pixel in `src/landshore.ts` und `src/landwater.ts`, Werte `CORAL_*`/`REEF_*`/`BEACH_*`/`SHELL_*`/`PALM_*` in `constants.ts`. Der frühere Strand als eigener Boden (bis v0.9.1) ist entfernt. Bericht: `docs/riffe-2026-10/bericht.md`.
 
-- **Sandstrand:** Landkachel unter `BEACH_MAX_ELEVATION` (0,06), Klimazone warm oder tropisch (Hysterese-Zone, daher kein Flackern), weder Feuchtgebiet noch Gebirge, nicht Eis, Schnee, Fels, Sumpf oder Sumpfwald, direkt neben offenem Meer (nicht arktisch). Ein Küstenrauschen (`BEACH_SHARE` 0,55) lässt nur Abschnitte zu Strand werden, nicht jede Küstenkachel.
-- **Bild:** Material `beach` (Familie `coast`), keine Landschaftsobjekte (`scene` NONE), Brandung und nasser Saum wie an jeder Küste. Untersuchen-Fenster: „Sandstrand“.
-- **Kokospalmen:** erst `PALM_DELAY_YEARS` (45 Mio. Jahre) nach den Blütenpflanzen; danach auf 60 % der tropischen und 30 % der warmen Strandkacheln, davon 30 % als Paar. Füße zur Landseite versetzt, Kronen zum Meer geneigt (Form 0 links, 1 rechts).
-- **Folge der Zonenregel:** Feuchte Tropenküsten (Feuchtgebiet-Zone) tragen Sumpfwald statt Strand. Strände liegen deshalb vor allem an trockeneren warmen Küsten (Golf von Mexiko, Bahamas, Arabien, Nordwestaustralien), kaum in Indonesien. Bericht: `docs/strand-2026-10/bericht.md`.
+- **Arten-Merkmale:** `reefBuilder` an Runzel- und Steinkorallen, `reefGrazer` an Echten Knochenfischen (`src/species/types.ts`).
+- **Riff:** Küstenmeer (`Biome.Coast`) höchstens 3 Felder vor dem Land, Wasser ab `CORAL_MIN_TEMP` (20 °C), sobald eine Korallen-Unterart auf dem Planeten entstanden ist. Nesseltiere müssen auf dem Feld oder bis 2 Felder entfernt leben (Dichte ab 0,05; Larven siedeln aus der Nähe, und auf vielen Planeten verdrängt anderes Meeresleben sie aus dem Küstenmeer selbst), nicht in 2 Feldern um einen großen Fluss (`riverFlow` ≥ 200). Höchstens ein Zentrum je mit dem Seed versetzter 8 × 8-Zelle (Kandidat mit höchstem Hash), mindestens 5 Felder Abstand. Runzelkorallen Radius 0–1, Steinkorallen 1–2 (ab Dichte 0,4 der größere).
+- **Gleichgewicht:** Sobald die Weidefisch-Unterart (Echte Knochenfische) auf dem Planeten entstanden ist, weiden Fische jeder Stufe (ab Dichte 0,05) das Riff ab, auf oder neben dem sie leben, und zwar das ganze Riff. Die Stufe eines Feldes zeigt nur seine jüngste Form, die älteren leben daneben weiter. Sandflecken = ⌈Flecken × 0,3 × Fischstufe/3⌉, also mindestens einer, sobald Weidefische dort leben.
+- **Stufen statt Hysterese:** Dichten werden in Stufen von 0,2 gelesen; Größe, Flecken und Sand ändern sich nur beim Wechsel einer Stufe. Die Schwellen selbst haben keine Hysterese, dafür bräuchte es gespeicherten Zustand.
+- **Lagune:** Rifffelder Stufe 2, mit Sand 3; Küstenmeer bis ein Feld landeinwärts Stufe 1 (neben Sandriffen 2). Land übernimmt den höchsten Wert seiner Meer-Nachbarn, damit das Türkis bis an den Strand reicht.
+- **Riffbild:** Korallen- und Sandflecken (Objektart `reef`, Rezept in `tools/terrain/coast.js`, Farben vorgemischt) unter den Rippeln des Küstenmeers; zur offenen See eine 1 px breite, unterbrochene Schaumlinie. Auf Rifffeldern kein Seetang.
+- **Strände:** Detail des Küstenpasses, kein Boden. Riffstrände bis 2 Felder neben einem beweideten Riff (80 %, kleine Inseln bis 6 Felder 95 %), 2–4 px, in Buchten bis 5, auf Landzungen 1 oder keiner; Muschelstrände selten (12 %) an warmen Küsten neben Weichtieren, 1–3 px. Nicht auf Eis, Schnee, Sumpf, Sumpfwald, ab Hügelland (Höhe 0,11), Gebirge, Felsgürtel, an großen Flussmündungen. Breite aus Rauschen in Weltpixeln (Periode 32 px) und dem Wasseranteil im Umkreis von 6 px; Sand aus dem Overlay `beach_sand`.
+- **Palmen:** ab Blütenpflanzen und dem Kalenderdatum 86 Mio. J. vor heute (älteste Palmenfossilien, *Sabalites*). Je Strandfeld per Hash 60 % keine, 30 % eine, 10 % ein Paar. Fuß auf trockenem Sand 1–2 px hinter der nassen Linie, nie auf einem Streifen unter 2 px, Krone 3–6 px über dem Wasser, sonst keine Palme. Kronenpixel über dem Meer sind weder Brandung noch Meer für die Wellen-Effekte. Auf Strandsand steht sonst nichts.
+- **Untersuchen-Fenster und Chronik:** Riff, Wassertemperatur und Fische, Strandsand werden aus `src/reefs.ts` gelesen; „Erste Riffe“ und „Weiße Strände“ trägt `app.ts` einmal in die Chronik ein.
 
 ---
 

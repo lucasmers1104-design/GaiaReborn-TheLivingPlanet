@@ -142,6 +142,8 @@ namespace SE {
   export const SURF_VOLUME = 0.16;
   /** Loudest the oxygen bubbling gets (zoomed fully in on a pearling coast): the nearer sound, above the surf. */
   export const BUBBLE_VOLUME = 0.3;
+  /** Loudest a hurricane's wind gets, with the storm in view and the camera close. */
+  export const STORM_WIND_VOLUME = 0.5;
   /** How quickly an ambient loop follows the view, ms to cover most of a change. */
   const AMBIENT_EASE_MS = 1500;
 
@@ -171,7 +173,7 @@ namespace SE {
       this.audio.volume = clamp(this.level * this.volume, 0, 1);
       if (this.level < 0.003) {
         if (!this.audio.paused) this.audio.pause();
-      } else if (this.audio.paused && !document.hidden && now >= this.retryAt) {
+      } else if (this.audio.paused && !this.audio.error && !document.hidden && now >= this.retryAt) {
         this.retryAt = now + 1000;
         this.audio.play().catch(() => undefined);
       }
@@ -191,6 +193,7 @@ namespace SE {
     'vulkan-explosion': 1,
     'cracking-earthquake': 1,
     'tornado': 1,
+    'thunder': 0.8,
     // Mastered loud (the bang peaks near full scale), so it sits lower.
     'siren-and-nuke': 0.9,
   };
@@ -198,9 +201,9 @@ namespace SE {
   /** Where the bang sits in siren-and-nuke.mp3, after the siren: measured from the file's loudness. */
   export const NUKE_BOOM_MS = 12150;
 
-  /** One-shot effect sound; false when it stays silent (sound off, tab hidden). */
-  export function playSfx(name: string): boolean {
-    const volume = (SFX_LEVELS[name] ?? 0.5) * SFX.volume();
+  /** One-shot effect sound, `gain` 0..1 on top of its level; false when it stays silent (sound off, tab hidden). */
+  export function playSfx(name: string, gain = 1): boolean {
+    const volume = (SFX_LEVELS[name] ?? 0.5) * SFX.volume() * gain;
     if (volume <= 0 || document.hidden) return false;
     const audio = new Audio(`assets/audio/sfx/${name}.mp3`);
     audio.volume = Math.min(1, volume);
