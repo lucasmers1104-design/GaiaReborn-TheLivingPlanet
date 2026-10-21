@@ -59,7 +59,7 @@ namespace SE {
   const LAND_SHARE_REF = 0.42;
 
   /** Stable 0..1 hash of a tile and a salt. */
-  function tileHash(i: number, salt: number): number {
+  export function tileHash(i: number, salt: number): number {
     let h = Math.imul(i ^ Math.imul(salt, 0x9e3779b1), 0x85ebca6b);
     h ^= h >>> 13;
     h = Math.imul(h, 0xc2b2ae35);

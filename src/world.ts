@@ -305,12 +305,41 @@ namespace SE {
     coalPeat = 0;
     /** Coal civilizations have mined so far, Gt. */
     coalMined = 0;
+    /* ---- oil from dead sea animals (see OilSystem) ---- */
+    /** Usable oil in the crust of the whole planet, Gt. */
+    oil = 0;
+    /** Buried kerogen still maturing into oil, Gt. */
+    oilKerogen = 0;
+    /** Oil civilizations have pumped so far, Gt. */
+    oilMined = 0;
+    /** Tiles of the oil platform and the desert derrick, placed once with the Industrial age; −1 before (oil.ts). */
+    oilRigSea = -1;
+    oilRigLand = -1;
+    /** Tile of the termite mound on the savanna, −1 for none (termites.ts). */
+    termiteMound = -1;
+    /** A bit per plant group whose era is over for good (lycopsids.ts). */
+    floraEnded = 0;
     /** Set for good once conifer and broadleaf forests have displaced the giant clubmosses. */
-    lycopsidsGone = false;
+    get lycopsidsGone(): boolean {
+      return (this.floraEnded & floraBit(Flora.Clubmosses)) !== 0;
+    }
+    set lycopsidsGone(gone: boolean) {
+      this.floraEnded = gone ? this.floraEnded | floraBit(Flora.Clubmosses) : this.floraEnded & ~floraBit(Flora.Clubmosses);
+    }
+
+    /* ---- sub-species gone for good (stagefates.ts) ---- */
+    /** Per class, a bit per sub-species its successor has displaced. */
+    readonly stageEnded = new Uint8Array(LIFE_COUNT);
+    /** Loaded from a save without that record: the first tick learns it without news. */
+    fatesQuiet = false;
 
     /* ---- evolution ---- */
     /** The tree: developed steps, evolution points, chronicle. */
     readonly evo = new EvolutionState();
+    /** Where the planet stands in the dinosaurs' era and the choice about its end (dinoera.ts). */
+    readonly dinoEra = new DinoEraState();
+    /** The space project of its civilization: launch site, rocket, launch (spaceport.ts). */
+    readonly space = new SpaceState();
 
     /* ---- bookkeeping ---- */
     ticks = 0;
@@ -392,7 +421,15 @@ namespace SE {
       this.coal = 0;
       this.coalPeat = 0;
       this.coalMined = 0;
-      this.lycopsidsGone = false;
+      this.oil = 0;
+      this.oilKerogen = 0;
+      this.oilMined = 0;
+      this.oilRigSea = -1;
+      this.oilRigLand = -1;
+      this.termiteMound = -1;
+      this.floraEnded = 0;
+      this.stageEnded.fill(0);
+      this.fatesQuiet = false;
       this.ticks = 0;
       this.omega = OMEGA_START;
       this.timeScale = TimeScale.Geologic;
@@ -416,6 +453,8 @@ namespace SE {
       this.successionTick = -1;
       this.driftShifts = 0;
       this.evo.reset();
+      this.dinoEra.reset();
+      this.space.reset();
       this.lifeDensity.fill(0);
       this.lifeStage.fill(0);
       this.lifeFirstSeen.fill(-1);
@@ -502,7 +541,14 @@ namespace SE {
       this.coal = o.coal;
       this.coalPeat = o.coalPeat;
       this.coalMined = o.coalMined;
-      this.lycopsidsGone = o.lycopsidsGone;
+      this.oil = o.oil;
+      this.oilKerogen = o.oilKerogen;
+      this.oilMined = o.oilMined;
+      this.oilRigSea = o.oilRigSea;
+      this.oilRigLand = o.oilRigLand;
+      this.termiteMound = o.termiteMound;
+      this.floraEnded = o.floraEnded;
+      this.stageEnded.set(o.stageEnded);
       this.ticks = o.ticks;
       this.omega = o.omega;
       this.seed = o.seed;
@@ -514,6 +560,8 @@ namespace SE {
       this.sentientClass = o.sentientClass;
       this.civ.clear();
       this.hazards.copyFrom(o.hazards);
+      this.dinoEra.copyFrom(o.dinoEra);
+      this.space.copyFrom(o.space);
       this.name = o.name;
 
       const evo = this.evo;

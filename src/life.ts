@@ -44,6 +44,8 @@ namespace SE {
     /** The same load split by guild, `[tile * GUILD_COUNT + guild]`. */
     private readonly guildLoad = new Float32Array(TILE_COUNT * LifeSystem.GUILD_COUNT);
     private readonly classRaft = new Float32Array(LIFE_COUNT);
+    /** Highest sub-species each class may climb to this tick (stageCap). */
+    private readonly stageTop = new Uint8Array(LIFE_COUNT);
     /** Which tiles hold anything at all, recorded by `grow`. */
     private readonly occupied = new Uint8Array(TILE_COUNT);
     /** Ambient marine plankton available to filter feeders, 0..0.85. */
@@ -61,6 +63,13 @@ namespace SE {
     private static readonly STAGE_MATURITY = 0.90;
     /** Per-tick chance a mature population sends founders to one neighbour. */
     private static readonly DISPERSAL_CHANCE = 0.80;
+    /**
+     * Founders of the first cells (both microbe classes) land 1..CELL_REACH
+     * tiles away instead of next door: a tick spans millions of years, so the
+     * young sea should fill fast. 4 makes the front three times as fast
+     * (35 % of the sea after ~190 instead of ~575 ticks, seeds 4242 and 12345).
+     */
+    private static readonly CELL_REACH = 4;
     /** Per-tile chance of moving up one sub-species. */
     private static readonly STAGE_ADVANCE = 0.002;
     /** Density a freshly founded population starts at. */
@@ -132,6 +141,8 @@ namespace SE {
     stepLife(world: WorldState, params: ModelParams, atmo: AtmosphereSystem): void {
       this.prepare(world, params, true);
       this.grow(world, params);
+      // The populations the comet left sheltered outlast its winter (comet.ts).
+      if (world.dinoEra.refuges.length > 0) guardCometRefuges(world, this);
       this.disperse(world);
       this.evolve(world, params);
       this.exchangeGases(world, params, atmo);
@@ -332,8 +343,9 @@ namespace SE {
           const x = i % GRID_W;
           const y = Math.floor(i / GRID_W);
           const dir = rng.int(4);
-          const nx = dir === 0 ? wrapX(x - 1) : dir === 1 ? wrapX(x + 1) : x;
-          const ny = dir === 2 ? clampY(y - 1) : dir === 3 ? clampY(y + 1) : y;
+          const reach = c === Life.Prokaryote || c === Life.Eukaryote ? 1 + rng.int(LifeSystem.CELL_REACH) : 1;
+          const nx = dir === 0 ? wrapX(x - reach) : dir === 1 ? wrapX(x + reach) : x;
+          const ny = dir === 2 ? clampY(y - reach) : dir === 3 ? clampY(y + reach) : y;
           const j = idx(nx, ny);
           if (j === i) continue;
 
@@ -344,10 +356,10 @@ namespace SE {
           const room = this.roomFromLoads(world, j, c as Life);
           if (room < LifeSystem.MIN_DENSITY * 2) continue;
 
-          // Founders start back at the first sub-species: old forms in the
-          // core of a range, young ones along its frontier.
+          // Founders start back at the first sub-species still alive: old
+          // forms in the core of a range, young ones along its frontier.
           density[target] = LifeSystem.FOUNDER_DENSITY;
-          world.lifeStage[target] = 0;
+          world.lifeStage[target] = firstStage(world, c as Life);
         }
       }
     }
@@ -369,7 +381,7 @@ namespace SE {
         const room = this.roomFromLoads(world, j, c);
         if (room < LifeSystem.MIN_DENSITY * 2) continue;
         world.lifeDensity[target] = LifeSystem.FOUNDER_DENSITY;
-        world.lifeStage[target] = 0;
+        world.lifeStage[target] = firstStage(world, c);
         return;
       }
     }
@@ -414,6 +426,8 @@ namespace SE {
       const stageAdvance = LifeSystem.STAGE_ADVANCE * mul(params.bio.mutationRate);
       const microbialAdvance = MICROBIAL_STAGE_ADVANCE * mul(params.bio.mutationRate);
       const density = world.lifeDensity;
+      const top = this.stageTop;
+      for (let c = 1; c < LIFE_COUNT; c++) top[c] = stageCap(world, c as Life);
 
       for (let i = 0; i < TILE_COUNT; i++) {
         if (!this.occupied[i]) continue;
@@ -424,10 +438,14 @@ namespace SE {
           const k = this.headroom[base + c];
           if (k <= 0 || d / k < LifeSystem.STAGE_MATURITY) continue;
           const stage = world.lifeStage[base + c];
-          if (stage >= SUBSPECIES_PER_CLASS - 1) continue;
+          if (stage >= top[c]) continue;
+          // Past the rungs gone for good (stagefates.ts).
+          let next = stage + 1;
+          while (next <= top[c] && stageGone(world, c as Life, next)) next++;
+          if (next > top[c]) continue;
           const rate = c === Life.Prokaryote && stage < CYANOBACTERIA_STAGE ? microbialAdvance : stageAdvance;
-          if (this.stageHasRoom(world, c as Life, stage + 1) && rng.chance(rate)) {
-            world.lifeStage[base + c] = stage + 1;
+          if (this.stageHasRoom(world, c as Life, next) && rng.chance(rate)) {
+            world.lifeStage[base + c] = next;
           }
         }
       }
@@ -499,10 +517,12 @@ namespace SE {
     static seed(world: WorldState, c: Life, x: number, y: number, density = LifeSystem.FOUNDER_DENSITY): boolean {
       const i = idx(x, y);
       if (world.isWater(i) !== (LIFE[c].realm === 'sea')) return false;
+      // The dinosaurs' era bars some classes for every way of placing life (dinoera.ts).
+      if (dinoEraLifeBar(world, c)) return false;
       const li = lifeIdx(i, c);
       if (world.lifeDensity[li] >= density) return false;
       world.lifeDensity[li] = density;
-      world.lifeStage[li] = 0;
+      world.lifeStage[li] = firstStage(world, c);
       return true;
     }
 

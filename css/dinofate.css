@@ -1,0 +1,18 @@
+/* =============================================================================
+   The dialog about the dinosaurs' fate (src/dinofateview.ts): both choices
+   side by side. Without this file the blocks simply stack.
+   ========================================================================== */
+
+.dinofate-intro { margin: 0 0 12px; }
+.dinofate-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.dinofate-option {
+  padding: 10px 12px;
+  border: 2px solid var(--glass-border);
+  background: var(--raise);
+  clip-path: var(--px-clip);
+}
+.dinofate-title { margin: 0 0 6px; font-size: 16px; font-weight: 700; color: var(--ink); }
+.dinofate-list { margin: 0; padding-left: 18px; }
+.dinofate-list li + li { margin-top: 4px; }
+.dinofate-note { margin: 12px 0 0; font-size: 13px; color: var(--ink-3); }
+.modal:focus { outline: none; }

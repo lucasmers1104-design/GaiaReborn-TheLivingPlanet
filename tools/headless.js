@@ -27,6 +27,9 @@
  *              tiles, small regions, area-weighted region size, unnatural
  *              neighbours, shares and the latitude profile against the
  *              targets of docs/biomes-spec.md §3.7/§3.8
+ *     --dino=comet|survive  answer the first birds' question that way as
+ *              soon as it stands (src/comet.ts); without it the question
+ *              stays open and the dinosaurs' era holds the mammals back
  *     --epoch  start on an epoch's planet (random, youngEarth, today; see
  *              src/epochs.ts) with the Geosphere sliders it opens with
  *
@@ -62,8 +65,9 @@ function loadBundle() {
  * life starts when the player develops the first cells, and the plants
  * follow step by step — so `--life` plays the tree greedily.
  */
-/** Set from --epoch in main(). */
+/** Set from --epoch and --dino in main(). */
 let EPOCH = 'random';
+let DINO_FATE = '';
 
 function makePlanet(SE, seed, withLife) {
   const p = {
@@ -78,6 +82,7 @@ function makePlanet(SE, seed, withLife) {
     atmo: new SE.AtmosphereSystem(),
   };
   p.evo = new SE.EvolutionSystem(p.life, p.flora);
+  p.hazards = new SE.HazardSystem();
   SE.civEventSink = (k, x, y) => p.events.trigger(p.world, k, x, y);
   p.world.reset(seed, SE.OCEAN_FRACTION, EPOCH);
   SE.applyEpochParams(p.params, EPOCH);
@@ -88,6 +93,10 @@ function makePlanet(SE, seed, withLife) {
 /** One tick, in exactly the order of `App.tick`, plus the time bookkeeping. */
 function step(SE, p, withLife) {
   const { world, params } = p;
+  // The app holds the world until the player answers; the probe answers as told.
+  if (DINO_FATE && world.dinoEra.fate === 'deciding' && SE.chooseDinoFate(world, p.evo, DINO_FATE) && DINO_FATE === 'comet') {
+    SE.applyComet(world, params, p.life, p.hazards, p.evo);
+  }
   p.geo.step(world, params);
   p.events.step(world, params);
   SE.RiverSystem.maybeRebuild(world);
@@ -95,11 +104,12 @@ function step(SE, p, withLife) {
   p.flora.step(world, params);
   SE.BiomeSystem.step(world);
   SE.CoalSystem.step(world);
+  SE.OilSystem.step(world);
   p.life.stepLife(world, params, p.atmo);
   p.evo.step(world, params);
   p.civ.step(world, params, p.atmo);
   p.atmo.step(world, params);
-  world.omega = Math.min(SE.OMEGA_MAX, world.omega + SE.OMEGA_REGEN);
+  SE.regenOmega(world);
   world.ticks++;
   world.absoluteYears += world.yearsPerTick;
   world.scaleYears += world.yearsPerTick;
@@ -537,6 +547,11 @@ function main() {
   const seeds = args.slice(1).map(Number);
   const planets = seeds.length ? seeds : [12345, 777, 42];
   const withLife = flags.has('--life');
+  const dinoFlag = [...flags].find((f) => f.startsWith('--dino='));
+  if (dinoFlag) {
+    DINO_FATE = dinoFlag.slice('--dino='.length);
+    if (DINO_FATE !== 'comet' && DINO_FATE !== 'survive') throw new Error(`--dino must be comet or survive, not ${DINO_FATE}`);
+  }
   const epochFlag = [...flags].find((f) => f.startsWith('--epoch='));
   if (epochFlag) {
     EPOCH = epochFlag.slice('--epoch='.length);

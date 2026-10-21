@@ -1,102 +1,169 @@
 /* =============================================================================
  * SimEarth 2.0 — Nanotech city blocks
  * -----------------------------------------------------------------------------
- * White shells grown over with green: a dome house with a planted roof,
- * rounded towers with garden terraces, a glass dome with a forest inside, a
- * tapering mega spire ringed with green, a garden pod and a hovering orb, on
- * a park. Style: docs/landschaft-2026-10/stil.md · contract:
- * tools/civ/catalog.js.
+ * Grown, not built: pale shells under planted green. A dome house with a
+ * grass roof, organic towers with green terrace ledges and a tree crown, a
+ * turquoise glass dome with a forest inside, a tall tapering megatower ringed
+ * with green, park trees and a planter, on an oval park with a winding path:
+ * rounded silhouettes and much green. Style: docs/landschaft-2026-10/stil.md
+ * · contract: tools/civ/catalog.js.
  * ========================================================================== */
 'use strict';
 
+const k = require('../terrain/kit');
 const S = require('./shapes');
-const { yard } = require('./yard');
 
-const SHELL = { R: 'ice4', L: 'ice4', T: 'ice3', S: 'ice2', O: 'ice1', w: 'ice3', v: 'ice2', u: 'ice1', n: 'water4', d: 'water2', g: 'leaf3', G: 'leaf2', K: 'leaf1' };
-/** A dome whose rim letters turn into planted green. */
-const PLANTED = { ...SHELL, R: 'leaf3', L: 'leaf3', T: 'leaf2', S: 'leaf1', O: 'leaf0' };
+/**
+ * R lit shell · T shell · S shell in shade · O dark green, outline ·
+ * M sunlit green · g green · G green in shade · w turquoise glass ·
+ * v dark glass, doors.
+ */
+const NANO = { R: 'white0', T: 'lichen1', S: 'lichen0', O: 'leaf1', M: 'meadow3', g: 'leaf3', G: 'leaf2', w: 'waterWarm2', v: 'waterWarm0' };
+const TREE = { M: 'meadow3', g: 'leaf3', G: 'leaf2', O: 'leaf1', b: 'bark1', R: 'white0', T: 'lichen1', S: 'lichen0' };
 
-/** Green terraces every `step` rows of a tower's wall, from row `top`. */
-function terraces(g, top, step) {
-  for (let y = top; y < g.length - 2; y += step) {
-    for (let x = 0; x < g[y].length; x++) if (g[y][x] !== '.') g[y][x] = x % 3 === 2 ? 'K' : x % 2 ? 'G' : 'g';
-  }
-  return g;
-}
+/**
+ * A dome house: a pale bulb with a planted crown, a round window and door.
+ * It swells above its foot, so the house finds room on a river bank.
+ */
+const DOME_HOUSE = [
+  '..MgG..',
+  '.MggGO.',
+  '.RRTTS.',
+  'RRTTTSS',
+  '.RwTvS.',
+  '.RTTvS.',
+];
 
-/** A tower with a rounded crown, `w` wide and `h` high. */
-function tower(w, h) {
-  const g = S.canvas(w, h);
-  S.stamp(g, S.dome(w, 3), 0, 0);
-  S.wall(g, 0, w - 1, 3, h - 1);
-  S.windows(g, Array.from({ length: h - 4 }, (_, k) => 4 + k).filter((y) => y % 2 === 0), 1, w - 3, 2);
-  g[h - 1][Math.floor(w / 2) - 1] = 'd';
-  g[h - 2][Math.floor(w / 2) - 1] = 'd';
-  return terraces(g, 5, 4);
-}
+/** Organic towers: a shell trunk swelling and narrowing, green terrace ledges, a tree crown. */
+const BIOTOWER_M = [
+  '..MgG..',
+  '.MggGO.',
+  '.gGGGO.',
+  '..RTS..',
+  '.RwTvS.',
+  'MggGGGO',
+  '.RTTTS.',
+  '.RwTvS.',
+  '.RTvTS.',
+  '.RTvTS.',
+];
 
-function biotower(size) {
-  if (size === 's') {
-    const g = S.canvas(5, 5);
-    S.stamp(g, S.dome(5, 3, 2), 0, 0);
-    g[4][2] = 'd';
-    g[3][2] = 'd';
-    return { g, planted: true };
-  }
-  if (size === 'm') return { g: tower(6, 10), planted: false };
-  return { g: tower(6, 16), planted: false };
-}
+const BIOTOWER_L = [
+  '..MgG..',
+  '.MggGO.',
+  'MggGGGO',
+  '.gGGGO.',
+  '..RTS..',
+  '.RwTvS.',
+  'MggGGGO',
+  '.RTTTS.',
+  '.RwTvS.',
+  'MggGGGO',
+  '.RTTTS.',
+  '.RwTvS.',
+  '.RTvTS.',
+  '.RTvTS.',
+];
 
-/** A glass dome with green inside, on a white rim. */
+/** A turquoise glass dome on a pale rim: white ribs, a little forest inside. */
 function biodome() {
-  const g = S.dome(11, 6, 2);
-  for (let y = 2; y < 6; y++) for (let x = 2; x < 9; x++) if (g[y][x] === 'T' || g[y][x] === 'S') g[y][x] = (x + y) % 3 === 0 ? 'G' : 'g';
-  return g;
-}
-
-/** A spire tapering from 7 px to a point, with a green ring every four rows. */
-function megatower() {
-  const h = 18;
-  const g = S.canvas(7, h);
+  const w = 13;
+  const h = 7;
+  const g = S.dome(w, h, 1);
+  const glass = { L: 'w', T: 'w', S: 'v' };
   for (let y = 0; y < h; y++) {
-    const half = Math.min(3, Math.floor((y + 1) / 5));
-    for (let x = 3 - half; x <= 3 + half; x++) {
-      g[y][x] = x === 3 + half ? 'O' : x === 3 - half ? 'R' : x > 3 ? 'S' : 'T';
-      if (y % 4 === 3 && y > 2) g[y][x] = x > 3 ? 'G' : 'g';
+    for (let x = 0; x < w; x++) {
+      const c = g[y][x];
+      if (c === '.') continue;
+      if (c === 'R') g[y][x] = 'R';
+      else if (c === 'O') g[y][x] = 'S';
+      else if (x === 3 || x === 6 || x === 9) g[y][x] = y < 3 ? 'R' : 'T';
+      else g[y][x] = glass[c];
     }
   }
-  g[h - 1][3] = 'd';
+  // Tree crowns inside, under the glass.
+  for (const [x, y, c] of [[2, 5, 'g'], [4, 4, 'M'], [4, 5, 'g'], [5, 5, 'G'], [7, 4, 'g'], [7, 5, 'G'], [8, 5, 'G'], [10, 5, 'G'], [10, 4, 'g']]) g[y][x] = c;
+  for (let x = 0; x < w; x++) g[h][x] = x === w - 1 ? 'S' : x === 0 ? 'R' : 'T';
+  g[h][6] = 'v';
   return g;
 }
+
+/**
+ * The megatower, grown like a giant tree: a pale trunk with turquoise
+ * windows carrying broad green canopy decks, larger towards its foot,
+ * crowned by a turquoise glass bulb.
+ */
+const MEGATOWER = [
+  '...Rwv...',
+  '..RwwvS..',
+  '..wwwvv..',
+  '...wvv...',
+  '...RTS...',
+  '...RTS...',
+  '..MggGO..',
+  '.MggGGGO.',
+  '...RwS...',
+  '...RTS...',
+  '.MggGGGO.',
+  'MggGGGGGO',
+  '..RRwSS..',
+  '..RTTTS..',
+  'MggGGGGGO',
+  '.gGGGGGO.',
+  '..RRwSS..',
+  '..RTvTS..',
+  '.RRTvTSS.',
+];
 
 const GARDEN = [
   [
-    '.gGK.',
-    'gggGK',
-    'gGgGK',
-    '.KGK.',
-    'RTTSO',
-    '.uuu.',
+    '.MgG.',
+    'MggGO',
+    'gGGGO',
+    '.GGO.',
+    '..b..',
   ],
   [
-    '.R.',
-    'RLO',
-    '.O.',
-    '...',
-    '.T.',
-    'RTO',
+    '.MgO.',
+    'MggGO',
+    'RTTTS',
   ],
 ];
 
+/** Park size per size stage (village, town, metropolis). */
+const PARK = [[14, 10], [16, 12], [16, 14]];
+
+/**
+ * The park under the city: an oval lawn in 2 × 2 cells with sunlit tufts,
+ * a pale path looping round a point low in it, so its front arc runs
+ * through the open ground before the houses. Symmetric, as the plan is
+ * mirrored and the ground is not.
+ */
+function park(stage) {
+  const [w, h] = PARK[stage];
+  const t = new k.Tex(w, h);
+  const cx = (w - 1) / 2;
+  const cy = (h - 1) / 2;
+  t.each((x, y) => {
+    const fx = (x - cx) / (w / 2);
+    const fy = (y - cy) / (h / 2);
+    const d = fx * fx + fy * fy;
+    if (d > 1.02) return undefined;
+    const ly = (y - (h - 4)) / (h / 2);
+    const loop = fx * fx * 1.6 + ly * ly * 2.2;
+    if (loop > 0.28 && loop < 0.5) return k.c('lichen1');
+    const n = k.hash(Math.floor(Math.abs(x - cx) / 2), y >> 1, 71 + stage);
+    return k.c(n < 0.2 ? 'leaf2' : n > 0.8 ? 'meadow3' : 'leaf3');
+  });
+  return t;
+}
+
 const blocks = {
-  biotower: (v) => {
-    const { g, planted } = biotower(v.size);
-    return S.sprite(g, planted ? PLANTED : SHELL);
-  },
-  biodome: () => S.sprite(biodome(), SHELL),
-  megatower: () => S.sprite(megatower(), SHELL),
-  garden: (v) => S.sprite(GARDEN[v.index], SHELL),
-  yard_nanotech: (v) => yard(v.index, 'park', ['leaf0', 'leaf1', 'lichen1'], 71),
+  biotower: (v) => S.sprite(v.size === 's' ? DOME_HOUSE : v.size === 'm' ? BIOTOWER_M : BIOTOWER_L, NANO),
+  biodome: () => S.sprite(biodome(), NANO),
+  megatower: () => S.sprite(MEGATOWER, NANO),
+  garden: (v) => S.sprite(GARDEN[v.index], TREE),
+  yard_nanotech: (v) => park(v.index),
 };
 
 module.exports = { blocks };

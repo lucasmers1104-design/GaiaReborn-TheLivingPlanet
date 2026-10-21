@@ -246,7 +246,8 @@ test('a lineage already extinct is not reported extinct again after loading', as
   a.world.lifeDensity.fill(0);
   a.world.refreshDerived();
   for (let k = 0; k < 16; k++) a.tick();
-  const count = (s) => s.world.evo.chronicle.filter((e) => e.kind === 'extinction' && e.nodeId === 'cells').length;
+  // Whole lineages only: an entry with a `stage` is about one sub-species (the first cells die out early).
+  const count = (s) => s.world.evo.chronicle.filter((e) => e.kind === 'extinction' && e.nodeId === 'cells' && e.stage === undefined).length;
   assert.equal(count(a), 1, 'cells died out once');
 
   const legacy = SE.SaveSystem.serialize(ctx(a));

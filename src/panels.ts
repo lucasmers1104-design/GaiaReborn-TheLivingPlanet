@@ -8,10 +8,14 @@ namespace SE {
   export interface HistorySeries {
     readonly label: string;
     readonly color: Rgb;
+    /** UI icon id the History window shows it by. */
+    readonly icon?: string;
     readonly data: number[];
     /** Value range mapped onto the chart height — below zero included. */
     readonly min: number;
     readonly max: number;
+    /** The range grows to the highest recorded value; `max` is then its smallest top. */
+    readonly autoMax?: boolean;
     /** A sample as the History window prints it. */
     readonly format: (v: number) => string;
     /** For histories saved before this series existed: its value from the air's O2 then. */
@@ -29,6 +33,81 @@ namespace SE {
     return alive;
   }
 
+  const EARTH_AREA_M2 = 5.1e14;
+  /**
+   * Dry biomass in kg per m² at density 1, set so that the Earth epoch, fully
+   * developed (headless, seed 12345: 8.4e13 m² of full plant density on land,
+   * 8.3e13 m² of algae, 1.8e14 m² of animals), carries about what today's
+   * Earth does: plants ≈ 450 Gt C, marine producers ≈ 1 Gt C, animals ≈ 2 Gt C
+   * (Bar-On, Phillips & Milo 2018, PNAS 115:6506), dry mass ≈ 2 × carbon.
+   */
+  const LAND_PLANT_KG_M2 = 10;
+  const ALGAE_KG_M2 = 0.025;
+  const ANIMAL_KG_M2 = 0.02;
+
+  interface PlanetTotals {
+    /** Mean temperature of the sea, °C. */
+    readonly seaTemp: number;
+    /** Mean rainfall on land, cm/year. */
+    readonly rain: number;
+    /** Dry biomass of land plants and algae, and of animals (not single cells), Gt. */
+    readonly plants: number;
+    readonly animals: number;
+    /** People in all cities, millions. */
+    readonly people: number;
+  }
+
+  /**
+   * The overview map's "Meerestemperatur" and "Niederschlag" layers as one
+   * area-weighted mean each (weighted like `globalTemp`), and the biomass
+   * densities as tonnes on Earth-sized tiles.
+   */
+  function planetTotals(world: WorldState): PlanetTotals {
+    let sea = 0;
+    let seaWeight = 0;
+    let rain = 0;
+    let landWeight = 0;
+    let landPlants = 0;
+    let algae = 0;
+    let animals = 0;
+    let people = 0;
+    for (let y = 0; y < GRID_H; y++) {
+      const w = Math.max(0.05, Math.cos((latitudeDeg(y) * Math.PI) / 180));
+      for (let x = 0; x < GRID_W; x++) {
+        const i = idx(x, y);
+        const base = i * LIFE_COUNT;
+        animals += (world.tileBiomass[i] - world.lifeDensity[base + Life.Prokaryote] - world.lifeDensity[base + Life.Eukaryote]) * w;
+        people += world.cityPop[i] * CITY_PEOPLE_MIO[world.tech[i]];
+        if (world.isWater(i)) {
+          sea += world.temperature[i] * w;
+          seaWeight += w;
+          algae += world.vegetation[i] * w;
+        } else {
+          rain += world.rainfallCm(i) * w;
+          landWeight += w;
+          landPlants += world.vegetation[i] * w;
+        }
+      }
+    }
+    const gtPerWeight = EARTH_AREA_M2 / (seaWeight + landWeight) / 1e12;
+    return {
+      seaTemp: seaWeight > 0 ? sea / seaWeight : 0,
+      rain: landWeight > 0 ? rain / landWeight : 0,
+      plants: (landPlants * LAND_PLANT_KG_M2 + algae * ALGAE_KG_M2) * gtPerWeight,
+      animals: animals * ANIMAL_KG_M2 * gtPerWeight,
+      people,
+    };
+  }
+
+  /** A mass given in Gt, in the unit that reads best. */
+  function formatMass(gt: number): string {
+    if (gt >= 10) return `${fmt.int(gt)} Mrd. t`;
+    if (gt >= 1) return `${fmt.one(gt)} Mrd. t`;
+    if (gt >= 1e-3) return `${fmt.int(gt * 1e3)} Mio. t`;
+    if (gt >= 1e-6) return `${fmt.int(gt * 1e6)} Tsd. t`;
+    return `${fmt.int(gt * 1e9)} t`;
+  }
+
   /** Index of the air's oxygen among the recorded series. */
   const AIR_O2 = 2;
 
@@ -40,13 +119,13 @@ namespace SE {
     readonly years: number[] = [];
 
     readonly series: HistorySeries[] = [
-      { label: 'Temperatur', color: [255, 122, 107], data: [], min: -20, max: 40, format: (v) => `${fmt.one(v)} °C` },
-      { label: 'CO₂', color: [200, 160, 120], data: [], min: 0, max: 2000, format: (v) => `${fmt.int(v)} ppm` },
-      { label: 'Sauerstoff Luft', color: [127, 224, 240], data: [], min: 0, max: 30, format: (v) => `${fmt.one(v)} %` },
-      { label: 'Wasserdampf', color: [110, 160, 255], data: [], min: 0, max: 1, format: (v) => fmt.pct(v) },
+      { label: 'Lufttemperatur', color: [255, 122, 107], icon: 'overlay-heat', data: [], min: -20, max: 40, format: (v) => `${fmt.one(v)} °C` },
+      { label: 'Kohlendioxid (CO₂)', color: [200, 160, 120], icon: 'molecule-co2', data: [], min: 0, max: 2000, format: (v) => `${fmt.int(v)} ppm` },
+      { label: 'Sauerstoff (O₂)', color: [127, 224, 240], icon: 'molecule-o2', data: [], min: 0, max: 30, format: (v) => `${fmt.one(v)} %` },
+      { label: 'Wasserdampf (H₂O)', color: [110, 160, 255], icon: 'molecule-h2o', data: [], min: 0, max: 1, format: (v) => fmt.pct(v) },
       { label: 'Pflanzendecke', color: [138, 209, 111], data: [], min: 0, max: 0.4, format: (v) => fmt.pct(v) },
       { label: 'Belebte Fläche', color: [242, 163, 92], data: [], min: 0, max: 0.8, format: (v) => fmt.pct(v) },
-      { label: 'Städte', color: [246, 196, 83], data: [], min: 0, max: 60, format: (v) => fmt.one(v) },
+      { label: 'Städte', color: [246, 196, 83], icon: 'city', data: [], min: 0, max: 60, autoMax: true, format: (v) => fmt.int(v) },
       { label: 'Lebende Gruppen', color: [180, 140, 255], data: [], min: 0, max: EVO_NODES.length, format: (v) => fmt.int(v) },
       {
         label: 'Sauerstoff Meer', color: [76, 182, 214], data: [], min: 0, max: 120,
@@ -56,15 +135,28 @@ namespace SE {
         label: 'Gelöstes Eisen', color: [196, 106, 72], data: [], min: 0, max: 1,
         format: (v) => fmt.pct(v), backfill: (o2) => seaFromAir(o2).iron,
       },
-      { label: 'Kohlevorrat', color: [150, 140, 128], data: [], min: 0, max: 25000, format: (v) => `${fmt.int(v)} Gt` },
+      { label: 'Kohlevorrat', color: [150, 140, 128], icon: 'coal', data: [], min: 0, max: 25000, format: (v) => `${fmt.int(v)} Gt` },
+      { label: 'Meerestemperatur', color: [76, 182, 214], icon: 'overlay-seaheat', data: [], min: -5, max: 35, format: (v) => `${fmt.one(v)} °C` },
+      { label: 'Niederschlag an Land', color: [180, 140, 255], icon: 'overlay-rain', data: [], min: 0, max: 300, format: (v) => `${fmt.int(v)} cm/Jahr` },
+      { label: 'Biomasse Pflanzen (trocken)', color: [138, 209, 111], icon: 'tool-plant', data: [], min: 0, max: 0.01, autoMax: true, format: formatMass },
+      { label: 'Biomasse Tiere (trocken)', color: [242, 163, 92], icon: 'layer-life', data: [], min: 0, max: 0.001, autoMax: true, format: formatMass },
+      { label: 'Ölvorrat', color: [120, 104, 82], icon: 'oil', data: [], min: 0, max: 2000, autoMax: true, format: (v) => `${fmt.int(v)} Gt` },
+      {
+        label: 'Weltbevölkerung', color: [233, 200, 160], icon: '../resources/population', data: [], min: 0, max: 100, autoMax: true,
+        format: (v) => `${v < 10 ? fmt.one(v) : fmt.int(v)} Mio.`,
+      },
     ];
 
     sample(world: WorldState): void {
       if (world.ticks % HistoryRecorder.INTERVAL !== 0) return;
+      const p = planetTotals(world);
+      let cities = 0;
+      for (let t = 1; t < TECH_COUNT; t++) cities += world.techCounts[t];
       const values = [
         world.globalTemp, world.co2, world.o2, world.vapor,
-        world.vegetationCoverage, world.lifeCover, world.totalCityPop, livingGroups(world),
+        world.vegetationCoverage, world.lifeCover, cities, livingGroups(world),
         world.oceanO2, world.oceanIron, world.coal,
+        p.seaTemp, p.rain, p.plants, p.animals, world.oil, p.people,
       ];
       this.series.forEach((s, i) => {
         s.data.push(values[i]);
@@ -132,7 +224,7 @@ namespace SE {
     ['Treibhauseffekt', 'Erwärmung, weil CO₂ und Wasserdampf ausgehende Wärme zurückhalten.', 'ui/model-greenhouse'],
     ['Kontinentaldrift', 'Platten tragen die Kruste – und alles, was darauf lebt – über lange Zeit seitwärts.', 'ui/map-drift'],
     ['Zeitalter', 'Geologie, Evolution, Zivilisation und Technologie. Jedes lässt die Uhr unterschiedlich schnell laufen.', 'events/timescale'],
-    ['Intelligenz', 'Mehrere Tiergruppen können Intelligenz entwickeln und Städte gründen – nicht nur Säugetiere.', 'events/sentience'],
+    ['Intelligenz', 'Von selbst erwachen nur die Hominiden (nach dem Kometen) oder die Dinosaurier, wenn sie überlebt haben. Andere Tiergruppen erweckt der Monolith.', 'events/sentience'],
     ['Terraformer', 'Maschinen, die die Atmosphäre direkt verändern: Sauerstoff, CO₂ oder Wasserdampf.', 'ui/terra-oxygen'],
     ['Monolith', 'Erweckt die örtliche Art zur Intelligenz. Teuer und selten subtil.', 'ui/terra-monolith'],
     ['Carnifern', 'Im Original eine erfundene, wandernde fleischfressende Pflanze. Hier gibt es dafür echte fleischfressende Pflanzen wie den Sonnentau.', 'evolution/carnivorous'],
@@ -166,6 +258,7 @@ namespace SE {
   export class ChroniclePanel {
     private count = -1;
     onOpenNode: ((id: string) => void) | null = null;
+    onOpenSpaceport: (() => void) | null = null;
 
     constructor(private readonly host: HTMLElement) {}
 
@@ -184,7 +277,7 @@ namespace SE {
       for (let k = list.length - 1; k >= 0; k--) {
         const e = list[k];
         const li = make('li', `chron kind-${e.kind}${e.major ? ' major' : ''}`);
-        li.appendChild(img(e.icon, 'chron-art'));
+        li.appendChild(chronicleArt(e, 'chron-art', 24));
         const body = make('div', 'chron-body');
         body.append(
           make('div', 'chron-when', `${formatEarthDate(e.years)} · ${eraAt(e.years).name}`),
@@ -196,6 +289,8 @@ namespace SE {
         if (e.nodeId) {
           const id = e.nodeId;
           body.appendChild(button({ label: 'Im Evolutionsbaum ansehen', icon: uiIcon('evolution'), cls: 'btn btn-small btn-ghost', onClick: () => this.onOpenNode?.(id) }));
+        } else if (e.key.startsWith('space:')) {
+          body.appendChild(button({ label: 'Zum Raumhafen', icon: uiIcon('rocket'), cls: 'btn btn-small btn-ghost', onClick: () => this.onOpenSpaceport?.() }));
         }
         li.appendChild(body);
         ol.appendChild(li);

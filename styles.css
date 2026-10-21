@@ -16,6 +16,7 @@
 @import url("css/titledecor.css");
 @import url("css/intro.css");
 @import url("css/introtitle.css");
+@import url("css/launchfilm.css");
 @import url("css/settings.css");
 @import url("css/oceanslider.css");
 @import url("css/planetpicker.css");
@@ -27,11 +28,15 @@
 @import url("css/films-land.css");
 @import url("css/showcase.css");
 @import url("css/speciesstrip.css");
+@import url("css/ripstamp.css");
 @import url("css/fauna.css");
 @import url("css/examine-land.css");
 @import url("css/pixelart.css");
 @import url("css/terraform.css");
 @import url("css/perfhud.css");
+@import url("css/dinofate.css");
+@import url("css/hudinfo.css");
+@import url("css/spaceport.css");
 
 :root {
   --bg-0: #08101a;
@@ -898,7 +903,20 @@ p { margin: 0; }
   border: 2px solid rgba(255, 209, 102, 0.35);
   border-radius: 0;
   box-shadow: var(--shadow);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  translate: 0 calc(100% + 16px);
+  transition: translate 240ms var(--ease), opacity 240ms var(--ease), visibility 0s 240ms;
 }
+.goal.is-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  translate: 0 0;
+  transition-delay: 0s;
+}
+.goal.is-still { transition: none; }
 .goal-art { width: 44px; height: 44px; border-radius: 0; flex: 0 0 auto; }
 .goal-text { flex: 1 1 auto; min-width: 0; }
 .goal-kicker { font-size: 11px; font-weight: 500; color: var(--energy); }
@@ -1356,6 +1374,29 @@ p { margin: 0; }
 .tree-node.state-developed .tree-node-badge .ico { filter: brightness(0.1); }
 .tree-node.extinct .tree-node-badge { background: var(--amber); }
 .tree-node.extinct .tree-node-status { color: var(--amber); }
+/* Gone for good: faded art under an R.I.P. band — tree cards (over the art's grid
+   cell), lexicon pictures (.fauna-pic.is-gone) and notices (.rip-art). */
+.tree-node.gone .tree-node-art { opacity: 0.3; filter: grayscale(1); }
+.tree-node.gone .tree-node-rip { left: 13px; width: 46px; top: calc(50% - 1px); }
+.rip-band { left: 0; right: 0; top: 50%; }
+.fauna-pic, .rip-art { position: relative; }
+.rip-art { display: block; align-self: start; }
+.rip-art > :first-child { opacity: 0.35; filter: grayscale(1); }
+.fauna-pic-lg .rip-band { font-size: 15px; padding: 4px 0; }
+.tree-node.gone .tree-node-rip, .rip-band {
+  display: block;
+  position: absolute;
+  transform: translateY(-50%);
+  padding: 2px 0;
+  background: rgba(10, 15, 23, 0.82);
+  box-shadow: inset 0 2px 0 #c9c2b0, inset 0 -2px 0 #c9c2b0;
+  color: #ece6d6;
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+  letter-spacing: 1px;
+  pointer-events: none;
+}
 .tree-node.selected {
   outline: 2px solid var(--focus);
   outline-offset: 4px;

@@ -9,6 +9,8 @@ namespace SE {
     onShowSpecies: ((c: Life, stage: number) => void) | null = null;
     /** The creature the map shows on a tile (render.ts `creatureOn`). */
     creatureOn: ((world: WorldState, i: number) => { key: string; draw: () => HTMLCanvasElement } | null) | null = null;
+    /** The salmon run or stork flight the map shows on or by a tile (render.ts `migrationOn`). */
+    migrationOn: ((world: WorldState, i: number) => Migration | null) | null = null;
 
     constructor(private readonly host: HTMLElement) {}
 
@@ -30,7 +32,9 @@ namespace SE {
       const event = world.eventTtl[i] > 0 ? `Ereignis: ${EVENT_NAMES[world.eventKind[i]]}` : '';
       const scar = hazardLabel(world, i);
       const reef = reefNotes(world, i);
-      const sig = [tileSig, fmt.pct(world.vegetation[i]), city, river, event, scar, ...reef,
+      const migration = this.migrationOn?.(world, i) ?? null;
+      const mound = i === world.termiteMound;
+      const sig = [tileSig, fmt.pct(world.vegetation[i]), city, river, event, scar, migration ?? '', mound, ...reef,
         species.map(c => `${c}:${world.stage(i, c)}:${fmt.int(world.density(i, c) * 100)}:${LifeSystem.habitatLabel(world.density(i, c))}:${fmt.pct(world.lifeCounts[c] / TILE_COUNT)}:${examineAge(world, world.lifeFirstSeen[c])}`).join(','),
         plants.map(g => `${g}:${fmt.pct(world.floraCounts[g] / TILE_COUNT)}:${examineAge(world, world.evo.developed.get(FLORA[g].id)?.years ?? -1)}`).join(','),
         world.floraTop[i], growsAsCacti(world, i) ? 'cacti' : '',
@@ -77,9 +81,22 @@ namespace SE {
       }
       for (const text of [event, scar]) if (text) notes.append(make('p', 'ex-event', text));
       this.host.replaceChildren(this.hero, flora, animals);
+      if (migration) this.hero.after(ExaminePanel.sightCard(MIGRATION_INFO[migration]));
+      if (mound) this.hero.after(ExaminePanel.sightCard(TERMITE_INFO));
       if (notes.childElementCount) this.host.append(notes);
       if (focusKey) this.host.querySelector<HTMLElement>(`[data-focus-key="${focusKey}"]`)?.focus({ preventScroll: true });
       if (scroller) scroller.scrollTop = scrollTop;
+    }
+
+    private static sightCard(info: { readonly title: string; readonly text: string; readonly icon: string }): HTMLElement {
+      const card = make('div', 'ex-migration');
+      const icon = img(evoIcon(info.icon), 'ex-migration-icon');
+      // Sized here too: a cached old stylesheet must not blow the icon up.
+      icon.width = icon.height = 40;
+      const body = make('div');
+      body.append(make('h4', 'ex-event', info.title), make('p', undefined, info.text));
+      card.append(icon, body);
+      return card;
     }
 
     private section(title: string, icon: string, note: string): HTMLElement {

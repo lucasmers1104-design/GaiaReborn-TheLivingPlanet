@@ -155,12 +155,20 @@
 
 /* ---- History ---- */
 .hist-layout { display: flex; flex-direction: column; gap: 10px; height: 100%; }
+/* The overview map's group box and mode buttons, with the label beside the icon. */
+.hist-tabs { display: flex; gap: 1px; align-self: flex-start; padding: 4px; background: var(--raise); clip-path: var(--px-clip); }
+.hist-tabs .hist-tab { display: inline-flex; gap: 6px; width: auto; padding: 0 10px; color: var(--ink-2); font-size: 12px; font-weight: 600; }
+.hist-tabs .hist-tab.on { color: var(--ink); }
 .hist-stage { position: relative; flex: 1 1 auto; min-height: 150px; border-radius: 0; background: rgba(0, 0, 0, 0.22); box-shadow: inset 0 0 0 2px var(--glass-border); }
-.hist-stage .fill-canvas { position: absolute; inset: 0; cursor: crosshair; }
+.hist-canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; cursor: crosshair; }
+.hist-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 24px; pointer-events: none; }
+.hist-tick { position: absolute; bottom: 5px; color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+.hist-empty { position: absolute; left: 50%; top: 50%; margin: 0; transform: translate(-50%, -50%); color: var(--ink-3); font-size: 13px; pointer-events: none; }
 .hist-keys { display: flex; flex-wrap: wrap; gap: 6px; }
 .hist-key { min-height: 30px; font-size: 12px; }
+.hist-key.on { border-color: var(--series); background: var(--raise); }
 .hist-key-value { color: var(--ink-3); font-variant-numeric: tabular-nums; font-weight: 650; }
-.hist-key.on .hist-key-value { color: var(--ink-2); }
+.hist-key.on .hist-key-value { color: var(--series); }
 .hist-tip {
   position: absolute;
   top: 10px;
@@ -178,8 +186,9 @@
 }
 .hist-tip.show { opacity: 1; }
 .hist-tip-when { font-weight: 800; margin-bottom: 4px; }
-.hist-tip-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; color: var(--ink-2); }
-.hist-tip-row b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.hist-tip-row { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center; color: var(--ink-2); }
+.hist-tip-row .ico { width: 16px; height: 16px; }
+.hist-tip-row b { color: var(--series); font-variant-numeric: tabular-nums; }
 
 /* ---- Report ---- */
 .report-body { display: flex; flex-direction: column; gap: 12px; }

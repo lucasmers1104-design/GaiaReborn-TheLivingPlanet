@@ -444,13 +444,54 @@ test('sea classes never become sentient', () => {
   assert.equal(w.sentientClass, SE.Life.None);
   assert.equal(cityTiles(s).length, 0);
 
-  // A land class does wake up, and settles on land.
-  for (let i = 0; i < SE.TILE_COUNT; i++) if (!w.isWater(i)) w.lifeDensity[i * SE.LIFE_COUNT + SE.Life.Mammal] = 0.8;
+  // Hominids do wake up once the comet has struck, roam and settle on land.
+  w.dinoEra.fate = 'extinct';
+  for (let i = 0; i < SE.TILE_COUNT; i++) {
+    if (w.isWater(i)) continue;
+    w.lifeDensity[i * SE.LIFE_COUNT + SE.Life.Mammal] = 0.8;
+    w.lifeStage[i * SE.LIFE_COUNT + SE.Life.Mammal] = SE.HOMINID_STAGE;
+  }
   w.refreshDerived();
   assert.equal(SE.CivSystem.sentienceCandidate(w), SE.Life.Mammal);
   run(s, 4000, () => w.sentientClass === SE.Life.None);
   assert.equal(w.sentientClass, SE.Life.Mammal);
+  assert.ok(w.civ.bands.length > 0);
+  for (const b of w.civ.bands) assert.ok(!w.isWater(b.path[0]));
+  run(s, SE.BAND_SETTLE_MAX, () => cityTiles(s).length === 0);
+  assert.ok(cityTiles(s).length > 0, 'the bands settle');
   for (const i of cityTiles(s)) assert.ok(!w.isWater(i));
+});
+
+test('on their own only hominids after the comet, or dinosaurs that lived on, wake up', () => {
+  const s = fixture([[40, 40, 100, 90]]);
+  const { SE, world: w, params } = s;
+  w.sentientClass = SE.Life.None;
+  w.o2 = 21;
+  params.bio.evolutionRate = 1;
+  const fill = (c, stage) => {
+    for (let i = 0; i < SE.TILE_COUNT; i++) {
+      if (w.isWater(i)) continue;
+      for (const k of [SE.Life.Insect, SE.Life.Mammal, SE.Life.Dinosaur]) w.lifeDensity[i * SE.LIFE_COUNT + k] = 0;
+      w.lifeDensity[i * SE.LIFE_COUNT + c] = 0.8;
+      w.lifeStage[i * SE.LIFE_COUNT + c] = stage;
+    }
+    w.refreshDerived();
+  };
+  // Insects never, whatever the dinosaurs' fate: they need the Monolith.
+  fill(SE.Life.Insect, 7);
+  for (const fate of ['open', 'kept', 'extinct']) {
+    w.dinoEra.fate = fate;
+    assert.equal(SE.CivSystem.sentienceCandidate(w), SE.Life.None, fate);
+  }
+  // Mammals below the hominids stay asleep even after the comet.
+  fill(SE.Life.Mammal, SE.HOMINID_STAGE - 1);
+  run(s, 3000);
+  assert.equal(w.sentientClass, SE.Life.None);
+  // Dinosaurs only if they lived on.
+  fill(SE.Life.Dinosaur, 0);
+  assert.equal(SE.CivSystem.sentienceCandidate(w), SE.Life.None);
+  w.dinoEra.fate = 'kept';
+  assert.equal(SE.CivSystem.sentienceCandidate(w), SE.Life.Dinosaur);
 });
 
 test('epidemics strike only scarce cities, and medicine helps from the industrial age on', () => {

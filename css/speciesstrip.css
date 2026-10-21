@@ -1,7 +1,9 @@
 /* The eight sub-species of an animal class in the tree's detail panel. */
 
 .species-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 8px; margin: 2px 0 4px; }
-.species-stage { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; text-align: center; }
+.species-stage { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; text-align: center; }
+.species-stage:hover .species-pic { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--k, var(--origin)) 55%, transparent); }
+.species-stage:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 /* Pixel tile in the kingdom tint (--k comes from .tree-detail). */
 .species-pic {
   width: 100%;
@@ -18,6 +20,9 @@
 .species-pic:has(canvas) { padding: 3px; }
 .species-pic canvas { width: 54px; height: 54px; }
 /* Borrows half the column gap so long names like "Mikrobenmatten" stay whole. */
-.species-stage figcaption { margin-inline: -4px; font-size: 10px; line-height: 12px; color: #4a5a6e; overflow-wrap: anywhere; hyphens: auto; }
+.species-stage-name { margin-inline: -4px; font-size: 10px; line-height: 12px; color: #4a5a6e; overflow-wrap: anywhere; hyphens: auto; }
 .species-pic.is-unknown { display: grid; place-items: center; background: rgba(255, 255, 255, 0.02); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.06); color: var(--energy); font-size: 22px; font-weight: 700; }
-.species-stage.reached figcaption { color: var(--ink-2, var(--ink)); }
+.species-stage.reached .species-stage-name { color: var(--ink-2, var(--ink)); }
+/* Gone for good: faded like the tree card, under the R.I.P. band (styles.css). */
+.species-stage.is-gone .species-pic { position: relative; }
+.species-stage.is-gone .species-pic canvas { filter: grayscale(1); opacity: 0.35; }

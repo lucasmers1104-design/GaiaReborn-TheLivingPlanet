@@ -8,6 +8,10 @@
  * towers only in a modern metropolis), crosses a straight river by bridge
  * from the Bronze Age and is the same every time; its yard leaves the river
  * bank free; the settler, marker and label keep their formats.
+ *
+ * CIV_ATLAS_MEMORY=1 checks the layout against the atlas the recipes build
+ * now instead of the committed one (and skips the staleness test), so a
+ * recipe or plan under work can be tested before the atlas is written.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -21,7 +25,9 @@ const P = require('../tools/terrain/palette');
 const { artProblems } = require('../tools/artcheck');
 
 const SE = loadSE();
-const M = SE.CIV_MANIFEST;
+const MEMORY = !!process.env.CIV_ATLAS_MEMORY;
+const BUILT = MEMORY ? assemble(build()) : null;
+const M = BUILT ? BUILT.manifest : SE.CIV_MANIFEST;
 const ERAS = M.eras.map((id, k) => ({ id, tech: k + 1 }));
 const WALLED = ['stone', 'bronze', 'iron'];
 const BUILDINGS = ['dwelling', 'hall', 'landmark'];
@@ -41,24 +47,40 @@ function river(x0, y0, x1, y1, r) {
 }
 
 function layout(x, y, size, tech = SE.Tech.Stone, near = () => false, extra = {}) {
-  return SE.layoutCity({ x, y, era: tech, size, tribe: (x + y) % 8, near, rivers: 0, ...extra });
+  return SE.layoutCity({ x, y, era: tech, size, tribe: (x + y) % 8, near, rivers: 0, ...extra }, M);
 }
 
-/** Pixels of the blocks other than the yard, on the 16 × 20 city box. */
+/** Art pixels of the box beside the tile on either side. */
+const SIDE = (M.box.w - 16) / 2;
+
+/** Pixels of the blocks other than the yard, on the city box. */
 function covered(list) {
-  const g = new Uint8Array(16 * M.box.h);
+  const g = new Uint8Array(M.box.w * M.box.h);
   for (const p of list) {
     if (role(p) === 'ground') continue;
     const s = sprite(p);
-    const left = p.fx - s.ax;
+    const left = p.fx - s.ax + SIDE;
     const top = p.fy - s.ay + M.box.h - 16;
-    for (let r = 0; r < s.rect.h; r++) for (let c = s.spans[2 * r]; c <= s.spans[2 * r + 1]; c++) g[(top + r) * 16 + left + c] = 1;
+    for (let r = 0; r < s.rect.h; r++) for (let c = s.spans[2 * r]; c <= s.spans[2 * r + 1]; c++) g[(top + r) * M.box.w + left + c] = 1;
   }
   return g.reduce((a, b) => a + b, 0);
 }
 
-/** The committed atlas decoded to RGBA (indexed PNG, filter 0 on every row). */
+/** The picture stays in the city box and the ground footprint on the tile. */
+function inBox(p) {
+  const s = sprite(p);
+  const left = p.fx - s.ax;
+  return left >= -SIDE && left + s.rect.w <= 16 + SIDE && p.fy - s.ay >= 16 - M.box.h &&
+    left + s.bx0 >= 0 && left + s.bx1 <= 15;
+}
+
+/** The committed atlas decoded to RGBA (indexed PNG, filter 0 on every row); in memory mode the built one. */
 function atlasPixels() {
+  if (BUILT) {
+    const data = new Uint8Array(BUILT.size.w * BUILT.size.h * 4);
+    for (let i = 0; i < BUILT.px.length; i++) data.set(P.PALETTE[BUILT.px[i]], i * 4);
+    return { w: BUILT.size.w, data };
+  }
   const zlib = require('zlib');
   const buf = Buffer.from(SE.CIV_ATLAS_PNG.slice(SE.CIV_ATLAS_PNG.indexOf(',') + 1), 'base64');
   const idat = [];
@@ -77,7 +99,7 @@ function atlasPixels() {
 
 const TILES = Array.from({ length: 60 }, (_, n) => [(n * 37) % SE.GRID_W, 6 + ((n * 13) % (SE.GRID_H - 12))]);
 
-test('the committed city atlas is what the recipes produce', () => {
+test('the committed city atlas is what the recipes produce', { skip: MEMORY && 'CIV_ATLAS_MEMORY' }, () => {
   const art = build();
   const out = assemble(art);
   const png = encodeIndexed(out.size.w, out.size.h, out.px, P.PALETTE);
@@ -95,7 +117,8 @@ test('city blocks keep the pixel style rules', () => {
       assert.equal(s.ay, s.rect.h - 1, `${id}: stands on its last row`);
       assert.equal(s.spans.length, s.rect.h * 2);
       if (b.role === 'ground') assert.ok(s.rect.h <= 14, `${id}: the yard leaves the two bottom rows free`);
-      else assert.ok(s.bx0 <= s.bx1, `${id}: has a footprint`);
+      // depth 0: never placed on the ground (flame and smoke frames, drawn over the pictures by cityfire.ts).
+      else if (b.depth > 0) assert.ok(s.bx0 <= s.bx1, `${id}: has a footprint`);
     }
   }
 });
@@ -110,14 +133,14 @@ test('every era has its set: houses in three sizes, hall, landmark, yard things,
     assert.equal(of('wall').length > 0, WALLED.includes(id), `${id}: walls only in the walled eras`);
     for (const b of of('wall')) assert.equal(b.variants.length, 3, `${id}: straight, running and long wall pieces`);
     for (const b of of('bridge')) assert.equal(b.variants.length, 2, `${id}: a horizontal and a vertical bridge`);
-    assert.equal(SE.cityArtEra(tech), id, `${id}: drawn`);
+    assert.equal(SE.cityArtEra(tech, M), id, `${id}: drawn`);
     const sizes = blocks.filter((b) => b.role !== 'ground' && b.role !== 'bridge' && b.role !== 'wall').length;
     assert.ok(sizes >= 4, `${id}: 4–5 blocks`);
   }
   for (const id of ['bronze', 'iron', 'industrial']) assert.ok(Object.values(M.blocks).some((b) => b.era === id && b.role === 'bridge'), `${id}: its own bridge`);
   const banner = Object.values(M.blocks).find((b) => b.role === 'banner');
   assert.equal(banner.variants.length, SE.TRIBE_MAX);
-  assert.equal(SE.cityArtEra(SE.Tech.None), null);
+  assert.equal(SE.cityArtEra(SE.Tech.None, M), null);
 });
 
 test('tribe colours: one table, the SVG colour nearest to its own pixel colour', () => {
@@ -136,7 +159,7 @@ test('tribe colours: one table, the SVG colour nearest to its own pixel colour',
   assert.equal(SE.tribeArtColor(-1), 'cream', 'no tribe: a neutral pennant');
 });
 
-test('a city off the river stays on its own tile: feet in x 2..13, y 5..13, at most 4 px above, the bottom two rows free', () => {
+test('a city off the river stays on its own tile: feet in x 2..13, y 5..13, the picture in the city box, the bottom two rows free', () => {
   for (const { tech } of ERAS) {
     for (const [x, y] of TILES) {
       for (let size = 0; size < 3; size++) {
@@ -145,9 +168,7 @@ test('a city off the river stays on its own tile: feet in x 2..13, y 5..13, at m
         assert.equal(list[0].v, size, 'the yard grows with the size stage');
         for (const p of list) {
           const s = sprite(p);
-          const left = p.fx - s.ax;
-          assert.ok(left >= 0 && left + s.rect.w <= 16, `${p.id} inside the tile`);
-          assert.ok(p.fy - s.ay >= 16 - M.box.h, `${p.id} reaches at most ${M.box.h - 16} px above`);
+          assert.ok(inBox(p), `${p.id} inside the city box, footprint on the tile`);
           assert.ok(p.fy <= 13, 'rows 14 and 15 stay free');
           if (role(p) === 'ground') {
             assert.ok(p.fy - s.ay >= 0, 'the yard stays on the tile');
@@ -231,14 +252,14 @@ test('a river city keeps out of the water, shows a medium building and its penna
       const oy = y * T;
       courses(x, y).forEach((r, k) => {
         for (let size = 0; size < 3; size++) {
-          const list = SE.layoutCity({ x, y, era: tech, size, tribe: 3, near: r.near, rivers: 0 });
+          const list = SE.layoutCity({ x, y, era: tech, size, tribe: 3, near: r.near, rivers: 0 }, M);
           let loose = 0;
           for (const p of list) {
             const s = sprite(p);
             const b = M.blocks[p.id];
             if (b.role === 'ground' || b.role === 'bridge') continue;
             const left = p.fx - s.ax;
-            assert.ok(left >= 0 && left + s.rect.w <= 16 && p.fy - s.ay >= 16 - M.box.h, `${p.id} stays on its tile`);
+            assert.ok(inBox(p), `${p.id} stays in the city box, footprint on the tile`);
             assert.ok(p.fy >= SE.CITY_FOOT_Y0_RIVER && p.fy <= SE.CITY_FOOT_Y1, `${p.id} foot row ${p.fy}`);
             const foot = r.dist(ox + p.fx + 0.5, oy + p.fy + 0.5);
             assert.ok(foot > SE.CITY_RIVER_CLEARANCE_EDGE, `${id} ${p.id}: foot at least ${SE.CITY_RIVER_CLEARANCE_EDGE} px from the water`);
@@ -268,7 +289,7 @@ test('a river city keeps out of the water, shows a medium building and its penna
 
 test('the yard leaves the river bank free', () => {
   const atlas = atlasPixels();
-  const { w, h } = SE.cityPictureSize();
+  const { w, h } = SE.cityPictureSize(M);
   const x = 50;
   const y = 40;
   const r = river(x * 16 + 8, y * 16 - 16, x * 16 + 8, y * 16 + 32, 2);
@@ -278,12 +299,12 @@ test('the yard leaves the river bank free', () => {
     const yard = layout(x, y, 2, tech, r.near)[0];
     assert.equal(role(yard), 'ground');
     const out = new Uint8Array(w * h * 4);
-    SE.composeCity([yard], wet, atlas, out);
+    SE.composeCity([yard], wet, atlas, out, M);
     const oy = SE.CITY_PAD + M.box.h - 16;
     let kept = 0;
     for (let py = 0; py < 16; py++) {
       for (let px = 0; px < 16; px++) {
-        const a = out[((oy + py) * w + SE.CITY_PAD + px) * 4 + 3];
+        const a = out[((oy + py) * w + SE.CITY_PAD + SIDE + px) * 4 + 3];
         if (wet[py * 16 + px] !== 0) assert.equal(a, 0, `yard pixel ${px},${py} on the bank`);
         else if (a === 255) kept++;
       }
@@ -309,7 +330,7 @@ test('the pennant shows the tribe colour, and a city without a tribe has none', 
   for (const { tech } of ERAS) {
     for (let k = 0; k < SE.TRIBE_MAX; k++) {
       for (let size = 0; size < 3; size++) {
-        const flags = SE.layoutCity({ x: 30 + k, y: 30, era: tech, size, tribe: k, near: () => false, rivers: 0 }).filter((p) => p.id === banner);
+        const flags = SE.layoutCity({ x: 30 + k, y: 30, era: tech, size, tribe: k, near: () => false, rivers: 0 }, M).filter((p) => p.id === banner);
         assert.equal(flags.length, 1);
         assert.equal(flags[0].v, k);
       }
@@ -323,7 +344,7 @@ test('from the Bronze Age a bridge crosses the river where it meets both banks; 
   const y = 40;
   const ns = river(x * 16 + 10, y * 16 - 16, x * 16 + 10, y * 16 + 32, 1.5);
   const we = river(x * 16 - 16, y * 16 + 6, x * 16 + 32, y * 16 + 6, 1.5);
-  const bridges = (tech, rivers, r) => SE.layoutCity({ x, y, era: tech, size: 1, tribe: 0, near: r.near, rivers }).filter((p) => role(p) === 'bridge');
+  const bridges = (tech, rivers, r) => SE.layoutCity({ x, y, era: tech, size: 1, tribe: 0, near: r.near, rivers }, M).filter((p) => role(p) === 'bridge');
   const own = { 2: 'bridge_wood', 3: 'bridge_stone', 4: 'bridge_steel', 5: 'bridge_steel', 6: 'bridge_steel', 7: 'bridge_steel' };
   for (let tech = SE.Tech.Bronze; tech <= SE.Tech.Nanotech; tech++) {
     const [h] = bridges(tech, 4 | 8, ns);
@@ -348,7 +369,7 @@ test('from the Bronze Age a bridge crosses the river where it meets both banks; 
     }
   }
   assert.deepEqual(bridges(SE.Tech.Stone, 4 | 8, ns), [], 'no bridge in the Stone Age');
-  assert.deepEqual(SE.layoutCity({ x, y, era: SE.Tech.Iron, size: 1, tribe: 0, near: () => false, rivers: 4 | 8 }).filter((p) => role(p) === 'bridge'), [], 'no bridge without water');
+  assert.deepEqual(SE.layoutCity({ x, y, era: SE.Tech.Iron, size: 1, tribe: 0, near: () => false, rivers: 4 | 8 }, M).filter((p) => role(p) === 'bridge'), [], 'no bridge without water');
 });
 
 test('settler, raft to freighter, placeholder and marker art keep the art format in every tribe colour', () => {

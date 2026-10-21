@@ -43,8 +43,10 @@ namespace SE {
     small: HTMLCanvasElement | null; smallT: number; smallSig: number;
     /** What moves on the picture, from the same composition. */
     motion: LandMotion;
-    /** While it dissolves into a new picture after a brush. */
+    /** While it dissolves into a new picture after a brush or a sea ice flip. */
     fade: LandFade | null;
+    /** The dissolve is sea ice's (landice.ts), timed and capped as such. */
+    ice: boolean;
   }
 
   /** Where the map is looking: tiles at the top left, CSS pixels per tile, device pixel ratio. */
@@ -59,6 +61,10 @@ namespace SE {
     art: LandArt | null = null;
     composer: LandComposer | null = null;
     readonly field = new TerrainField();
+    /** Sea ice freezing and thawing: which chunks dissolve, and how. */
+    readonly ice = new IceShift();
+    /** CSS px per tile of the last draw. */
+    private tilePx = 16;
     private state: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
     private readonly listeners: (() => void)[] = [];
     private fieldKey = '';
@@ -119,6 +125,7 @@ namespace SE {
       this.fieldWorld = world;
       const t0 = performance.now();
       this.field.refresh(world);
+      this.ice.update(world, this.field, t0);
       perfHud.field(performance.now() - t0, this.field.lastRead);
       this.flatFresh = false;
       if (oceans) {
@@ -178,6 +185,24 @@ namespace SE {
       if (this.fieldWorld !== world || !this.fieldKey.startsWith(`${world.seed}|`)) this.refresh(world, true);
     }
 
+    /** The whole planet at `tilePx` CSS px per tile, every chunk composed (the map snapshot); null before the atlas is ready. */
+    picture(world: WorldState, tilePx: number): HTMLCanvasElement | null {
+      if (!this.ready) return null;
+      this.ensure(world);
+      const out = document.createElement('canvas');
+      out.width = GRID_W * tilePx;
+      out.height = GRID_H * tilePx;
+      const ctx = out.getContext('2d');
+      if (!ctx) return null;
+      const cam: LandCamera = { scrollX: 0, scrollY: 0, tilePx, dpr: 1 };
+      // Each draw composes for COMPOSE_BUDGET_MS; repeat until no chunk is missing.
+      for (let pass = 0; pass < CHUNKS_X * (GRID_H / LAND_CHUNK) + 1; pass++) {
+        this.draw(ctx, cam, 0, 0, out.width, out.height);
+        if (!this.pending) return out;
+      }
+      return out;
+    }
+
     /** The chunk canvas for chunk (cx, cy), composed if its tiles changed. */
     private chunk(cx: number, cy: number): Chunk | null {
       const composer = this.composer;
@@ -191,7 +216,7 @@ namespace SE {
         canvas.height = side;
         const ctx = canvas.getContext('2d');
         if (!ctx) return null;
-        c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: NO_LAND_MOTION, fade: null };
+        c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: NO_LAND_MOTION, fade: null, ice: false };
         this.chunks.set(n, c);
       }
       const sig = this.field.signature(cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0);
@@ -204,14 +229,24 @@ namespace SE {
         const words = new Uint32Array(this.image.data.buffer);
         composer.compose(this.field, cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, MARGIN, words, this.seaColor);
         const now = performance.now();
-        if (c.sig !== -1 && this.brushNear(cx, cy, now)) {
-          c.fade ??= new LandFade(c.ctx.getImageData(0, 0, side, side), side, cx * LAND_CHUNK * 16 - MARGIN, cy * LAND_CHUNK * 16 - MARGIN);
-          c.fade.retarget(words, now);
+        const brush = c.sig !== -1 && this.brushNear(cx, cy, now);
+        // Sea ice dissolves when zoomed in far enough and below the cap; a calving tile always does.
+        const ice = c.sig !== -1 && !brush && this.ice.near(cx, cy, now) && (this.ice.holding(cx, cy) ||
+          (this.tilePx >= ICE_ANIM.minTilePx && (c.ice || this.iceFades() < ICE_ANIM.maxFades)));
+        // A chunk already dissolving keeps going rather than jump to its newest picture.
+        if (brush || ice || (c.fade !== null && !c.fade.settled)) {
+          const ox = cx * LAND_CHUNK * 16 - MARGIN;
+          const oy = cy * LAND_CHUNK * 16 - MARGIN;
+          c.fade ??= new LandFade(c.ctx.getImageData(0, 0, side, side), side, ox, oy);
+          if (brush || ice) c.ice = ice;
+          const timing = c.ice && this.art ? this.ice.timing(this.art, new Uint32Array(c.fade.image.data.buffer), words, side, ox, oy) : null;
+          c.fade.retarget(words, now, timing);
           c.fade.step(now);
           c.ctx.putImageData(c.fade.image, 0, 0);
           if (!c.fade.settled) this.fading.set(n, c);
         } else {
           c.fade = null;
+          c.ice = false;
           this.fading.delete(n);
           c.ctx.putImageData(this.image, 0, 0);
         }
@@ -233,6 +268,13 @@ namespace SE {
       return c;
     }
 
+    /** Chunks dissolving sea ice now. */
+    private iceFades(): number {
+      let n = 0;
+      for (const c of this.fading.values()) if (c.ice) n++;
+      return n;
+    }
+
     /** Chunk (cx, cy) lies near tiles a brush changed within FADE_WINDOW_MS. */
     private brushNear(cx: number, cy: number, now: number): boolean {
       const b = this.brushBox;
@@ -252,9 +294,12 @@ namespace SE {
      */
     fadeBox(): [number, number, number, number] | null {
       let box: [number, number, number, number] | null = null;
+      const now = performance.now();
       for (const [n, c] of this.fading) {
         const f = c.fade;
         if (!f || f.settled) { this.fading.delete(n); continue; }
+        // Nothing changes on it before its next moment: no redraw this frame.
+        if (f.next > now) continue;
         const cx = (n % CHUNKS_X) * LAND_CHUNK;
         const cy = Math.floor(n / CHUNKS_X) * LAND_CHUNK;
         const tile = (p: number): number => Math.floor((p - MARGIN) / 16);
@@ -283,6 +328,7 @@ namespace SE {
      */
     draw(ctx: CanvasRenderingContext2D, cam: LandCamera, x0: number, y0: number, x1: number, y1: number): void {
       if (!this.ready) return;
+      this.tilePx = cam.tilePx;
       this.composed = 0;
       this.pending = false;
       this.deadline = performance.now() + COMPOSE_BUDGET_MS;

@@ -347,7 +347,7 @@ namespace SE {
   }
 
   /** The game behind stays out of reach of Tab and screen readers while the intro covers it. */
-  function setGameInert(on: boolean): void {
+  export function setGameInert(on: boolean): void {
     document.querySelectorAll<HTMLElement>('#topbar, #desktop').forEach((el) => { el.inert = on; });
   }
 }

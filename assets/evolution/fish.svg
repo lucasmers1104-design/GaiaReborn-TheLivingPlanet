@@ -2,8 +2,8 @@
   <title>Fische</title>
   <defs>
     <linearGradient id="fish-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3d2412"/>
-      <stop offset="1" stop-color="#8a4a1c"/>
+      <stop offset="0" stop-color="#0f3b3f"/>
+      <stop offset="1" stop-color="#1f6f6b"/>
     </linearGradient>
     <clipPath id="fish-c">
       <path d="M51 29C49 21 41 16 32 16C24 16 18 21 14 28C18 35 24 40 32 40C41 40 49 36 51 29Z"/>

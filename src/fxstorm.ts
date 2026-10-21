@@ -195,6 +195,11 @@ namespace SE {
     }
   }
 
+  /** A lone bolt onto world art pixel (x, y), out of no storm on the map: the lightning that starts a wildfire (fxfire.ts). */
+  export function fxLightningBolt(s: FxScene, x: number, y: number): void {
+    bolts.push({ x, y, born: s.now, shape: Math.random() < 0.5 ? 0 : 1, storm: -1, sea: false });
+  }
+
   /** Every bolt in its current frame; the strike frame lights the cloud, throws sparks and claps thunder. */
   function drawBolts(s: FxScene): void {
     const ms = 1000 / BOLT_FPS;

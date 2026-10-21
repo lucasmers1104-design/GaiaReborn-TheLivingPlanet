@@ -14,15 +14,22 @@ namespace SE {
     return `Unterart ${stage + 1} von ${SUBSPECIES_PER_CLASS}`;
   }
 
-  /** "lebt", "ausgestorben", "wieder aufgetaucht" — null while undiscovered. */
-  export function faunaStatus(dex: FaunaDex, c: Life, stage: number): { readonly text: string; readonly cls: string } | null {
+  /** "lebt", "ausgestorben", "wieder aufgetaucht" — null while undiscovered. With `world`, what is gone for good (stagefates.ts) says so. */
+  export function faunaStatus(dex: FaunaDex, c: Life, stage: number, world?: WorldState): { readonly text: string; readonly cls: string } | null {
     const st = dex.status(c, stage);
     if (st === 'unknown') return null;
-    if (st === 'extinct') return { text: 'ausgestorben', cls: 'is-extinct' };
+    if (st === 'extinct') return world && stageGone(world, c, stage) ? { text: 'für immer ausgestorben', cls: 'is-extinct is-gone' } : { text: 'ausgestorben', cls: 'is-extinct' };
     return dex.returns(c, stage) > 0 ? { text: 'wieder aufgetaucht', cls: 'is-returned' } : { text: 'lebt', cls: 'is-living' };
   }
 
-  /** Portrait (or silhouette) in its dark frame. */
+  /** The R.I.P. band laid over the picture of what is gone for good. */
+  export function ripBand(): HTMLElement {
+    const band = make('span', 'rip-band', 'R.I.P.');
+    band.setAttribute('aria-hidden', 'true');
+    return band;
+  }
+
+  /** Portrait (or silhouette) in its dark frame; `is-gone` in `cls` adds the R.I.P. band. */
   export function faunaPicture(c: Life, stage: number, known: boolean, cls: string): HTMLElement {
     const box = make('span', `fauna-pic ${cls}${known ? '' : ' is-unknown'}`);
     // Pixel resolution: half (lg: a third) of the frame's inner CSS size; the 22 px examine entry
@@ -34,6 +41,7 @@ namespace SE {
     box.appendChild(svg
       ? pixelArt(svg, size, /^<svg class="([^"]*)"/.exec(svg)?.[1] ?? 'fauna-svg')
       : pixelArt(evoIcon(LIFE[c].id), size, 'fauna-svg'));
+    if (/\bis-gone\b/.test(cls)) box.appendChild(ripBand());
     return box;
   }
 
@@ -94,9 +102,9 @@ namespace SE {
       const bio = this.deps.params().bio;
       const rec = this.deps.world().evo.developed.get(LIFE[c].id);
       const { before, after } = faunaNeighbours(dex, c, stage);
-      const near = [...before, ...after].map(({ ref }) => `${ref.c}.${ref.stage}${dex.isDiscovered(ref.c, ref.stage) ? '+' : ''}`).join(',');
+      const near = [...before, ...after].map(({ ref }) => `${ref.c}.${ref.stage}${dex.isDiscovered(ref.c, ref.stage) ? '+' : ''}${dex.status(ref.c, ref.stage)}`).join(',');
       const d = dex.discovery(c, stage);
-      return [c, stage, dex.status(c, stage), dex.returns(c, stage) > 0, d ? `${d.tick}@${d.tile}${d.adopted ? 'a' : ''}` : '-', near,
+      return [c, stage, dex.status(c, stage), dex.returns(c, stage) > 0, this.deps.world().dinoEra.fate, d ? `${d.tick}@${d.tile}${d.adopted ? 'a' : ''}` : '-', near,
         bio.tolerance, bio.mutationRate, bio.evolutionRate,
         rec ? `${rec.tick}${rec.spontaneous ? 's' : ''}${rec.migrated ? 'm' : ''}` : '-'].join('|');
     }
@@ -109,7 +117,7 @@ namespace SE {
       const known = dex.isDiscovered(c, stage);
       this.live = null;
       const root = make('div', `fauna-info${known ? '' : ' is-unknown'}`);
-      const lineage = faunaLineage(dex, c, stage, (lc, ls) => this.show(lc, ls));
+      const lineage = faunaLineage(dex, this.deps.world(), c, stage, (lc, ls) => this.show(lc, ls));
       if (known) root.append(this.head(c, stage), this.story(c, stage), lineage, this.origin(c, stage), this.values(c, stage));
       else root.append(this.unknownHead(c, stage), this.howItArises(c, stage), lineage);
       this.host.replaceChildren(root);
@@ -126,9 +134,9 @@ namespace SE {
 
     private head(c: Life, stage: number): HTMLElement {
       const dex = this.deps.dex();
-      const st = faunaStatus(dex, c, stage);
+      const st = faunaStatus(dex, c, stage, this.deps.world());
       const head = make('div', 'fauna-info-head');
-      head.appendChild(faunaPicture(c, stage, true, `fauna-pic-lg${st?.cls === 'is-extinct' ? ' is-extinct' : ''}`));
+      head.appendChild(faunaPicture(c, stage, true, `fauna-pic-lg${st?.cls.startsWith('is-extinct') ? ` ${st.cls}` : ''}`));
       const text = make('div', 'fauna-info-text');
       text.append(make('h3', 'fauna-info-name', subspeciesName(c, stage)), make('div', 'fauna-info-sub', `${LIFE[c].name} · ${faunaStageLabel(stage)}`));
       const chips = make('div', 'fauna-chips');

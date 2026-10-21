@@ -5,8 +5,10 @@
  *   - sea: two flat classes, open ocean and coastal sea, each with its ripple;
  *     at the shelf edge a 3–4 px ordered dither between them, and over the
  *     first open-ocean tile a fade along the shelf ramp. The main map
- *     shows no depth (the depth views do). Lagoons (reefs.ts) mix in
- *     turquoise by an ordered dither: a quarter, a half or all of it;
+ *     shows no depth (the depth views do). Lagoons (reefs.ts) turn
+ *     turquoise in flat steps, from a dark turquoise where a lagoon begins
+ *     to a brighter one over a sandy reef, dithered only in narrow bands
+ *     between neighbouring shades;
  *   - reef edge: an interrupted foam line where waves break on a reef's
  *     open-sea side;
  *   - shore: beach sand where reefs.ts lays a beach (landshore.ts), then a
@@ -26,12 +28,16 @@ namespace SE {
   export const LAND_CENTER = Float32Array.from({ length: 16 }, (_, k) => (k + 0.5) / 16);
   export const LAND_BAYER_MIN = 0.5 / 16;
   export const LAND_BAYER_MAX = 15.5 / 16;
-  /** Water ramp steps of the open ocean and the coastal sea, and the lagoon's step on waterWarm. */
+  /** Water ramp steps of the open ocean and the coastal sea, and a full lagoon's step on waterWarm. */
   export const SEA_OCEAN_STEP = 2;
   export const SEA_COAST_STEP = 4;
   export const SEA_LAGOON_STEP = 1;
   /** Pixels over which the shelf edge dithers from open ocean into coastal sea. */
   const SHELF_BAND = 3.5;
+  /** Share of each lagoon shade's step over which it dithers into the next; the rest is flat. */
+  const LAGOON_BAND = 0.6;
+  /** Shade steps a sandy reef (lagoon level 3) lies above a full lagoon (2). */
+  const LAGOON_SAND_LIFT = 1;
   /** Share of a reef's open-sea edge pixels that show foam. */
   const REEF_FOAM = 0.5;
   const WORLD_PX = GRID_W * 16;
@@ -43,9 +49,14 @@ namespace SE {
     return n + (f <= 0 ? 0 : f >= band ? 1 : f / band);
   }
 
-  /** Share of a pixel's lagoon level (0..3, bilinear) that turns turquoise: a quarter, a half, all. */
-  function lagoonShare(g: number): number {
-    return g <= 2 ? g * 0.25 : 0.5 + (g - 2) * 0.5;
+  /**
+   * A pixel's lagoon shade from its lagoon level (0..3, bilinear): 0 the
+   * coastal sea, 1 the darkest turquoise, 2 a full lagoon (SEA_LAGOON_STEP),
+   * above that brighter over sand. Terraced, so the dither between two
+   * shades stays a narrow band: no wide speckled fringe round a lagoon.
+   */
+  function lagoonShade(g: number): number {
+    return landTerrace(g <= 2 ? g : 2 + (g - 2) * LAGOON_SAND_LIFT, LAGOON_BAND);
   }
 
   function bilinear(a: number, b: number, c: number, d: number, u: number, v: number): number {
@@ -138,11 +149,12 @@ namespace SE {
         // The shelf edge (level 1.5) dithers over SHELF_BAND px (unclamped: only its comparison with t counts).
         const d = bilinear(s0, s1, s2, s3, u, v);
         const coast = (d - 1.5) * (16 / SHELF_BAND) + 0.5 > t;
-        const lagoon = lagoonShare(bilinear(g0, g1, g2, g3, u, v)) > t;
+        const shade = Math.floor(lagoonShade(bilinear(g0, g1, g2, g3, u, v)) + t);
+        const lagoon = shade > 0;
         const rip = lagoon || coast ? rc : ro;
         const r = rip.px[(y & (rip.size - 1)) * rip.size + (x & (rip.size - 1))];
         const up = r === 0 ? 0 : r === top ? 2 : 1;
-        if (lagoon) px[o] = warm[Math.min(warmTop, lagoonStep + up)];
+        if (lagoon) px[o] = warm[Math.min(warmTop, lagoonStep + shade - 2 + up)];
         else if (coast || d <= 0.5) px[o] = ramp[Math.min(shallow, (coast ? coastStep : oceanStep) + up)];
         else {
           // The first open-ocean tile: the shelf ramp from its far side (level 0.5) up to the edge (1.5),

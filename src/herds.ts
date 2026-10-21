@@ -6,9 +6,12 @@
  * then steps one tile to a neighbour its class also holds, glides there and
  * faces the way it goes.
  * Which classes get markers is chosen for variety rather than by raw
- * numbers: rare classes and predators get more than their share of tiles,
- * every class on a few tiles gets some, and microbes only show where no
- * animal lives. Graphics only — the simulation never reads the markers.
+ * numbers: each tile shows one of the classes living on it, picked stably
+ * with rare classes and predators favoured, no class taking more than its
+ * share where several live together, every class on a few tiles gets some,
+ * and the first cells show on only half their tiles. Some creatures join one
+ * of their kind next door, so small groups form, and patches stay empty.
+ * Graphics only — the simulation never reads the markers.
  * ========================================================================== */
 
 namespace SE {
@@ -16,7 +19,7 @@ namespace SE {
   export const HERD_MIN_DENSITY = 0.05;
   /** A marker stays until its class falls below this on its tile. */
   const HERD_KEEP_DENSITY = 0.02;
-  /** Inhabited tiles per marker across the planet. */
+  /** Tiles showing a class per marker of it (each inhabited tile shows at most one class). */
   const TILES_PER_MARKER = 7;
   /** Ticks between two rounds of picking new markers. */
   const RESELECT_TICKS = 6;
@@ -24,11 +27,23 @@ namespace SE {
   const EDIT_RESELECT_MS = 300;
   /** A class on at least QUOTA_MIN_TILES tiles always gets QUOTA_MARKERS markers. */
   const QUOTA_MIN_TILES = 3;
-  const QUOTA_MARKERS = 2;
+  const QUOTA_MARKERS = 4;
   /** Markers grow with tiles^SHARE_EXPONENT, so rare classes get more than their share. */
   const SHARE_EXPONENT = 0.7;
   const PREDATOR_WEIGHT = 1.6;
-  const MICROBE_WEIGHT = 0.35;
+  /**
+   * Where several classes live on a tile, the share of the tile's picks one
+   * class may take at most (never below an even split), and at least.
+   */
+  const MAX_SHARE = 0.45;
+  const MIN_SHARE = 0.1;
+  /** Share of the first cells' tiles that show them, so the young sea leaves room for later life. */
+  const EARLY_CELLS_SHOWN = 0.5;
+  /** Chance that a new creature gets one of its kind on a tile next to it, and that one another. */
+  const GROUP_CHANCE = 0.35;
+  /** Share of the map, in square patches of EMPTY_PATCH tiles, that shows no creature at all. */
+  const EMPTY_SHARE = 0.2;
+  const EMPTY_PATCH = 5;
   /** Tiles tried per missing marker before a round gives up; the next round goes on. */
   const PLACE_TRIES = 12;
   /** A class holding more than its target times this sheds the excess. */
@@ -42,14 +57,16 @@ namespace SE {
   const STEP_GAP_MS = 1500;
   const GLIDE_MS = 400;
   /**
-   * Least distance between two drawn creatures in CSS pixels, and in tiles
-   * when zoomed far in: a crowded view keeps a stable, evenly spread subset,
-   * so at 16 px per tile the icons stay a scatter instead of a carpet.
+   * CSS pixels squared per creature on a view where markers stand at their
+   * full rate: zoomed out, only the markers ranked below a share are drawn.
+   * Chosen by rank rather than by distance, so the scatter stays random, with
+   * groups and gaps, instead of settling into an even lattice.
    */
-  const GAP_PX = 64;
-  const GAP_TILES = 1.6;
+  const SPACING_PX = 56;
+  /** Least distance between two drawn creatures in tiles, so a group's members don't cover each other. */
+  const OVERLAP_TILES = 0.75;
   /** Each creature stands off its tile's corner by up to half this, so they don't line up on the grid. */
-  const JITTER = 0.6;
+  const JITTER = 0.8;
   /** Classes with at most this many markers go first when a crowded view is thinned. */
   const RARE_MARKERS = 12;
 
@@ -63,8 +80,11 @@ namespace SE {
     dx: number;
     dy: number;
     since: number;
-    /** Stable 0..1, for thinning a crowded view. */
+    /** Stable 0..1, for thinning a crowded view; a group shares about the same rank. */
     readonly rank: number;
+    /** Offset from the tile's corner in tiles, set from its first tile and class. */
+    readonly ox: number;
+    readonly oy: number;
     /** Stands for its sub-species: kept while that lives, never thinned out, never changes stage. */
     pinned: boolean;
   }
@@ -73,7 +93,7 @@ namespace SE {
     return c === Life.Prokaryote || c === Life.Eukaryote;
   }
 
-  /** A city on tile `i` or one of its eight neighbours: creature icons keep a tile away, so towns stay readable. */
+  /** A city or a band's camp on tile `i` or one of its eight neighbours: creature icons keep a tile away, so towns and camps stay readable. */
   export function nearCity(world: WorldState, i: number): boolean {
     const x = i % GRID_W;
     const y = (i / GRID_W) | 0;
@@ -81,6 +101,7 @@ namespace SE {
       if (y + dy < 0 || y + dy >= GRID_H) continue;
       for (let dx = -1; dx <= 1; dx++) if (world.tech[idx(wrapX(x + dx), y + dy)] !== Tech.None) return true;
     }
+    for (const b of world.civ.bands) if (b.campAt >= 0 && tileDistance(b.path[b.step], i) < 1.5) return true;
     return false;
   }
 
@@ -93,11 +114,15 @@ namespace SE {
     readonly markers: HerdMarker[] = [];
     /** Marker index + 1 on each tile, 0 where none stands. */
     private readonly at = new Int32Array(TILE_COUNT);
-    /** 1 where an animal (not a microbe) lives; refreshed with each selection. */
-    private readonly animal = new Uint8Array(TILE_COUNT);
-    /** Tiles each class lives on, filled by `select`. */
+    /** The class each tile shows, Life.None for none; picked by `select`. */
+    private readonly slot = new Uint8Array(TILE_COUNT);
+    /** Tiles each class lives on, filled by `select`, and how many of them show it. */
     private readonly lists: Int32Array[] = [];
     private readonly counts = new Int32Array(LIFE_COUNT);
+    private readonly shows = new Int32Array(LIFE_COUNT);
+    /** One tile's classes and their shares while `select` picks its slot. */
+    private readonly here = new Int32Array(LIFE_COUNT);
+    private readonly share = new Float64Array(LIFE_COUNT);
     private readonly have = new Int32Array(LIFE_COUNT);
     private readonly targets = new Int32Array(LIFE_COUNT);
     private readonly drop = new Int32Array(LIFE_COUNT);
@@ -183,15 +208,17 @@ namespace SE {
       const cols = view.cols;
       const rows = view.rows;
       const { markers: ms, xs, ys, gx, gy, ids, order } = this;
+      // Zoomed out, the markers ranked below `keep` stand for all; rare classes always show.
+      const keep = Math.min(1, (size / SPACING_PX) ** 2 * TILES_PER_MARKER);
       let n = 0;
       for (let k = 0; k < ms.length; k++) {
         const m = ms[k];
+        if (m.rank >= keep && !m.pinned && !this.rare[m.c]) continue;
         const rest = this.still ? 0 : 1 - smoothstep(clamp((now - m.since) / GLIDE_MS, 0, 1));
-        // A stable offset per marker, from its rank, so the herds don't stand on a lattice.
-        let sx = (m.tile % GRID_W) + ((m.rank * 7919) % 1 - 0.5) * JITTER - view.scrollX;
+        let sx = (m.tile % GRID_W) + m.ox - view.scrollX;
         sx -= Math.floor(sx / GRID_W) * GRID_W;
         if (sx > GRID_W - SHADOW_SPAN) sx -= GRID_W;
-        const sy = ((m.tile / GRID_W) | 0) + ((m.rank * 104729) % 1 - 0.5) * JITTER - view.scrollY;
+        const sy = ((m.tile / GRID_W) | 0) + m.oy - view.scrollY;
         const rx = sx - m.dx * rest;
         const ry = sy - m.dy * rest;
         if (rx >= cols || ry <= -SHADOW_SPAN || ry >= rows || skip?.(m)) continue;
@@ -205,7 +232,7 @@ namespace SE {
       // Rare classes first, then by rank, each a gap away from those already in. The gap
       // counts where a marker stands, not where it glides, so none pops in or out mid-step.
       const shown = ids.subarray(0, n).sort((a, b) => order[a] - order[b]);
-      const gap = Math.max(GAP_PX, size * GAP_TILES) / size;
+      const gap = OVERLAP_TILES;
       const cell = gap / Math.SQRT2;
       const gw = Math.ceil(cols / cell) + 8;
       const gh = Math.ceil(rows / cell) + 8;
@@ -275,12 +302,35 @@ namespace SE {
       }
     }
 
-    private add(world: WorldState, c: Life, tile: number, rand: () => number, pinned = false): void {
+    private add(world: WorldState, c: Life, tile: number, rand: () => number, pinned = false, rank = rand()): void {
       this.markers.push({
         c, tile, stage: world.lifeStage[tile * LIFE_COUNT + c], flip: rand() < 0.5,
-        dx: 0, dy: 0, since: -Infinity, rank: rand(), pinned,
+        dx: 0, dy: 0, since: -Infinity, rank, pinned,
+        ox: (tileHash(tile, 500 + c) - 0.5) * JITTER, oy: (tileHash(tile, 600 + c) - 0.5) * JITTER,
       });
       this.at[tile] = this.markers.length;
+    }
+
+    /** Now and then the creature on tile j gets one of its kind on a tile beside it, and that one maybe another. */
+    private group(world: WorldState, c: Life, j: number, target: number, rand: () => number): void {
+      while (this.have[c] < target && rand() < GROUP_CHANCE) {
+        const x = j % GRID_W;
+        const y = (j / GRID_W) | 0;
+        let pick = -1;
+        let seen = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          if (y + dy < 0 || y + dy >= GRID_H) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const k = idx(wrapX(x + dx), y + dy);
+            if (this.fits(world, c, k) && rand() * ++seen < 1) pick = k;
+          }
+        }
+        if (pick < 0) return;
+        // About the same rank, so zooming out keeps or drops the group as one.
+        this.add(world, c, pick, rand, false, this.markers[this.at[j] - 1].rank * (1 - rand() * 0.01));
+        this.have[c]++;
+        j = pick;
+      }
     }
 
     private tryStep(world: WorldState, m: HerdMarker, self: number, now: number, rand: () => number): void {
@@ -295,7 +345,7 @@ namespace SE {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dy === 0) continue;
           const j = idx(wrapX(x + dx), y + dy);
-          if (!this.fits(world, m.c, j, self)) continue;
+          if (!this.fits(world, m.c, j)) continue;
           if (m.pinned && (world.lifeStage[j * LIFE_COUNT + m.c] !== m.stage || reefShownStage(world, j, m.c, m.stage) !== m.stage)) continue;
           seen++;
           if (rand() * seen < 1) {
@@ -322,74 +372,93 @@ namespace SE {
         world.isWater(j) === (this.sea[c] === 1) && !nearCity(world, j);
     }
 
-    /** Can class `c` stand on tile `j`? `self` (index + 1) is the marker asking, 0 for a new one. */
-    private fits(world: WorldState, c: Life, j: number, self: number): boolean {
-      if (!this.suits(world, c, j)) return false;
-      const x = j % GRID_W;
-      const y = (j / GRID_W) | 0;
-      if (isMicrobe(c) && this.nearAnimal(x, y)) return false;
-      return this.free(x, y, self);
+    /** Can class `c` step or join onto tile `j`: it lives there, the tile shows it, and no creature stands on it. */
+    private fits(world: WorldState, c: Life, j: number): boolean {
+      return this.slot[j] === c && this.at[j] === 0 && this.suits(world, c, j);
     }
 
-    /** No marker but `self` stands on or next to tile (x, y). */
-    private free(x: number, y: number, self: number): boolean {
+    /** No marker stands on or next to tile (x, y). */
+    private free(x: number, y: number): boolean {
       for (let dy = -1; dy <= 1; dy++) {
         if (y + dy < 0 || y + dy >= GRID_H) continue;
         for (let dx = -1; dx <= 1; dx++) {
-          const a = this.at[idx(wrapX(x + dx), y + dy)];
-          if (a !== 0 && a !== self) return false;
+          if (this.at[idx(wrapX(x + dx), y + dy)] !== 0) return false;
         }
       }
       return true;
     }
 
-    private nearAnimal(x: number, y: number): boolean {
-      for (let dy = -1; dy <= 1; dy++) {
-        if (y + dy < 0 || y + dy >= GRID_H) continue;
-        for (let dx = -1; dx <= 1; dx++) {
-          if (this.animal[idx(wrapX(x + dx), y + dy)] === 1) return true;
-        }
+    /**
+     * The class tile i shows, Life.None for none: a stable pick among the
+     * classes living there by their `weight`, each with at least MIN_SHARE of
+     * the picks; the first cells keep only EARLY_CELLS_SHOWN of theirs (the
+     * rest stay empty), then no class takes more than MAX_SHARE of what shows.
+     * Nothing shows in an empty patch.
+     */
+    private pick(world: WorldState, i: number): Life {
+      const x = i % GRID_W;
+      const y = (i / GRID_W) | 0;
+      if (tileHash(((y / EMPTY_PATCH) | 0) * GRID_W + ((x / EMPTY_PATCH) | 0), 702) < EMPTY_SHARE) return Life.None;
+      const { here, share, weight } = this;
+      const sea = world.isWater(i) ? 1 : 0;
+      const base = i * LIFE_COUNT;
+      let n = 0;
+      let sum = 0;
+      for (let c = 1; c < LIFE_COUNT; c++) {
+        if (this.sea[c] !== sea || world.lifeDensity[base + c] < HERD_MIN_DENSITY) continue;
+        here[n] = c;
+        share[n++] = weight[c];
+        sum += weight[c];
       }
-      return false;
+      if (n === 0) return Life.None;
+      // ponytail: four clamp passes only come close to the bounds (≈ 0.46 for 0.45), fine for a picture.
+      const lo = Math.min(MIN_SHARE, 1 / n);
+      for (let pass = 0; pass < 4; pass++) {
+        let next = 0;
+        for (let k = 0; k < n; k++) next += share[k] = Math.max(share[k] / sum, lo);
+        sum = next;
+      }
+      for (let k = 0; k < n; k++) share[k] = (share[k] / sum) * (isMicrobe(here[k]) ? EARLY_CELLS_SHOWN : 1);
+      const hi = Math.max(MAX_SHARE, 1 / n);
+      for (let pass = 0; pass < 4; pass++) {
+        let shown = 0;
+        for (let k = 0; k < n; k++) shown += share[k];
+        for (let k = 0; k < n; k++) share[k] = Math.min(share[k], hi * shown);
+      }
+      let h = tileHash(i, 700);
+      for (let k = 0; k < n; k++) {
+        h -= share[k];
+        if (h < 0) return here[k] as Life;
+      }
+      return Life.None;
     }
 
-    /** Re-pick: survey where each class lives, shed the over-represented, place the missing. */
+    /** Re-pick: survey where each class lives, choose what each tile shows, shed the over-represented, place the missing. */
     private select(world: WorldState, rand: () => number): void {
-      const { lists, counts, have, targets, weight, drop, left, markers: ms } = this;
+      const { lists, counts, shows, have, targets, weight, drop, left, markers: ms } = this;
       counts.fill(0);
-      let inhabited = 0;
       for (let i = 0; i < TILE_COUNT; i++) {
         const sea = world.isWater(i) ? 1 : 0;
         const base = i * LIFE_COUNT;
-        let any = false;
-        let beast = 0;
         for (let c = 1; c < LIFE_COUNT; c++) {
-          if (this.sea[c] !== sea || world.lifeDensity[base + c] < HERD_MIN_DENSITY) continue;
-          any = true;
-          if (!isMicrobe(c)) beast = 1;
-          lists[c][counts[c]++] = i;
+          if (this.sea[c] === sea && world.lifeDensity[base + c] >= HERD_MIN_DENSITY) lists[c][counts[c]++] = i;
         }
-        if (any) inhabited++;
-        this.animal[i] = beast;
       }
 
-      let total = 0;
+      // A tile's pick favours rare classes (tiles^(SHARE_EXPONENT - 1)) and predators.
       for (let c = 1; c < LIFE_COUNT; c++) {
         const prey = LIFE[c as Life].diet.prey;
-        weight[c] = counts[c] === 0 ? 0 : Math.pow(counts[c], SHARE_EXPONENT) *
-          (isMicrobe(c) ? MICROBE_WEIGHT : prey && prey.length > 0 ? PREDATOR_WEIGHT : 1);
-        total += weight[c];
+        weight[c] = counts[c] === 0 ? 0 : Math.pow(counts[c], SHARE_EXPONENT - 1) *
+          (prey && prey.length > 0 ? PREDATOR_WEIGHT : 1);
       }
-      const budget = inhabited / TILES_PER_MARKER;
+      shows.fill(0);
+      for (let i = 0; i < TILE_COUNT; i++) shows[this.slot[i] = this.pick(world, i)]++;
       for (let c = 1; c < LIFE_COUNT; c++) {
-        const n = counts[c];
-        let target = total > 0 ? Math.min(Math.round((budget * weight[c]) / total), Math.ceil(n / 4)) : 0;
-        if (n >= QUOTA_MIN_TILES) target = Math.max(target, QUOTA_MARKERS);
-        targets[c] = target;
+        targets[c] = Math.round(shows[c] / TILES_PER_MARKER);
+        if (counts[c] >= QUOTA_MIN_TILES) targets[c] = Math.max(targets[c], QUOTA_MARKERS);
       }
 
-      // Shed microbes that animals have moved in beside, then any excess, by
-      // selection sampling so each class loses a uniform random subset.
+      // Shed any excess by selection sampling, so each class loses a uniform random subset.
       have.fill(0);
       for (const m of ms) have[m.c]++;
       for (let c = 1; c < LIFE_COUNT; c++) drop[c] = have[c] > Math.ceil(targets[c] * EXCESS) ? have[c] - targets[c] : 0;
@@ -397,9 +466,8 @@ namespace SE {
       for (let k = ms.length - 1; k >= 0; k--) {
         const m = ms[k];
         const c = m.c;
-        const crowded = isMicrobe(c) && have[c] > QUOTA_MARKERS && this.nearAnimal(m.tile % GRID_W, (m.tile / GRID_W) | 0);
-        if (!m.pinned && (crowded || (drop[c] > 0 && rand() * left[c] < drop[c]))) {
-          if (drop[c] > 0) drop[c]--;
+        if (!m.pinned && drop[c] > 0 && rand() * left[c] < drop[c]) {
+          drop[c]--;
           have[c]--;
           this.remove(k);
         }
@@ -412,7 +480,7 @@ namespace SE {
       order.sort((a, b) => counts[a] - counts[b]);
       for (const c of order) {
         if (have[c] < targets[c]) this.place(world, c as Life, targets[c], true, rand);
-        // The promised few go in even beside animals, pushing a common class's marker aside.
+        // The promised few go in even where the tile shows another class, pushing a common class's marker aside.
         if (have[c] < QUOTA_MARKERS && counts[c] >= QUOTA_MIN_TILES) this.place(world, c as Life, QUOTA_MARKERS, false, rand);
       }
       // Every living sub-species keeps one creature of its own on the map.
@@ -450,7 +518,7 @@ namespace SE {
         const far = !nearCity(world, i);
         // A tile where it shows as itself first; a coral only in cold water still gets its creature.
         const shows = reefShownStage(world, i, c, stage) === stage ? 8 : 0;
-        const score = d + shows + (far ? 2 : 0) + (far && this.free(i % GRID_W, (i / GRID_W) | 0, 0) ? 2 : 0);
+        const score = d + shows + (far ? 2 : 0) + (far && this.free(i % GRID_W, (i / GRID_W) | 0) ? 2 : 0);
         if (score > bestScore) {
           best = i;
           bestScore = score;
@@ -464,8 +532,9 @@ namespace SE {
 
     /**
      * Add markers of class `c` on random tiles it lives on until it has `target`.
-     * `polite` keeps to free tiles and microbes away from animals; otherwise
-     * markers of classes with more than their quota make room.
+     * `polite` keeps to tiles that show `c` with no creature on or next to
+     * them, now and then followed by a group; otherwise markers of classes
+     * with more than their quota make room.
      */
     private place(world: WorldState, c: Life, target: number, polite: boolean, rand: () => number): void {
       const list = this.lists[c];
@@ -477,9 +546,10 @@ namespace SE {
         const j = list[q];
         list[q] = list[p];
         list[p] = j;
-        if (polite ? !this.fits(world, c, j, 0) : !this.suits(world, c, j) || !this.makeRoom(j)) continue;
+        if (polite ? !this.fits(world, c, j) || !this.free(j % GRID_W, (j / GRID_W) | 0) : !this.suits(world, c, j) || !this.makeRoom(j)) continue;
         this.add(world, c, j, rand);
         have[c]++;
+        if (polite) this.group(world, c, j, target, rand);
       }
     }
 

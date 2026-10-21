@@ -47,16 +47,27 @@ const RAMPS = {
   // --- appended after the mask, so every index above keeps its place ---
   // Lagoon turquoise over reefs (src/reefs.ts), dark to light.
   waterWarm: ['#1f9fb0', '#2fb8bf', '#49cfc8', '#7fe0d6'],
-  // Corals and their sand seen through a lagoon, mixed into its turquoise
-  // (waterWarm1): corals 55 % in lightness, their chroma down to 55 % and
-  // their hue 12 % towards it (OKLCH) — a stronger hue pull turns ochre into
-  // olive, violet into blue, yellow into lime; sand half into the lightest
-  // turquoise. Rugose brown, stony violet, rugose ochre, stony pink, stony
-  // orange, rugose light ochre, stony yellow, sand, sand light.
-  reefUnder: ['#7a6c5d', '#9d7bbd', '#a18c67', '#c58cb1', '#c89963', '#baaa76', '#bebd7a', '#9fd9c2', '#bfe8d2'],
+  // Corals and their sand seen 1–3 m deep through a lagoon, pulled into its
+  // turquoise (waterWarm1, OKLCH L 0.716). Corals keep their hue: lightness
+  // 0.61–0.75, within 0.11 of the lagoon's, lights capped at 0.75 under the
+  // ripple step (waterWarm2, 0.781); chroma at most 0.094. From the dry
+  // colours that is about 74 % of the way in lightness, chroma down to about
+  // half, hue 12 % — a stronger hue pull turns ochre into olive, violet into
+  // blue, yellow into lime. Sand half into the lightest turquoise. Rugose
+  // brown, stony violet, rugose ochre, stony pink, stony orange, rugose light
+  // ochre, stony yellow, sand, sand light.
+  reefUnder: ['#8f8274', '#a586c3', '#a89573', '#c48fb1', '#c59a69', '#b4a77d', '#b2b27c', '#9fd9c2', '#bfe8d2'],
   // The fade over the first open-ocean tile beside coastal sea (src/landwater.ts):
   // water2 towards water4 in sixths of 65 %, so the shelf edge keeps a step.
   shelf: ['#1b548d', '#1d5b92', '#206196', '#22679b', '#256da0', '#2874a5'],
+  // More reef colours under the lagoon: the soft teal of the gaps and cast
+  // shadows (L 0.606, h 205, a step under the lagoon's darkest, waterWarm0
+  // 0.646); the shadow sides of brown, violet, pink, orange and green corals,
+  // each its kind's body mixed 42 % into that teal (OKLab) at L 0.585, so
+  // they read as water with a hint of their hue, never as a dark outline;
+  // then, in the reefUnder mix, green coral, grey and pale tabulate corals
+  // and stromatoporoids, lilac tips.
+  coral: ['#3b9099', '#6b817c', '#707a9e', '#7c798e', '#7b7f67', '#598775', '#88a177', '#a19f93', '#b1aea0', '#aea2c5'],
 };
 
 function hexToRgba(hex) {

@@ -67,28 +67,74 @@ test('marine animals get markers when they are alive', () => {
   for (const c of alive) assert.ok(per[c] >= 1, `${SE.LIFE[c].id} is alive in the sea but has no marker`);
 });
 
-test('markers stand only where their class lives, one tile apart at least', () => {
+test('markers stand only where their class lives, some of them in small groups', () => {
   const { s, herds } = planet();
   const w = s.world;
-  const taken = new Map();
+  const taken = new Set();
   for (const m of herds.markers) {
     assert.ok(w.lifeDensity[m.tile * SE.LIFE_COUNT + m.c] > 0, `${SE.LIFE[m.c].id} marker on a tile without it`);
     assert.equal(w.isWater(m.tile), SE.isSeaLife(m.c), `${SE.LIFE[m.c].id} marker in the wrong realm`);
     assert.equal(m.stage, w.lifeStage[m.tile * SE.LIFE_COUNT + m.c]);
-    if (!m.pinned) taken.set(m.tile, m);
+    assert.ok(!taken.has(m.tile), 'two markers on one tile');
+    taken.add(m.tile);
   }
-  // A sub-species' own creature may stand wherever that sub-species lives.
+  let grouped = 0;
   for (const m of herds.markers) {
-    if (m.pinned) continue;
     const x = m.tile % SE.GRID_W;
     const y = Math.floor(m.tile / SE.GRID_W);
+    let beside = false;
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        if ((dx === 0 && dy === 0) || y + dy < 0 || y + dy >= SE.GRID_H) continue;
-        assert.ok(!taken.has(SE.idx(SE.wrapX(x + dx), y + dy)), 'two markers side by side');
+        if ((dx || dy) && y + dy >= 0 && y + dy < SE.GRID_H && taken.has(SE.idx(SE.wrapX(x + dx), y + dy))) beside = true;
       }
     }
+    if (beside) grouped++;
   }
+  const share = grouped / herds.markers.length;
+  console.log(`${grouped} of ${herds.markers.length} markers stand beside another`);
+  assert.ok(share > 0.1 && share < 0.8, `${Math.round(share * 100)} % of the markers stand in groups`);
+});
+
+test('where classes live together none takes over the picture, and the first cells show on half their tiles', () => {
+  const { s, herds } = planet();
+  const w = s.world;
+  const L = SE.LIFE_COUNT;
+  const shown = new Array(L).fill(0);
+  let mixed = 0;
+  let cellsBesideAnimals = 0;
+  for (let i = 0; i < SE.TILE_COUNT; i++) {
+    let n = 0;
+    let animal = false;
+    for (let c = 1; c < L; c++) {
+      if (SE.isSeaLife(c) !== w.isWater(i) || w.lifeDensity[i * L + c] < SE.HERD_MIN_DENSITY) continue;
+      n++;
+      if (c > SE.Life.Eukaryote) animal = true;
+    }
+    const c = herds.slot[i];
+    if (n < 3 || c === SE.Life.None) continue;
+    shown[c]++;
+    mixed++;
+    if (animal && c <= SE.Life.Eukaryote) cellsBesideAnimals++;
+  }
+  const top = Math.max(...shown);
+  console.log(`${mixed} mixed tiles show a creature; the commonest class ${SE.LIFE[shown.indexOf(top)].id} on ${top}`);
+  assert.ok(top / mixed <= 0.5, `${SE.LIFE[shown.indexOf(top)].id} shows on ${Math.round((100 * top) / mixed)} % of the mixed tiles`);
+  assert.ok(cellsBesideAnimals > 0, 'the first cells vanish wherever animals live');
+
+  const young = makeSim(7);
+  young.evo.develop(young.world, young.params, 'cells');
+  young.play(150);
+  const h = new SE.HerdLayer(true);
+  h.update(young.world, 0, seeded(5));
+  let cells = 0;
+  let shows = 0;
+  for (let i = 0; i < SE.TILE_COUNT; i++) {
+    if (young.world.lifeDensity[i * L + SE.Life.Prokaryote] < SE.HERD_MIN_DENSITY) continue;
+    cells++;
+    if (h.slot[i] !== SE.Life.None) shows++;
+  }
+  // Half the tiles, less the empty patches (a fifth of the map).
+  assert.ok(shows / cells > 0.3 && shows / cells < 0.5, `${Math.round((100 * shows) / cells)} % of the cells' tiles show them`);
 });
 
 test('markers keep a tile away from cities, and leave when a city is founded beside them', () => {

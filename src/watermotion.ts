@@ -224,7 +224,7 @@ namespace SE {
     }
 
     /** Whether river water shows at world pixel (x, y), x unwrapped. */
-    private static river(land: PixelTerrain, x: number, y: number): boolean {
+    static river(land: PixelTerrain, x: number, y: number): boolean {
       if (y < 0 || y >= GRID_H * 16) return false;
       const wx = ((x % WORLD_PX) + WORLD_PX) % WORLD_PX;
       const m = land.motion(Math.floor(wx / CHUNK_PX), Math.floor(y / CHUNK_PX));

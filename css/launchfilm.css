@@ -1,0 +1,11 @@
+/* The launch film (src/launchfilm.ts): a pixel canvas over the paused game,
+   under the app's closing dialog (.modal-root sits above at z-index 900).
+   Its covering layout is also set inline, so a cached old stylesheet cannot
+   leave the game showing through. */
+
+.launchfilm { animation: launchfilm-in 500ms ease both; }
+@keyframes launchfilm-in { from { opacity: 0; } }
+.launchfilm-canvas { image-rendering: pixelated; }
+
+.launchfilm .launchfilm-skip { opacity: 0.55; transition: opacity 160ms; }
+.launchfilm .launchfilm-skip:hover, .launchfilm .launchfilm-skip:focus-visible { opacity: 1; }

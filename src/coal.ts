@@ -64,19 +64,24 @@ namespace SE {
   }
 
   /**
-   * Coal the cities burn this tick, Gt: the coal share of the fossil energy
-   * of every city from the Industrial age on, weighted and restated on the
-   * reference grid like the emissions in CivSystem.
+   * Fossil energy the cities burn this tick from one fuel: its `share` per
+   * tech level of every city's energy from the Industrial age on, weighted
+   * and restated on the reference grid like the emissions in CivSystem.
    */
-  export function coalDemand(world: WorldState, params: ModelParams): number {
+  export function fuelDemand(world: WorldState, params: ModelParams, share: readonly number[]): number {
     let energy = 0;
     for (const c of world.civ.cities) {
       const t = world.tech[c.tile];
       if (t < Tech.Industrial) continue;
-      energy += TECH_ENERGY[t] * world.cityPop[c.tile] * COAL_SHARE[t];
+      energy += TECH_ENERGY[t] * world.cityPop[c.tile] * share[t];
     }
     if (energy <= 0) return 0;
     const demand = (energy * CITY_WEIGHT) / GRID_REFINEMENT;
-    return demand * params.energyMix().fossilFuel * COAL_PER_DEMAND_YEAR * world.yearsPerTick;
+    return demand * params.energyMix().fossilFuel * world.yearsPerTick;
+  }
+
+  /** Coal the cities burn this tick, Gt. */
+  export function coalDemand(world: WorldState, params: ModelParams): number {
+    return fuelDemand(world, params, COAL_SHARE) * COAL_PER_DEMAND_YEAR;
   }
 }

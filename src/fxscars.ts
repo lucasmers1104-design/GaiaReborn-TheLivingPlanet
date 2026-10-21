@@ -70,6 +70,18 @@ namespace SE {
   /** Ticks after which a crater rim shows weathered. */
   const RIM_WEATHERED = 120;
 
+  function isCrater(world: WorldState, x: number, y: number): boolean {
+    return y >= 0 && y < GRID_H && world.hazards.scar[idx(wrapX(x), y)] === ScarKind.Crater;
+  }
+
+  /** Crater tile (x, y): 1 as the upper left of a 2 × 2 block of crater, 2 inside such a block elsewhere, 0 alone. */
+  function craterBlockAt(world: WorldState, x: number, y: number): 0 | 1 | 2 {
+    const corner = (cx: number, cy: number): boolean =>
+      isCrater(world, cx, cy) && isCrater(world, cx + 1, cy) && isCrater(world, cx, cy + 1) && isCrater(world, cx + 1, cy + 1);
+    if (corner(x, y)) return 1;
+    return corner(x - 1, y) || corner(x, y - 1) || corner(x - 1, y - 1) ? 2 : 0;
+  }
+
   /** Add the objects of every scar in view to the scene. */
   export function fxScarObjects(s: FxScene, world: WorldState): void {
     const hz = world.hazards;
@@ -90,7 +102,10 @@ namespace SE {
           continue;
         }
         if (kind === ScarKind.Crater) {
-          s.add({ id: 'crater_rim', frame: hz.scarAge[i] < RIM_WEATHERED ? 0 : 1, x: fx, y: fy, foot: fy });
+          // A 2 × 2 block of crater (the comet's) is one crater with one large rim, drawn from its upper left tile.
+          const block = craterBlockAt(world, x, y);
+          if (block === 0) s.add({ id: 'crater_rim', frame: hz.scarAge[i] < RIM_WEATHERED ? 0 : 1, x: fx, y: fy, foot: fy });
+          else if (block === 1) s.add({ id: 'crater_rim_large', frame: hz.scarAge[i] < RIM_WEATHERED ? 0 : 1, x: fx + 8, y: fy + 16, foot: fy + 16 });
           continue;
         }
         if (kind === ScarKind.Ruins) {

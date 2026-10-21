@@ -2,8 +2,8 @@
   <title>Wale</title>
   <defs>
     <linearGradient id="whales-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3d2412"/>
-      <stop offset="1" stop-color="#8a4a1c"/>
+      <stop offset="0" stop-color="#0f3b3f"/>
+      <stop offset="1" stop-color="#1f6f6b"/>
     </linearGradient>
     <clipPath id="whales-c">
       <path d="M54 34C54 26 47 21 38 21C30 21 26 27 21 28.5C18.5 29 16.5 26 15.5 21C14.5 25 15 31 17.5 34.5C22 41 29 44 37 44C47 44 54 41 54 34Z"/>

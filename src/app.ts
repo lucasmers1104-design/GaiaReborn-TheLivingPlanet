@@ -9,7 +9,7 @@
 namespace SE {
   const SPEED_NAMES = ['Pause', 'Sehr langsam', 'Langsam', 'Mittel', 'Schnell'];
   /** Wall-clock milliseconds per simulation tick, index-aligned with SPEED_NAMES. */
-  const SPEED_TICK_MS = [0, 2500, 1000, 400, 150];
+  const SPEED_TICK_MS = [0, SLOWEST_TICK_MS, 1000, 400, 150];
   /** Keyboard shortcut of each tool, index-aligned with TOOL_NAMES (wired in wireKeyboard). */
   const TOOL_KEYS = ['U', 'V', 'H', 'P', 'L', 'K'];
   /** The overview-map legend that matches a climate overlay's colours (winds and currents are arrows). */
@@ -108,6 +108,7 @@ namespace SE {
     private reportPanel!: ReportPanel;
     private examinePanel!: ExaminePanel;
     private chroniclePanel!: ChroniclePanel;
+    private spaceportPanel!: SpaceportPanel;
     private tree!: EvolutionTreeView;
     private readonly graphs = new Map<GraphKind, GraphPanel>();
     private readonly sliderPanels: SliderPanel[] = [];
@@ -137,7 +138,7 @@ namespace SE {
     private overlayLegend!: HTMLElement;
     private toolHint!: HTMLElement;
     private toolOptions!: HTMLElement;
-    private goalEl!: HTMLElement;
+    private goalNotice!: GoalNotice;
     private hoverTip!: HTMLElement;
     private mapLegendEl!: HTMLElement;
     private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
@@ -152,8 +153,11 @@ namespace SE {
       oceanO2: HTMLElement;
       devTag: HTMLElement; // DEVMODE
     };
+    private hudInfo!: HudInfo;
 
     /* ---- state ---- */
+    /** The Ω tier last announced, so a new planet or a load starts silent. */
+    private omegaStageSeen = 0;
     private speed = 3;
     private lastRunningSpeed = 3;
     private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
@@ -188,10 +192,19 @@ namespace SE {
     /** Model panels already paid for on this planet. */
     private readonly paidModels = new Set<string>();
     private speedBeforeMilestone = 3;
+    /** Speed to return to once the dinosaurs' fate is settled; null while it holds nothing (dinoera.ts). */
+    private fateResume: number | null = null;
+    /** The fate dialog is on screen. */
+    private fateAsking = false;
+    /** Hazard generation (planet) whose comet show has been started. */
+    private cometShown = -1;
+    /** The launch film on screen, until the closing dialog is answered. */
+    private launchFilm: LaunchFilm | null = null;
     readonly fauna = new FaunaDex();
     private lexicon!: LexiconPanel;
     private speciesInfo!: SpeciesInfoPanel;
     private readonly discoveries: DiscoveryToasts;
+    private readonly ripStamps: RipStamps;
     private screenHeld = false;
 
     private lastFrame = 0;
@@ -221,6 +234,7 @@ namespace SE {
         view: (id) => this.openTree(id),
         milestone: (open) => { this.screenHeld = open; this.onMilestone(open); this.discoveries.setHeld(open); },
         narrow: () => this.windows.narrow,
+        spaceport: () => this.openSpaceport(),
         showcase: new Showcase(document.body, {
           view: (id) => this.openTree(id),
           showOnMap: (e) => this.showEntryOnMap(e),
@@ -238,6 +252,10 @@ namespace SE {
         openLexicon: () => this.windows.show('lexicon'),
         held: () => this.screenHeld,
         shown: (events) => { this.fauna.markAnnounced(events); playDiscoveryChime(SFX.volume()); },
+      });
+      this.ripStamps = new RipStamps(document.body, {
+        held: () => !!this.title || !!activeIntro || this.screenHeld || Modal.open || this.fateAsking || !!this.launchFilm,
+        reduced: () => this.settings.reduceEffects,
       });
 
       this.buildStage();
@@ -326,11 +344,7 @@ namespace SE {
       this.setDockCollapsed(this.settings.dockCollapsed);
 
       /* ---- next step ---- */
-      this.goalEl = make('div', 'goal glass');
-      this.stage.appendChild(this.goalEl);
-      this.goalAnnounce = make('div', 'sr-only');
-      this.goalAnnounce.setAttribute('aria-live', 'polite');
-      this.stage.appendChild(this.goalAnnounce);
+      this.goalNotice = new GoalNotice(this.stage, (id) => this.openTree(id));
 
       /* ---- map controls: layers, overview map, zoom ---- */
       const zoom = make('div', 'map-zoom glass');
@@ -626,7 +640,7 @@ namespace SE {
       const w = this.world;
       const cost = this.toolCost();
       const parts = [`${BIOME_NAMES[w.biome[i]]} · ${fmt.int(w.temperature[i])} °C`];
-      const city = cityLabel(w, i);
+      const city = cityLabel(w, i) ?? bandLabel(w, i);
       if (city) parts.unshift(city);
       if (cost > 0) parts.push(`${TOOL_NAMES[this.selection.tool]} · ${cost} Ω`);
       const text = parts.join('  ·  ');
@@ -709,8 +723,13 @@ namespace SE {
       gaia.body.appendChild(gaiaWrap);
       this.gaiaPanel = new GaiaPanel(gaiaWrap);
 
-      // History
-      const hist = this.windows.create({ id: 'history', title: 'Verlauf', icon: uiIcon('history'), x: 0.18, y: 0.2, width: 680, height: 420 });
+      // History: 4 px clear of the tool card (12 px in, 64 px rail, 8 px gap,
+      // 340 px card) and of the overview map (500 px wide, 12 px from the
+      // right), down to just above the bottom.
+      const hist = this.windows.create({
+        id: 'history', title: 'Verlauf', icon: uiIcon('history'), resetOnOpen: true,
+        x: 428, y: 12, width: -(428 + 516), height: -(12 + 27),
+      });
       const histWrap = make('div', 'hist-layout');
       hist.body.appendChild(histWrap);
       this.historyPanel = new HistoryPanel(histWrap, this.history);
@@ -737,6 +756,7 @@ namespace SE {
       this.examinePanel.onShowInTree = (id) => this.openTree(id);
       this.examinePanel.onShowSpecies = (c, stage) => { this.speciesInfo.show(c, stage); this.windows.show('species'); };
       this.examinePanel.creatureOn = (world, i) => this.editView.creatureOn(world, i);
+      this.examinePanel.migrationOn = (world, i) => this.editView.migrationOn(world, i);
 
       // Chronicle
       const chron = this.windows.create({ id: 'chronicle', title: 'Chronik', icon: uiIcon('chronicle'), x: 0.34, y: 0.08, width: 460, height: 560 });
@@ -744,6 +764,18 @@ namespace SE {
       chron.body.appendChild(chronBody);
       this.chroniclePanel = new ChroniclePanel(chronBody);
       this.chroniclePanel.onOpenNode = (id) => this.openTree(id);
+      this.chroniclePanel.onOpenSpaceport = () => this.openSpaceport();
+
+      // Space project
+      const space = this.windows.create({
+        id: 'spaceport', title: 'Raumfahrt', icon: uiIcon('rocket'), x: -16, y: 0.06, width: 400, height: 760,
+        onShow: () => this.spaceportPanel.update(this.world),
+      });
+      this.spaceportPanel = new SpaceportPanel(space.body, {
+        launch: () => this.launchRocket(),
+        locate: () => this.locateSpaceport(),
+        reduceEffects: () => this.settings.reduceEffects,
+      });
 
       // Species lexicon and the info box of one sub-species
       const lex = this.windows.create({ id: 'lexicon', title: 'Arten-Lexikon', icon: uiIcon('layer-life'), x: 0.06, y: 0.06, width: 560, height: 640, onShow: () => this.lexicon.update() });
@@ -804,6 +836,7 @@ namespace SE {
         world: () => this.world,
         evo: () => this.evolution,
         dex: () => this.fauna,
+        openSpecies: (c, s) => { this.speciesInfo.show(c, s); this.windows.show('species'); },
       });
       win.body.appendChild(this.tree.root);
     }
@@ -889,6 +922,10 @@ namespace SE {
       const evoBadge = make('span', 'badge');
       evoBtn.appendChild(evoBadge);
 
+      this.hudInfo = new HudInfo();
+      this.hudInfo.attach(omega.el, (pop) => fillOmegaInfo(pop, this.world));
+      this.hudInfo.attach(ep.el, (pop) => fillEpInfo(pop, this.world, this.evolution, this.params));
+
       hud.append(omega.el, ep.el, o2.el, oceanO2.el, co2.el, temp.el, time, speed, evoBtn);
       this.hud = {
         omega: omega.value, omegaBar: omegaBar.firstChild as HTMLElement, ep: ep.value, epRate,
@@ -965,6 +1002,7 @@ namespace SE {
           items: [
             winItem('Evolutionsbaum', 'evolution', 'evolution', 'E'),
             winItem('Chronik', 'chronicle', 'chronicle', 'C'),
+            winItem('Raumfahrt', 'spaceport', 'rocket'),
             winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'X'),
             winItem('Übersichtskarte', 'map', 'map', 'M'),
             winItem('Gaia', 'gaia', 'gaia'),
@@ -1064,7 +1102,7 @@ namespace SE {
       // A key released outside the window never sends its keyup.
       window.addEventListener('blur', () => this.panKeys.clear());
       document.addEventListener('keydown', (e) => {
-        if (Modal.open || e.defaultPrevented || this.title) return;
+        if (Modal.open || e.defaultPrevented || this.title || this.launchFilm) return;
         // Quick save works wherever the focus is — a slider included.
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
           e.preventDefault();
@@ -1092,6 +1130,7 @@ namespace SE {
             // An open menu takes the Escape for itself: one key, one thing closed.
             if (this.menuBar.isOpen) { this.menuBar.closeAll(); e.preventDefault(); return; }
             if (!this.layerPop.hidden) { this.setLayersOpen(false); e.preventDefault(); return; }
+            if (this.hudInfo.isOpen) { this.hudInfo.close(); e.preventDefault(); return; }
             const top = this.windows.topmost();
             if (top) { top.hide(); e.preventDefault(); }
             return;
@@ -1255,10 +1294,11 @@ namespace SE {
             for (const n of EVO_NODES) {
               if (n.life === undefined) continue;
               const c = n.life;
-              const dev = isDevMode() || this.world.evo.isDeveloped(n.id); // DEVMODE
+              const bar = dinoEraLifeBar(this.world, c);
+              const dev = !bar && (isDevMode() || this.world.evo.isDeveloped(n.id)); // DEVMODE
               option({
                 label: n.name, icon: evoIcon(n.id), cost: dev ? LIFE[c].cost : undefined, active: s.life === c,
-                sub: n.habitat.text, locked: dev ? undefined : 'Erst im Evolutionsbaum entwickeln',
+                sub: n.habitat.text, locked: dev ? undefined : bar || 'Erst im Evolutionsbaum entwickeln',
                 onPick: () => { if (!dev) { this.openTree(n.id); return; } s.life = c; },
               });
             }
@@ -1369,7 +1409,7 @@ namespace SE {
       if (!tile) return;
       const w = this.world;
       const t = this.terraform;
-      if (isDevMode()) w.omega = OMEGA_MAX; // DEVMODE: the brush never runs dry
+      if (isDevMode()) w.omega = omegaCap(w); // DEVMODE: the brush never runs dry
       // The brush slows down to what the energy left can pay, from what the last frame cost per second.
       const perSecond = t.perSecond * TERRAFORM_COST_PER_UNIT;
       if (w.omega < 1) {
@@ -1477,13 +1517,20 @@ namespace SE {
 
       switch (s.tool) {
         case Tool.Examine:
-          // The open window already follows its tile live: clicking it again buys nothing.
-          if (this.examineTile && this.examineTile.x === x && this.examineTile.y === y && this.windows.isVisible('examine')) break;
-          if (!this.spend(EXAMINE_COST)) return;
-          this.examineTile = { x, y };
-          this.examinePanel.invalidate();
-          this.examinePanel.update(w, x, y);
-          this.windows.show('examine');
+          // The spaceport's picture opens its project window, free of charge (where it is drawn).
+          if (this.editView.layers.cities && w.space.site >= 0 && !w.isWater(w.space.site) && SpaceportLayer.hit(w, x, y)) {
+            this.openSpaceport();
+            break;
+          }
+          // The open window already follows its tile live: clicking it again buys nothing, but may catch a migration.
+          if (!this.examineTile || this.examineTile.x !== x || this.examineTile.y !== y || !this.windows.isVisible('examine')) {
+            if (!this.spend(EXAMINE_COST)) return;
+            this.examineTile = { x, y };
+            this.examinePanel.invalidate();
+            this.examinePanel.update(w, x, y);
+            this.windows.show('examine');
+          }
+          this.watchMigration(here);
           break;
 
         case Tool.SetAltitude:
@@ -1537,7 +1584,7 @@ namespace SE {
         const h = this.hazards.start(w, kind, x, y, 'player');
         if (!h) {
           // The tile changed during the omen (another hazard took it): the energy comes back.
-          w.omega = Math.min(OMEGA_MAX, w.omega + EVENT_COST);
+          w.omega = Math.min(omegaCap(w), w.omega + EVENT_COST);
           this.notifier.message(this.hazards.refusal(w, kind, x, y) || `${EVENT_NAMES[kind]} ist hier nicht mehr möglich.`, 'warn');
           return null;
         }
@@ -1606,6 +1653,8 @@ namespace SE {
       if (s.lifeMode === 'life') {
         const def = LIFE[s.life];
         const node = nodeForLife(s.life);
+        const bar = dinoEraLifeBar(w, s.life);
+        if (bar) { this.notifier.message(bar, 'warn'); return; }
         if (!node || !(isDevMode() || w.evo.isDeveloped(node.id))) { // DEVMODE
           this.notifier.message(`${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`, 'warn');
           return;
@@ -1625,12 +1674,11 @@ namespace SE {
 
       if (s.lifeMode === 'city') {
         if (w.isWater(i)) { this.notifier.message('Städte brauchen festes Land.', 'warn'); return; }
-        // A city implies someone to live in it: a species that has woken up,
-        // or — as with the original's founding of a city — one native here
-        // that is able to. Never a species the tree has not produced yet.
-        const founder = w.sentientClass !== Life.None ? w.sentientClass : this.sentientResident(i);
+        // A city implies someone to live in it: a species that has woken up.
+        // Waking one is the Monolith's job (civ.ts has the rule).
+        const founder = w.sentientClass;
         if (founder === Life.None) {
-          this.notifier.message('Städte brauchen eine intelligente Art. Hier lebt keine Tiergruppe, die Intelligenz entwickeln kann.', 'warn');
+          this.notifier.message('Städte brauchen eine intelligente Art. Erwecke eine mit dem Monolithen.', 'warn');
           return;
         }
         if (w.tech[i] >= s.tech && w.cityPop[i] >= 0.3) { this.notifier.message('Hier steht bereits eine solche Stadt.', 'warn'); return; }
@@ -1642,7 +1690,6 @@ namespace SE {
         if (!this.spend(TECH_COST[s.tech])) return;
         w.tech[i] = s.tech;
         w.cityPop[i] = Math.max(w.cityPop[i], 0.3);
-        w.sentientClass = founder;
         this.civ.sync(w, this.params);
         this.afterEdit();
         this.civNews();
@@ -1692,12 +1739,11 @@ namespace SE {
           break;
         case Terraformer.Monolith: {
           const species = this.sentientResident(i);
-          w.sentientClass = species;
-          w.tech[i] = Tech.Stone;
-          w.cityPop[i] = 0.3;
           this.civ.sync(w, this.params);
+          w.sentientClass = species;
+          spawnBands(w, i);
           this.civNews();
-          this.notifier.message(`Monolith: ${LIFE[species].name} erlangen Intelligenz.`, 'ok');
+          this.notifier.message(`Monolith: ${mindName(w)} erlangen Intelligenz. Kleine Gruppen ziehen umher und schlagen Lager auf.`, 'ok');
           break;
         }
       }
@@ -1729,7 +1775,10 @@ namespace SE {
         return;
       }
       const parts = first ? [first] : [];
-      for (const h of news) parts.push(h.cause === 'chain' ? `Folge: ${EVENT_NAMES[h.kind]}.` : `${EVENT_NAMES[h.kind]}!`);
+      for (const h of news) {
+        parts.push(h.cause === 'chain' ? `Folge: ${EVENT_NAMES[h.kind]}.`
+          : h.cause === 'natural' && h.kind === EventKind.Fire ? `Blitzeinschlag: ${EVENT_NAMES[h.kind]}!` : `${EVENT_NAMES[h.kind]}!`);
+      }
       const target = news[news.length - 1];
       this.lastHazard = { h: target, generation: this.world.hazards.generation };
       this.notifier.message(parts.join(' '), 'info', { label: 'Zum Ereignis springen', run: () => this.flyToHazard(target) });
@@ -1805,7 +1854,7 @@ namespace SE {
       if (id) this.tree.reveal(id);
     }
 
-    /** What the player should do next, for the goal bar and the report. */
+    /** What the player should do next, for the report. */
     private nextStep(): NextStep {
       const w = this.world;
       const evo = this.evolution;
@@ -1837,28 +1886,14 @@ namespace SE {
       return { id: null, title: 'Lebensräume schaffen', text: 'Lass die Zeit laufen: Sauerstoff, Klima und Pflanzen öffnen neue Wege.' };
     }
 
-    private goalAnnounce!: HTMLElement;
-
-    private renderGoal(): void {
-      const step = this.nextStep();
-      const sig = `${step.id}|${step.title}|${step.text}`;
-      if (this.goalEl.dataset.sig === sig) return;
-      // Countdowns change every second; only a new goal is worth announcing.
-      if (this.goalEl.dataset.title !== step.title) {
-        this.goalEl.dataset.title = step.title;
-        this.goalAnnounce.textContent = `Nächster Schritt: ${step.title}`;
-      }
-      this.goalEl.dataset.sig = sig;
-      this.goalEl.innerHTML = '';
-      this.goalEl.appendChild(img(step.id ? evoIcon(step.id) : eventIcon('evolution'), 'goal-art'));
-      const text = make('div', 'goal-text');
-      text.append(make('div', 'goal-kicker', 'Nächster Schritt'), make('div', 'goal-title', step.title), make('div', 'goal-sub', step.text));
-      this.goalEl.appendChild(text);
-      const id = step.id;
-      this.goalEl.appendChild(button({
-        label: 'Evolutionsbaum', icon: uiIcon('evolution'), cls: 'btn btn-small',
-        onClick: () => this.openTree(id ?? undefined),
-      }));
+    /** The first salmon run, stork flight, clownfish or termite mound caught with the Examine tool goes into the chronicle, with its card. */
+    private watchMigration(i: number): void {
+      const kind = this.editView.migrationOn(this.world, i);
+      const entry = (kind && migrationMilestone(this.world, kind, i)) || termiteMilestone(this.world, i);
+      if (!entry) return;
+      this.evolution.record(this.world, entry);
+      this.flushChronicle();
+      this.unsaved = true;
     }
 
     /** Hand new chronicle entries to the notifier. */
@@ -1883,6 +1918,119 @@ namespace SE {
       return true;
     }
 
+    /* ======================================================= dinosaurs === */
+
+    /**
+     * Every frame: while the dinosaurs' fate holds the world (dinoera.ts),
+     * keep it paused, ask once the birds' film is over, and start the comet
+     * once it is chosen — again after a reload, never twice on one planet.
+     */
+    private tendDinoFate(): void {
+      const w = this.world;
+      if (!dinoEraHoldsTime(w)) return;
+      if (this.fateResume === null) {
+        this.fateResume = this.milestonePaused ? this.speedBeforeMilestone : this.speed;
+        this.milestonePaused = false;
+        if (this.speed !== 0) this.setSpeed(0, true);
+      }
+      if (this.title || activeIntro) return;
+      if (w.dinoEra.fate === 'impactPending') {
+        if (this.cometShown !== w.hazards.generation) this.showComet();
+        return;
+      }
+      if (this.fateAsking || this.screenHeld || Modal.open) return;
+      // The birds' film plays to its end first.
+      const birds = w.evo.chronicle.find((e) => e.key === 'evo:birds');
+      if (birds && !w.evo.reported.has(birds.key)) return;
+      this.fateAsking = true;
+      const generation = w.hazards.generation;
+      void askDinoFate().then((choice) => {
+        if (choice === null) return;
+        this.fateAsking = false;
+        // A choice made for this planet only, and only while it is asked.
+        if (w.hazards.generation !== generation || !chooseDinoFate(w, this.evolution, choice)) return;
+        this.unsaved = true;
+        this.flushChronicle();
+        this.tree.update(true);
+        if (choice === 'survive') this.releaseDinoFate();
+        else this.showComet();
+      });
+    }
+
+    /**
+     * The comet's show: the camera flies to the crater, the omen plays, and
+     * the strike commits through applyComet, which acts once only. A player
+     * taking the camera over in flight does not stop it.
+     */
+    private showComet(): void {
+      const w = this.world;
+      if (w.dinoEra.fate !== 'impactPending') return;
+      const generation = w.hazards.generation;
+      this.cometShown = generation;
+      const t = w.dinoEra.target >= 0 ? w.dinoEra.target : cometSite(w);
+      const x = t % GRID_W;
+      const y = Math.floor(t / GRID_W);
+      this.windows.hide('evolution');
+      let staged = false;
+      const stage = (): void => {
+        if (staged || w.hazards.generation !== generation || w.dinoEra.fate !== 'impactPending') return;
+        staged = true;
+        this.editView.centerOn(x + 1, y + 1);
+        // One frame for the effect layer to see where the camera now is: off screen it would strike unseen.
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+          if (w.hazards.generation !== generation) return;
+          this.editView.fx.show.stage(w, EventKind.Meteor, x, y, () => this.commitComet(generation), { omen: COMET_OMEN_MS, strength: COMET_STRENGTH });
+        }));
+      };
+      flyTo(this.editView, x + 1, y + 1, stage);
+      window.setTimeout(stage, COMET_FLY_FALLBACK_MS);
+    }
+
+    private commitComet(generation: number): Hazard | null {
+      const w = this.world;
+      if (w.hazards.generation !== generation) return null;
+      const h = applyComet(w, this.params, this.life, this.hazards, this.evolution);
+      if (!h) return null;
+      if (w.terrainDirty) RiverSystem.rebuild(w);
+      this.civ.sync(w, this.params);
+      this.fauna.step(w);
+      this.afterEdit();
+      this.buildToolOptions();
+      this.lastHazard = { h, generation };
+      this.reportHazards('Der Komet schlägt ein!');
+      this.civNews();
+      // Its cards would cover the impact: once it has played out the news
+      // tells what they would (the rest come after), and then time runs again.
+      const news = this.evolution.pending.splice(0);
+      this.unsaved = true;
+      window.setTimeout(() => {
+        if (w.hazards.generation !== generation) return;
+        for (const e of news) if (e.key === 'comet:impact' || e.key === 'extinct:dinosaurs:comet') w.evo.reported.add(e.key);
+        void showCometNews().then(() => {
+          if (w.hazards.generation !== generation) return;
+          this.evolution.pending.unshift(...news);
+          this.flushChronicle();
+          this.releaseDinoFate();
+        });
+      }, COMET_MAIN_MS);
+      return h;
+    }
+
+    /** The fate is settled: the world runs again at the speed it had, a paused one stays paused. */
+    private releaseDinoFate(): void {
+      if (dinoEraHoldsTime(this.world)) return;
+      const resume = this.fateResume;
+      this.fateResume = null;
+      if (resume === null || resume === this.speed) return;
+      // A milestone still open (the strike's own card) keeps its pause, if the player wants those.
+      if (resume > 0 && this.settings.pauseOnMilestone && this.screenHeld) {
+        this.speedBeforeMilestone = resume;
+        this.milestonePaused = true;
+        return;
+      }
+      this.setSpeed(resume, true);
+    }
+
     private onMilestone(open: boolean): void {
       if (!this.settings.pauseOnMilestone) return;
       if (open && this.speed !== 0) {
@@ -1895,16 +2043,121 @@ namespace SE {
       }
     }
 
+    /* ======================================================= spaceport === */
+
+    private openSpaceport(): void {
+      this.spaceportPanel.update(this.world);
+      this.windows.show('spaceport');
+    }
+
+    /** Fly the map to the launch site. */
+    private locateSpaceport(): void {
+      const site = this.world.space.site;
+      if (site < 0) return;
+      const x = site % GRID_W;
+      const y = Math.floor(site / GRID_W);
+      flyTo(this.editView, x, y - 1, () => this.editView.ping(x, y, '#f6f1df'));
+    }
+
+    /**
+     * "Start in neue Welten": everything is asked again here, whatever the
+     * window showed, and the launch commits at once, so a second click, a
+     * stale window or a reload during the film never launches twice and a
+     * load never plays the film. Time stands still from here through the
+     * film and the closing dialog, then runs on as it did.
+     */
+    private launchRocket(): void {
+      const w = this.world;
+      if (this.launchFilm || this.title || activeIntro || Modal.open) return;
+      const problem = spaceLaunchProblem(w);
+      if (problem) {
+        this.notifier.message(problem, 'warn');
+        return;
+      }
+      if (!commitLaunch(w)) return;
+      this.evolution.record(w, {
+        key: SPACE_KEY_LAUNCHED, kind: 'civ', title: 'Start in neue Welten',
+        text: `Die Rakete der ${mindName(w)} hebt ab und lässt ihre Heimatwelt hinter sich.`,
+        change: 'Terraforming auf Mars, Venus und weiteren Welten wird in der Vollversion verfügbar sein. Dein Planet bleibt spielbar.',
+        icon: eventIcon('spaceport'), tick: w.ticks, years: w.absoluteYears, major: true, at: w.space.site,
+      });
+      // The closing dialog tells it: no card over the film.
+      w.evo.reported.add(SPACE_KEY_LAUNCHED);
+      this.flushChronicle();
+      this.unsaved = true;
+      this.spaceportPanel.update(w);
+      const resume = this.milestonePaused ? this.speedBeforeMilestone : this.speed;
+      this.milestonePaused = false;
+      this.setSpeed(0, true);
+      this.music.setEnabled(false);
+      const generation = w.hazards.generation;
+      try {
+        this.launchFilm = new LaunchFilm(document.body, {
+          world: () => this.world,
+          reduceEffects: () => this.settings.reduceEffects,
+          volume: () => SFX.volume(),
+          done: () => void this.endLaunch(resume, generation),
+        });
+      } catch (err) {
+        // Launched all the same: without its film the closing dialog follows at once.
+        console.warn('SimEarth: the launch film could not start', err);
+        document.querySelectorAll('.launchfilm').forEach((n) => n.remove());
+        setGameInert(false);
+        this.launchFilm = null;
+        void this.endLaunch(resume, generation);
+      }
+    }
+
+    /** The film is over or skipped: the closing dialog, then this planet goes on, or the main menu opens. */
+    private async endLaunch(resume: number, generation: number): Promise<void> {
+      const choice = await showLaunchFinale();
+      this.launchFilm?.close();
+      this.launchFilm = null;
+      this.music.setEnabled(this.settings.music);
+      if (choice === 'menu' && await this.toMainMenu()) return;
+      if (this.world.hazards.generation !== generation || resume <= 0) return;
+      // A milestone still open keeps its pause, if the player wants those.
+      if (this.settings.pauseOnMilestone && this.screenHeld) {
+        this.speedBeforeMilestone = resume;
+        this.milestonePaused = true;
+        return;
+      }
+      this.setSpeed(resume, true);
+    }
+
+    /** "Zum Hauptmenü": unsaved progress is handled as for a new planet, then the title with a fresh waiting planet. True if it went. */
+    private async toMainMenu(): Promise<boolean> {
+      if (this.unsaved && this.world.evo.developed.size > 0) {
+        const choice = await Modal.show({
+          title: 'Zum Hauptmenü?', icon: uiIcon('new-planet'),
+          body: 'Der aktuelle Planet hat ungespeicherte Fortschritte. Sie gehen verloren, wenn du jetzt zum Hauptmenü wechselst.',
+          actions: [
+            { label: 'Abbrechen', value: '', kind: 'ghost' },
+            { label: 'Erst speichern', value: 'save', kind: 'secondary' },
+            { label: 'Zum Hauptmenü', value: 'menu', kind: 'danger' },
+          ],
+        });
+        if (choice === '') return false;
+        if (choice === 'save' && !(await this.saveTo(this.settings.lastSlot))) return false;
+      }
+      this.newPlanet({ quiet: true });
+      this.showTitle();
+      return true;
+    }
+
     /* ====================================================== lifecycle === */
 
     /** `keepSeed` remakes the same planet (another sea share), `seed` an earlier one; `quiet` skips the toast. */
     newPlanet(opts: { quiet?: boolean; keepSeed?: boolean; seed?: number } = {}): void {
       this.notifier.clear();
       this.discoveries.clear();
+      this.ripStamps.clear();
+      this.goalNotice.reset();
       this.fauna.reset();
       this.paidModels.clear();
       const seed = opts.seed !== undefined ? opts.seed >>> 0 : opts.keepSeed ? this.world.seed : (Math.random() * 0xffffffff) >>> 0;
       this.world.reset(seed, this.settings.oceanShare, this.settings.epoch);
+      this.omegaStageSeen = omegaStage(this.world);
       this.params.reset();
       applyEpochParams(this.params, this.settings.epoch);
       this.geo.resetDrift();
@@ -1913,6 +2166,9 @@ namespace SE {
       this.accumulator = 0;
       this.editView.tickPhase = 0;
       this.milestonePaused = false;
+      // A new planet always starts paused.
+      this.fateResume = null;
+      this.setSpeed(0, true);
       this.examineTile = null;
       this.windows.hide('examine');
       this.evolution.pending.length = 0;
@@ -1989,6 +2245,12 @@ namespace SE {
     }
 
     private setSpeed(i: number, quiet = false): void {
+      if (i > 0 && dinoEraHoldsTime(this.world)) {
+        // Asked for while the fate holds the world: that is the speed to go on at.
+        this.fateResume = i;
+        if (!quiet) this.notifier.message('Zuerst über das Schicksal der Dinosaurier entscheiden.', 'warn');
+        return;
+      }
       if (i > 0) this.lastRunningSpeed = i;
       this.speed = i;
       // Keep the phase, so a speed change never throws a moving effect back.
@@ -2015,6 +2277,8 @@ namespace SE {
     tick(): void {
       const w = this.world;
       const p = this.params;
+      // The world waits for the dinosaurs' fate and for its comet (dinoera.ts).
+      if (dinoEraHoldsTime(w)) return;
       this.geo.step(w, p);
       this.events.step(w, p);
       this.hazards.step(w);
@@ -2025,13 +2289,15 @@ namespace SE {
       this.flora.step(w, p);
       BiomeSystem.step(w);
       CoalSystem.step(w);
+      OilSystem.step(w);
       this.life.stepLife(w, p, this.atmo); // also refreshes derived aggregates
+      placeTermiteMound(w);
       this.fauna.step(w);
       this.evolution.step(w, p);
       this.civ.step(w, p, this.atmo);
       this.atmo.step(w, p);
 
-      w.omega = Math.min(OMEGA_MAX, w.omega + OMEGA_REGEN);
+      regenOmega(w);
       w.ticks++;
       w.absoluteYears += w.yearsPerTick;
       w.scaleYears += w.yearsPerTick;
@@ -2048,10 +2314,13 @@ namespace SE {
     private civNews(): void {
       const w = this.world;
       for (const n of w.civ.news) {
-        if (!n.chronicle) { this.notifier.message(n.text, n.tone); continue; }
+        if (!n.chronicle) {
+          this.notifier.message(n.text, n.tone, n.space ? { label: 'Zum Raumhafen', run: () => this.openSpaceport() } : undefined);
+          continue;
+        }
         this.evolution.record(w, {
           key: n.chronicle.key, kind: 'civ', title: n.chronicle.title, text: n.text, change: n.chronicle.change,
-          icon: eventIcon('civilization'), tick: w.ticks, years: w.absoluteYears, major: false, at: n.at,
+          icon: eventIcon(n.space ? 'spaceport' : 'civilization'), tick: w.ticks, years: w.absoluteYears, major: !!n.chronicle.major, at: n.at,
         });
       }
       w.civ.news.length = 0;
@@ -2065,8 +2334,8 @@ namespace SE {
       if (civ.lastKind === 'sentience' && w.sentientClass !== Life.None) {
         this.evolution.record(w, {
           key: 'civ:sentience', kind: 'civ', title: 'Intelligenz erwacht',
-          text: `${LIFE[w.sentientClass].name} entwickeln Intelligenz und gründen ihre erste Siedlung.`,
-          change: 'Das Zeitalter der Zivilisation beginnt: Städte wachsen, und ein Zeitschritt umfasst nur noch 100 Jahre.',
+          text: civ.lastNotice,
+          change: 'Das Zeitalter der Zivilisation beginnt: Ein Zeitschritt umfasst nur noch 100 Jahre. Werden die Gruppen sesshaft, entstehen die ersten Dörfer.',
           icon: eventIcon('sentience'), tick: w.ticks, years: w.absoluteYears, major: true,
         });
       } else if (civ.lastKind === 'tech') {
@@ -2120,13 +2389,20 @@ namespace SE {
     private updateUi(): void {
       const w = this.world;
       const h = this.hud;
+      const stage = omegaStage(w);
+      if (stage > this.omegaStageSeen) {
+        const s = OMEGA_STAGES[stage];
+        this.notifier.message(`Energiestufe ${stage + 1}: ${s.name} – jetzt +${fmt.one(s.regen)} Ω je Zeitschritt, bis ${fmt.int(s.max)} Ω.`, 'ok');
+      }
+      this.omegaStageSeen = stage;
       h.omega.textContent = fmt.int(w.omega);
-      h.omegaBar.style.width = `${Math.round((w.omega / OMEGA_MAX) * 100)}%`;
+      h.omegaBar.style.width = `${Math.round((w.omega / OMEGA_STAGES[stage].max) * 100)}%`;
       h.ep.textContent = fmt.int(w.evo.ep);
       if (isDevMode()) { h.omega.textContent = h.ep.textContent = '∞'; h.omegaBar.style.width = '100%'; } // DEVMODE
       h.devTag.hidden = !isDevMode(); // DEVMODE
       const rate = this.evolution.epRate(w, this.params);
       h.epRate.textContent = rate > 0 ? `+${fmt.two(rate)}` : '';
+      this.hudInfo.refresh();
       h.o2.textContent = `${fmt.one(w.o2)} %`;
       h.co2.textContent = `${fmt.int(w.co2)} ppm`;
       h.temp.textContent = `${fmt.one(w.globalTemp)} °C`;
@@ -2138,7 +2414,7 @@ namespace SE {
       h.evoBtn.setAttribute('aria-label', available > 0
         ? `Evolutionsbaum öffnen, ${available} ${available === 1 ? 'Schritt' : 'Schritte'} entwickelbar` : 'Evolutionsbaum öffnen');
 
-      this.renderGoal();
+      this.goalNotice.update(this.evolution.availableIds(), performance.now(), !!this.title || !!activeIntro || this.screenHeld || Modal.open, this.settings.reduceEffects);
       if (this.evolution.revision !== this.toolRevision && (this.selection.tool === Tool.PlaceLife || this.selection.tool === Tool.PlantBiome)) {
         this.buildToolOptions();
       }
@@ -2148,6 +2424,7 @@ namespace SE {
       if (this.windows.isVisible('report')) this.reportPanel.update(w);
       if (this.windows.isVisible('history')) this.historyPanel.render();
       if (this.windows.isVisible('chronicle')) this.chroniclePanel.update(w);
+      if (this.windows.isVisible('spaceport')) this.spaceportPanel.update(w);
       if (this.windows.isVisible('lexicon')) this.lexicon.update();
       if (this.windows.isVisible('species')) this.speciesInfo.update();
       if (this.mapShowsInfo || this.mapView.mode === MapMode.LifeMap || this.mapView.mode === MapMode.Biomes) {
@@ -2161,6 +2438,7 @@ namespace SE {
       }
       this.flushChronicle();
       if (this.fauna.pending.length > 0) this.discoveries.push(this.fauna.pending.splice(0));
+      this.ripStamps.collect(w, this.fauna, this.evolution);
       h.oceanO2.textContent = `${fmt.int(w.oceanO2)} %`;
     }
 
@@ -2187,12 +2465,13 @@ namespace SE {
       const delta = Math.min(250, gap);
       this.lastFrame = now;
 
-      const tickMs = SPEED_TICK_MS[this.speed];
+      // A burning fire holds the game at the slowest speed: its sound is as long as the fire may burn (FIRE_MAX_TICKS).
+      const tickMs = this.speed > 0 && this.world.hazards.list.some((h) => (h.fire?.burning.length ?? 0) > 0) ? SLOWEST_TICK_MS : SPEED_TICK_MS[this.speed];
       if (tickMs > 0) {
         this.accumulator += delta;
         let steps = 0;
         // The first due tick always runs, more only within the frame's budget.
-        while (this.accumulator >= tickMs && steps < MAX_TICKS_PER_FRAME && (steps === 0 || performance.now() - start < SIM_BUDGET_MS)) {
+        while (this.accumulator >= tickMs && steps < MAX_TICKS_PER_FRAME && (steps === 0 || performance.now() - start < SIM_BUDGET_MS) && !dinoEraHoldsTime(this.world)) {
           const t0 = performance.now();
           this.tick();
           perfHud.tick(performance.now() - t0);
@@ -2215,15 +2494,18 @@ namespace SE {
         this.touchPending = null;
         this.beginStroke(held.x, held.y, false);
       }
+      this.tendDinoFate();
       this.strokeFrame(delta);
       this.panFrame(delta);
       this.editView.editRectInto(this.mapView);
       this.editView.render(this.world);
       if (now - this.lastSurfCheck > 400) {
         this.lastSurfCheck = now;
-        this.surfTarget = this.title || !this.settings.ambient ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
-        this.bubblingTarget = this.title || !this.settings.ambient ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
-        this.stormWindTarget = this.title || !this.settings.ambient ? 0 : this.editView.stormPresence(now) * this.settings.ambientVolume;
+        // The launch film brings its own sound.
+        const quiet = !!this.title || !!this.launchFilm || !this.settings.ambient;
+        this.surfTarget = quiet ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
+        this.bubblingTarget = quiet ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
+        this.stormWindTarget = quiet ? 0 : this.editView.stormPresence(now) * this.settings.ambientVolume;
       }
       this.surf.update(this.surfTarget, delta, now);
       this.bubbling.update(this.bubblingTarget, delta, now);
@@ -2386,8 +2668,14 @@ namespace SE {
       PixelTerrain.shared().field.forget();
       this.notifier.clear();
       this.discoveries.clear();
+      this.ripStamps.clear();
+      this.goalNotice.reset();
       this.evolution.pending.length = 0;
+      this.omegaStageSeen = omegaStage(this.world);
       this.milestonePaused = false;
+      // A loaded planet always starts paused.
+      this.fateResume = null;
+      this.setSpeed(0, true);
       this.accumulator = 0;
       this.editView.tickPhase = 0;
       this.examineTile = null;
@@ -2395,7 +2683,7 @@ namespace SE {
       this.sliderPanels.forEach((p) => p.sync());
       this.evolution.refresh(this.world, this.params, true);
       // Reefs and white beaches the planet already has are history, not news.
-      for (const e of reefMilestones(this.world)) {
+      for (const e of reefMilestones(this.world, true)) {
         this.world.evo.chronicle.push(e);
         this.world.evo.reported.add(e.key);
       }
@@ -2477,7 +2765,6 @@ namespace SE {
 
     /** On start: the title screen, paused, until the player chooses a planet. */
     private showTitle(): void {
-      const running = this.speed;
       this.setSpeed(0, true);
       let meta: SaveMeta | null = null;
       try {
@@ -2508,10 +2795,11 @@ namespace SE {
         start: (fresh) => {
           this.title = null;
           if (fresh) {
-            this.playIntro(running, this.fullIntroWanted);
+            // New and continued planets both start paused.
+            this.playIntro(0, this.fullIntroWanted);
           } else {
             this.music.play('game');
-            this.enterGame(running);
+            this.enterGame(0);
           }
         },
       });
@@ -2568,10 +2856,10 @@ namespace SE {
       }, from);
     }
 
-    /** Save the whole planet, in the overview map's current mode, as a PNG. */
+    /** Save the whole planet as a PNG: the pixel landscape, or the overview map's mode while its atlas is missing. */
     private snapshot(): void {
       try {
-        const canvas = this.mapView.exportImage(this.world);
+        const canvas = PixelTerrain.shared().picture(this.world, 16) ?? this.mapView.exportImage(this.world);
         const a = document.createElement('a');
         a.href = canvas.toDataURL('image/png');
         a.download = `simearth-${new Date().toISOString().slice(0, 10)}.png`;

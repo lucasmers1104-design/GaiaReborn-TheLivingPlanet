@@ -23,7 +23,7 @@ Später tragen benachbarte Völker selten und nachvollziehbar Konflikte aus. Die
 |---|---|---|
 | Stadt | **pro Kachel**: `tech[i]` (Zeitalter, 0 = keine Stadt) und `cityPop[i]` (0..1). Keine Stadt-Objekte, keine Namen, keine Völker | `world.ts` |
 | Zeitalter | 7 Stufen: Steinzeit, Bronzezeit, Eisenzeit, Industrie-, Atom-, Informations-, Nanotech-Zeitalter | `constants.ts` (`Tech`, `TECH_*`) |
-| Intelligenz | Eine Art pro Welt (`sentientClass`). Möglich sind Weichtiere und Wale (Meer) sowie Insekten, Reptilien, Dinosaurier, Vögel und Säugetiere (letzte Unterart „Hominiden“) | `LIFE[].sentient`, `civ.ts` |
+| Intelligenz | Eine Art pro Welt (`sentientClass`). Von selbst nur die Hominiden (letzte Unterart der Säugetiere), nachdem der Komet die Dinosaurier ausgelöscht hat, oder die Dinosaurier, wenn sie überlebt haben. Insekten, Reptilien, Vögel und die übrigen Säugetiere nur durch den Monolithen; das Städte-Werkzeug braucht eine schon intelligente Art | `CivSystem.naturalMindStage`, `LIFE[].sentient` (Monolith) |
 | Wachstum | logistisch zur Lagequalität des **eigenen** Feldes | `CivSystem.growCities` |
 | Ausbreitung | jede Stadt mit `cityPop ≥ 0,55` besetzt ein **direktes Nachbarfeld** | `CivSystem.growCities` |
 | Konflikt | nur Atomkrieg ab 16 Atom-Stadtkacheln | `CivSystem.warfare` |
@@ -203,6 +203,12 @@ Abstand überlappen sich die Umländer nicht.
 - **Atomkrieg** braucht zwei Völker mit Atom-Städten, insgesamt mindestens 4. Das Ziel ist eine Stadt des Gegners,
   ausgelöst über das bestehende Ereignis (`civEventSink`). Er fällt nie während eines Krieges und setzt danach
   Frieden und Ruhe wie ein Krieg.
+- **Atombombe als Kriegsende (20. 10. 2026):** Endet ein Krieg zwischen einem Volk im Atomzeitalter (eine Stadt auf
+  Atom-Stufe oder höher) und einem ohne, fällt die Bombe auf die Stadt des Volkes ohne, gleich wer angegriffen hat
+  (`atomicEnd`). Haben beide Völker die Bombe, endet der Krieg wie gewohnt.
+- **Atomwaffenverbot:** Nach der ersten Bombe, gleich auf welchem Weg, schwören alle Völker, nie wieder Atomwaffen
+  einzusetzen (Chronik-Eintrag „Alle Völker ächten die Atombombe“). Danach fällt keine Bombe mehr. Das Verbot
+  steht im Feld `civ` des Spielstands (`ban`) und endet erst mit der Zivilisation.
 
 ### 2.9 Klima und Schwellen
 
@@ -217,13 +223,30 @@ Abstand überlappen sich die Umländer nicht.
   - Ab dem Industriezeitalter verbrennt jede Stadt den Kohleanteil ihrer fossilen Energie (`COAL_SHARE`: 90 % im
     Industriezeitalter, danach 40 %). `CivSystem.step` ruft dafür nur `mineCoal` auf.
   - Bisher reine Statistik: Die CO₂-Rechnung bleibt unverändert, ein leerer Vorrat hat noch keine Folgen.
+- **Erdöl (20. 10. 2026, `src/oil.ts`):** ein weltweiter Vorrat in Gt, gebildet aus abgestorbenen Meerestieren.
+  - Schnittstelle: `world.oil` ist der Vorrat, `pumpOil(world, menge)` fördert und gibt die tatsächlich geförderte
+    Menge zurück. `oilDemand(world, params)` ist der Bedarf eines Ticks.
+  - Ab dem Industriezeitalter verbrennt jede Stadt den Ölanteil ihrer fossilen Energie (`OIL_SHARE`: 10 % im
+    Industriezeitalter, danach 45 %; der Rest neben der Kohle ist Gas). Eine Tonne Öl liefert gut das 1,7-Fache der
+    Energie einer Tonne Kohle (`OIL_PER_DEMAND_YEAR`). `CivSystem.step` ruft dafür nur `pumpOil` auf.
+  - Wie die Kohle reine Statistik: Die CO₂-Rechnung bleibt unverändert, ein leerer Vorrat hat noch keine Folgen.
+  - **Bohrinsel und Förderturm:** Erreicht die erste Stadt das Industriezeitalter, setzt `placeOilRigs` einmalig eine
+    Bohrinsel vor die Küste und einen Förderturm mit Pferdekopfpumpe in eine Wüste oder Halbwüste (sonst auf das
+    trockenste freie Land), jeweils so nah wie möglich an dieser Stadt. Die Bohrinsel steht auf offenem Wasser ohne
+    Meereis, mit Land höchstens zwei Felder entfernt, aber keinem direkt daneben. Im Umkreis von vier Feldern muss
+    mehr als die Hälfte Wasser sein, damit kleine Binnenseen keine Bohrinsel bekommen. Danach bleiben beide fest. Gespeichert
+    werden sie im Feld `oil` (`rigs`). Die Simulation liest sie nie.
+  - Gezeichnet werden sie von `src/oillayer.ts` als Sprites des Effekt-Atlas (`tools/fx/offshore.js`,
+    `tools/fx/oilfield.js`): Fackel und Wellen an der Bohrinsel, die nickende Pumpe am Förderturm. Ist das Öl
+    aufgebraucht, stehen beide still. Sichtbar mit der Kartenebene „Städte“.
 
 ### 2.10 Spieler
 
 - **Werkzeug „Städte“:** `app.ts` prüft vor dem Abbuchen den Standort und den Mindestabstand.
   - Meldungen: „Zu nah an Teluma (mind. 7 Felder).“ bzw. „Hier kann keine Stadt stehen: Fels, Wüste oder Eis.“
   - Das Volk kommt aus dem nächsten Volk in Siedlerreichweite, sonst entsteht ein neues.
-- **Monolith:** zusätzlich die Standortprüfung.
+- **Monolith:** zusätzlich die Standortprüfung. Er gründet keine Stadt: Die geweckte Art zieht von diesem Feld aus in
+  Gruppen umher (2.13).
 
 ### 2.11 Speichern und Laden (Formatnummer unverändert, ein optionales Feld)
 
@@ -244,6 +267,9 @@ Ohne gültiges Feld leitet `CivSystem.sync` den Zustand aus dem Raster ab:
 4. Namen kommen aus Seed und Position, Farben aus der Reihenfolge der Hauptstädte (Kachelindex).
 5. Nach dem Laden ruhen Konflikte 100 Ticks.
 
+Die Wandergruppen vor der Sesshaftigkeit (2.13) stehen ebenfalls im Feld `civ` (`bands`). Ist dort eine Gruppe
+ungültig, werden nur die Gruppen verworfen; der Rest des Feldes gilt.
+
 **Was beim Laden verloren geht:**
 - Unterwegs befindliche Siedler samt ihrer Bevölkerung.
 - Friedenszeiten, Ruhe der Völker, Seuchen-Immunität, Abklingzeiten und das Alter der Städte (es zählt ab dem
@@ -258,6 +284,44 @@ Vorerst keine Zivilisation:
 - Unterwasserstädte gibt es im Code nicht.
 - Alte Spielstände mit Walen oder Weichtieren als intelligenter Art behalten ihre Küstenstädte. Diese wachsen und
   schrumpfen, senden aber keine Siedler aus und führen keine Konflikte.
+
+### 2.13 Wandergruppen und Sesshaftigkeit (`src/bands.ts`, 20. 10. 2026)
+
+Intelligenz und Sesshaftigkeit sind zwei Schritte. Die Werte stehen in `constants.ts` (`BAND_*`).
+
+- **Erwachen** (von selbst oder durch den Monolithen): Es entsteht noch keine Stadt. Bis zu 3 Gruppen schlagen ihr
+  Lager auf: auf dem besten Standort (beim Monolithen auf dessen Feld) und auf den besten passenden Feldern
+  (`cityGroundFits`) bis 6 Schritte über Land, mindestens 3 Felder auseinander.
+  - Meldung: „<Art> entwickeln Intelligenz. Kleine Gruppen ziehen umher und schlagen Lager auf.“
+  - Bei Säugetieren heißt die Art „Hominiden“, sobald es sie gibt; sonst gilt der Name der Klasse (`mindName`).
+- **Lager:** steht 12–20 Ticks und hat 2–4 Hütten. Sie entstehen eine je Tick und verschwinden eine je Tick vor dem
+  Abbruch (`campShelters`). Würfe kommen aus einem Hash von Seed, Tick und Gruppe, nie aus `Math.random`.
+- **Weiterziehen:** Das nächste Lager liegt 4–8 Schritte über Land. Flüsse zählen als Land, Wasser wird nicht
+  gequert. Die Gruppe geht 1 Feld pro Tick.
+  - Bewertung: `citySiteScore` plus bis zu 0,15 Zufall.
+  - Abzüge: −0,4 nahe einem der letzten 4 eigenen Lager, −0,5 näher als 7 Felder an einer Stadt.
+  - Gesperrt: näher als 3 Felder an Lager oder Ziel einer anderen Gruppe.
+  - +1 für ein Feld, auf dem die Gruppe beim Abbruch dieses Lagers sesshaft werden dürfte.
+  - Schneidet Wasser den Weg (Drift), lagert die Gruppe, wo sie steht. Steht sie selbst auf Wasser, rückt sie wie
+    eine Stadt in ihrer Zeile auf Land.
+- **Sesshaft** wird eine Gruppe beim Abbruch eines Lagers, frühestens nach 90 Ticks Wanderung. Die Ansprüche sinken
+  mit der Zeit, damit nichts für immer blockiert:
+
+  | Wanderzeit | Lagerfeld muss … |
+  |---|---|
+  | ab 90 Ticks | erlaubt sein (`citySiteAllowed`, 7 Felder Abstand), Steinzeit-Tragfähigkeit ≥ 0,3, Fluss auf oder neben dem Feld oder Küste |
+  | ab 160 Ticks | erlaubt sein, Tragfähigkeit ≥ 0,15, Wasser egal |
+  | ab 240 Ticks | erlaubt sein. Liegt keins in Reichweite, schließt sich die Gruppe dem nächsten Dorf an |
+
+- **Das Dorf:** Steinzeit, `cityPop` 0,12 (die Gruppe). Das Volk kommt wie beim Städte-Werkzeug aus `adoptTribe`:
+  Das erste Dorf gründet das erste Volk.
+- **Meldungen:** Das erste Dorf bekommt einen Chronik-Eintrag „Sesshaftigkeit“ (`civ:settled:<Art>`): „Die ersten
+  Gruppen der <Art> werden sesshaft. Ein dauerhaftes Dorf entsteht: <Name>.“ Weitere Dörfer erzeugen eine kurze
+  Meldung, höchstens alle 30 Ticks.
+- **Städte-Werkzeug:** gründet weiterhin sofort, auch während der Wanderphase.
+- **Verlorene Gruppen:** Eine Art hat Intelligenz, aber keine Städte, Siedler und Gruppen, und es ist noch keine
+  Gruppe sesshaft geworden (laut Chronik). Dann ziehen neue Gruppen vom besten passenden Feld der Art los. Das deckt
+  alte Spielstände und ein verworfenes Feld `bands` ab.
 
 ---
 
@@ -274,28 +338,44 @@ Vorerst keine Zivilisation:
     `assets/civ/atlas.png` und `src/civatlas.ts` (Data-URI und Manifest, wie `terrainatlas.ts`).
   - Der Landschafts-Atlas bleibt unberührt.
   - `tests/civart.test.js` schlägt fehl, solange der Stadt-Atlas veraltet ist.
-- **Bausteine je Zeitalter (4–5):** Gebäude in 2–3 Größen, bis 16 × 20 px. Dazu Zubehör (Feuerstelle, Palisade,
-  Mauerstück, Schlot), Brücken waagerecht und senkrecht (ab der Bronzezeit) und ein 3 × 4 px großer Wimpel in den
-  8 Volksfarben.
+- **Bausteine je Zeitalter (4–6):** Gebäude in 3 Größen, dazu Zubehör (Feuerstelle, Palisade, Mauerstück, Schlot),
+  Brücken waagerecht und senkrecht (ab der Bronzezeit) und ein 3 × 4 px großer Wimpel in den 8 Volksfarben.
+- **Rahmen 20 × 24 px** (Entscheidung 20. 10.): Ein Stadtbild darf 2 px in die Nachbarfelder links und rechts und
+  bis 8 px in das Feld darüber ragen, damit hohe Häuser, Türme und Schlote ihre Silhouette bekommen. Fußpunkte und
+  Grundflächen bleiben auf der eigenen Kachel.
+- **Allen Zeitaltern gemeinsam:** Unterstände des Wanderlagers (Fellzelt, Windschirm, Laubhütte, Felldom),
+  Lagerfeuerstelle, die Flamme (4 Bilder) und der Abgasrauch (6 Bilder). Flamme und Rauch setzt nie das Layout,
+  sondern die Karte jedes Bild (3.3). Ein Rezept markiert die Öffnungen seiner Schlote (`tex.smoke`); das Manifest
+  trägt sie je Sprite (`CivSprite.smoke`).
 
-| Zeitalter | Bausteine (Richtwert) |
-|---|---|
-| Steinzeit | Rundhütte (Stroh oder Fell), Langhaus, Feuerstelle, Palisadenstück, Menhir |
-| Bronzezeit | Lehmziegelhaus mit Flachdach, Speicher, Stufentempel, Lehmmauer |
-| Eisenzeit | Fachwerkhaus, Steinhaus mit Ziegeldach, Turm, Steinmauer, Säulentempel |
-| Industrie | Ziegelreihenhaus, Fabrikhalle, Schlot, Bahnhofshalle |
-| Atomzeitalter | Betonblock, Wohnhochhaus, Kühlturm |
-| Informationszeitalter | Glasturm, Pavillon, Funkturm |
-| Nanotech | Kuppel mit Grün, organischer Turm, Megaturm |
+| Zeitalter | Bausteine | Anordnung und Silhouette |
+|---|---|---|
+| Steinzeit | Rundhütte (Stroh oder Fell), Langhaus, Feuerstelle, Herdfeuer, Palisade, Steinsetzung, Menhir | lockere kleine Hütten mit sichtbarer Tür um einen freien Feuerplatz; die Großstadt im Palisadenring |
+| Bronzezeit | Lehmziegelhaus und Hofhaus mit Flachdach, Speicher, Kornsilo, Stufentempel, Lehmmauer | kompakte helle Kuben um kleine Höfe, Speicherkuppeln; die Großstadt mit Zikkurat im Lehmring |
+| Eisenzeit | Fachwerkhaus, Steinhaus mit Ziegeldach, Turm, Säulentempel, Steinmauer mit Zinnen | Giebelhäuser an gepflasterten Gassen, Straßenkreuz mit Turm; die Großstadt im Mauerring mit Tor |
+| Industrie | Ziegelreihenhaus und Mietshaus, Sheddach-Fabrik, Schlot, Bahnhofshalle | rote Ziegelreihen, hohe gebänderte Schlote mit Rauch, Fabrikhallen |
+| Atomzeitalter | Betonblock, Plattenbau, Wohnhochhaus, Betonhalle, Kühlturm | kantige graue Kästen mit Fensterraster, Zeilenbau; Hochhausscheibe und Kühlturm |
+| Informationszeitalter | Glaspavillon, schlanker Glasturm, Pavillon, Funkturm | schlanke Glastürme auf heller Plaza mit Grünstreifen |
+| Nanotech | Kuppelhaus, organischer Turm, Kuppel mit Grün, Megaturm, Parkbaum | runde, organische Formen, Kuppeln, Terrassen mit Grün im Park |
 
 ### 3.2 Zusammensetzung (`src/citylayout.ts`, rein, in Node testbar)
 
 - **Eingaben:** Kachel, Zeitalter, Größenstufe, Flusslauf.
 - **Ausgabe:** eine Liste von Bausteinen mit Fußpunkt in der Kachel. Wahl, Lage und Variante kommen aus dem
   Kachel-Hash, nie pro Bild.
-- **Wachstum:** Das Dorf hat 2–3 kleine Gebäude, die Stadt 4–5 mit mittleren, die Großstadt 6–8 mit einem
-  Wahrzeichen. **Immer innerhalb der eigenen Kachel**: Füße in x 2..13, y 5..13. Hohe Gebäude ragen bis 4 px in
-  die Kachel darüber.
+- **Baupläne je Zeitalter** (`src/cityplans.ts`, 20. 10.): Jedes Zeitalter hat für Dorf, Stadt und Großstadt eigene
+  Zielpunkte, eine Höchstzahl an Gebäuden, einen Sichtbarkeitsanteil und **freie Flächen**, auf die keine Grundfläche
+  darf (Feuerplatz, Hof, Gasse, Plaza). Damit unterscheiden sich die Zeitalter auch in der Anordnung, nicht nur in den
+  Gebäuden. Ein Plan kann einen bestimmten Baustein verlangen (z. B. die Feuerstelle) und einen Mauerring schließen.
+  Der Plan wird je Kachel gespiegelt, die freien Flächen mit.
+- **Wachstum:** Das Dorf hat 2–3 kleine Gebäude, die Stadt 3–5 mit einer Halle, die Großstadt mehr und höhere mit
+  einem Wahrzeichen. In der Steinzeit behält die Stadt die Hütten des Dorfes an ihrem Platz und verdichtet um sie
+  herum. Füße in x 2..13, y 5..13; das Bild bleibt im Rahmen 20 × 24 (3.1).
+- **Feuer:** Die Flamme über einer Feuerstelle zählt bei der Sichtbarkeit wie ein Baustein ganz vorn, damit sie keine
+  Hüttentür verdeckt.
+- **Wanderlager** (`layoutCamp`): Feuerstelle in der Mitte, frei gehalten, bis 4 Unterstände dahinter
+  (`CAMP_PLAN`). Ein Lager mit n Unterständen nimmt die ersten n; beim Aufschlagen und Abbauen kommen sie einzeln
+  hinzu und verschwinden einzeln, ohne dass die übrigen springen. Kein Erdplatz, kein Wimpel.
 - Die untersten 2 Zeilen bleiben frei. Dorthin reichen Baumkronen der Kachel darunter.
 - **Fluss:**
   - Die Bausteine halten Abstand zum Flusslauf. Dafür dient dieselbe Abfrage wie bei den Pflanzen
@@ -310,8 +390,14 @@ Vorerst keine Zivilisation:
 - **Zeichnen:** `render.ts` zeichnet die Ebene im Grundbild direkt nach `land.draw`, mit **derselben Skalierung**
   wie die Landschaft (Nearest Neighbour auf das k-Fache, dann weich auf die Zoomstufe). Sie bleibt dadurch fest in
   der Landschaft und skaliert wie Bäume.
-- **Zwischenspeicher:** je Stadt ein Bild bei 16 × 20 px (RGBA), Schlüssel aus Kachel, Zeitalter, Größe,
-  Volksfarbe und Flussform; dazu je Zoomstufe die k-fache Vergrößerung.
+- **Zwischenspeicher:** je Stadt ein Bild im Rahmen 20 × 24 px (RGBA), Schlüssel aus Kachel, Zeitalter, Größe,
+  Volksfarbe und Flussform; dazu je Zoomstufe die k-fache Vergrößerung. Das Bild merkt sich die Fußpunkte seiner
+  Feuerstellen und die Öffnungen seiner Schlote.
+- **Jedes Bild neu, aber ohne Neuaufbau** (`cityfire.ts`): Über die zwischengespeicherten Bilder zeichnet die Karte
+  jedes Bild die Flamme (4 Bilder, 110–160 ms, je Feuer eigener Takt) und den Rauch (6 Bilder der Reihe nach,
+  180–220 ms, je Schlot eigene Phase), gleich skaliert wie die Städte. Bei „Effekte reduzieren“ stehen beide auf
+  Bild 0. Die Wanderlager zeichnet `CityLayer.drawCamps` ebenfalls jedes Bild, aus eigenen kleinen Zwischenbildern,
+  denn sie kommen und gehen mit den Ticks. Das Lagerfeuer ist ein Siedlungsdetail und löst nie eine Katastrophe aus.
 - **Schlagschatten** zeichnet der Renderer unter jedem Baustein: eine flache Ellipse wie bei den Bäumen, als
   halbtransparentes Dunkel, etwa wie eine Rampenstufe −2.
 - **Überstand:** Bei Teilneuzeichnungen (Verschieben der Karte) werden auch die Städte der Zeile unter dem Bereich
@@ -346,8 +432,12 @@ Pflanzen zwischen den Gebäuden stehen bleiben, wäre das eine Änderung in `lan
 | Industrie | Planwagen | Dampfschiff |
 | Atom- bis Nanotech | Lastwagen, später Schwebegleiter | Frachter |
 
-- **Nicht-menschliche Arten:** vorerst ein neutraler Platzhalter (Bündel mit Volkswimpel). Eigene Figuren werden
-  nachgeliefert.
+- **Nicht-menschliche Arten:** an Land die eigene Tierfigur der Klasse (ihre höchste lebende Unterart, etwas
+  verkleinert) mit einer Stange, die ein Bündel und den Volkswimpel trägt (`civart/bands.ts`). Auf dem Wasser wie oben.
+- **Wandergruppen** (vor der Sesshaftigkeit, `bandlayer.ts`): Menschen als zwei Steinzeitmenschen hintereinander
+  (Speer, Rückenbündel), andere Arten als ihre Tierfigur mit einer Fackel an der Stange; ohne Wimpel. Gleiten wie
+  die Siedler. Lagert eine Gruppe, zeigt die Karte nur das Lager; die Flamme über Lager- und Dorffeuerstellen
+  flackert in 4 Bildern (`cityfire.ts`), bei „Effekte reduzieren“ steht sie still.
 
 ### 3.7 Kampf- und Seuchensymbol
 
@@ -443,3 +533,5 @@ auf Wunsch.
 | E7 | Namen für Völker und Städte |
 | Wasserarten | vorerst keine Zivilisation; Intelligenz nur bei landlebenden Arten |
 | Steinzeit-Referenz | freigegeben mit zwei Verbesserungen: Erdplatz unter jeder Stadt, Tier-Icons halten ein Feld Abstand zu Städten (`herds.ts`); Stadt und Großstadt deutlicher unterschieden (Großstadt mit geschlossenem Ring, Stadt mit Teilstück). Übernommen: Flussabstand nur für den Fuß, höhere Füße auf Flusskacheln, einzeilige Hütten-Grundrisse |
+| Beginn der Zivilisation (20. 10.) | Intelligenz und Sesshaftigkeit sind getrennte Schritte: erst sichtbare Wandergruppen mit Lagern (2.13), dann Dörfer; das Städte-Werkzeug gründet weiter sofort. Lagerfeuer flackert, Fabrikschlote rauchen, beides jedes Bild über den zwischengespeicherten Stadtbildern |
+| Rahmen (20. 10.) | Stadtbilder dürfen 2 px in die Nachbarfelder und bis 8 px nach oben ragen (20 × 24), Grundflächen bleiben auf der Kachel; Baupläne je Zeitalter statt eines gemeinsamen |

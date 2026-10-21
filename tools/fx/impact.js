@@ -435,23 +435,27 @@ function waterFountain(f) {
  * (ground_crater) beneath. The far inner wall faces the viewer and is lit,
  * the near inner wall lies in shadow, the crest catches the light on its
  * upper left; the outer slope is lit upper left and dark lower right.
+ * `size` 2 is the comet's crater over a 2 × 2 block of tiles: the same wall
+ * at twice the size, with more rubble on a longer crest.
  */
-function craterRim(v) {
-  const t = new k.Tex(24, 16);
+function craterRim(v, size = 1) {
+  const t = new k.Tex(24 * size, 16 * size);
   const fresh = v === 0;
-  const cx = 12;
+  const cx = 12 * size;
   // Seen from the south: the hole sits low in the crest, so the far inner wall shows and the near one is a sliver.
-  const outer = { y: 8.4, rx: fresh ? 11.6 : 11.3, ry: 7.4 };
-  const crest = { y: 8.0, rx: fresh ? 9.4 : 9.1, ry: fresh ? 5.6 : 5.3 };
-  const hole = { y: 9.0, rx: fresh ? 6.8 : 6.4, ry: fresh ? 3.2 : 2.9 };
-  const moss = k.fbm(32, 4, 2, 331);
+  // The larger wall's ejecta frays over more rows; a little more depth keeps its foot row filled.
+  const outer = { y: 8.4 * size, rx: (fresh ? 11.6 : 11.3) * size, ry: 7.4 * size + (size - 1) * 0.6 };
+  const crest = { y: 8.0 * size, rx: (fresh ? 9.4 : 9.1) * size, ry: (fresh ? 5.6 : 5.3) * size };
+  const hole = { y: 9.0 * size, rx: (fresh ? 6.8 : 6.4) * size, ry: (fresh ? 3.2 : 2.9) * size };
+  const moss = k.fbm(32 * size, 4, 2, 331);
+  const segments = 18 * size;
   /** Ragged by angle: rubble, not a turned ring. */
   const wob = (x, y, e, amount) => {
     const a = Math.atan2((y + 0.5 - e.y) / e.ry, (x + 0.5 - cx) / e.rx);
-    const u = ((a + Math.PI) / (2 * Math.PI)) * 18;
+    const u = ((a + Math.PI) / (2 * Math.PI)) * segments;
     const i = Math.floor(u);
     const s = k.smooth(u - i);
-    return 1 + (k.lerp(k.hash(i % 18, 0, 341 + v), k.hash((i + 1) % 18, 0, 341 + v), s) - 0.5) * amount;
+    return 1 + (k.lerp(k.hash(i % segments, 0, 341 + v), k.hash((i + 1) % segments, 0, 341 + v), s) - 0.5) * amount;
   };
   const q = (x, y, e, amount = 0) => Math.hypot((x + 0.5 - cx) / e.rx, (y + 0.5 - e.y) / e.ry) / (amount ? wob(x, y, e, amount) : 1);
   const wall = (x, y) => q(x, y, outer, 0.16) <= 1 && q(x, y, hole, 0.1) >= 1;
@@ -485,9 +489,9 @@ function craterRim(v) {
     return P.c(lit > 0.35 ? 'sand1' : lit > -0.25 ? 'soil3' : 'soil2');
   });
   // Boulders on the rim (light top left, dark below), soil thrown out with them, or lichen once weathered.
-  for (let s = 0; s < (fresh ? 9 : 6); s++) {
-    const x = Math.floor(k.hash(s, 3, 339 + v) * 23);
-    const y = Math.floor(k.hash(s, 4, 339 + v) * 15);
+  for (let s = 0; s < (fresh ? 9 : 6) * size * size; s++) {
+    const x = Math.floor(k.hash(s, 3, 339 + v) * (24 * size - 1));
+    const y = Math.floor(k.hash(s, 4, 339 + v) * (16 * size - 1));
     const qc = q(x, y, crest, 0.1);
     if (!wall(x, y) || !wall(x + 1, y + 1) || qc < 0.95) continue;
     if (!fresh) {
@@ -632,6 +636,6 @@ function falloutFilm() {
 }
 
 module.exports = {
-  sprites: { meteor_streak: streak, flash, dust_cloud: dustCloud, mushroom, water_fountain: waterFountain, crater_rim: craterRim, stump },
+  sprites: { meteor_streak: streak, flash, dust_cloud: dustCloud, mushroom, water_fountain: waterFountain, crater_rim: (v) => craterRim(v), crater_rim_large: (v) => craterRim(v, 2), stump },
   textures: { ground_crater: groundCrater, ground_scorched: groundScorched, ground_ash: groundAsh, fallout_film: falloutFilm },
 };

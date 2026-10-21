@@ -77,6 +77,44 @@ namespace SE {
     crossed: boolean;
   }
 
+  /**
+   * A wandering group of the newly sentient species before it settles
+   * (docs/zivilisation-spec.md §2.13): it walks `path` to its next camp,
+   * camps there a while and at last founds a village. No tribe yet: peoples
+   * begin with the first villages.
+   */
+  export interface Band {
+    readonly id: number;
+    /** Read by the map: tiles from its last camp to the next one; just [tile] while camped. */
+    path: number[];
+    /** Read by the map: index into `path` of the tile it stands on. */
+    step: number;
+    /** Read by the map: tick it pitched its camp on `path[step]`, or -1 while it walks. */
+    campAt: number;
+    /** Read by the map: the tick it strikes camp (and walks on, or settles there). */
+    breakAt: number;
+    /** Read by the map: shelters its camp has, 1..CAMP_SHELTERS_MAX. */
+    shelters: number;
+    /** People it carries; a village it founds starts with them. */
+    pop: number;
+    /** Tick it set out: how long it has wandered. */
+    since: number;
+    /** Tiles of its last camps, newest last, so it moves on rather than back. */
+    camps: number[];
+  }
+
+  /**
+   * Shelters of a band's camp standing at `tick`: one more each tick after
+   * it is pitched, one fewer each tick before it is struck, the last one
+   * still standing on the tick it is struck (the map draws between ticks, so
+   * the camp never vanishes before the band walks on or its village
+   * appears); 0 while it walks.
+   */
+  export function campShelters(b: Band, tick: number): number {
+    if (b.campAt < 0) return 0;
+    return Math.max(0, Math.min(tick - b.campAt + 1, b.breakAt - tick + 1, b.shelters));
+  }
+
   export interface Outbreak {
     readonly city: number;
     until: number;
@@ -100,20 +138,24 @@ namespace SE {
     /** Tile it happened on. */
     readonly at: number;
     /** Set for news worth a chronicle entry: unique key, title and what changes. */
-    readonly chronicle?: { readonly key: string; readonly title: string; readonly change: string };
+    readonly chronicle?: { readonly key: string; readonly title: string; readonly change: string; readonly major?: boolean };
+    /** News of the space project (spaceport.ts): the player can open its window from it. */
+    readonly space?: boolean;
   }
 
   export class CivState {
     readonly cities: City[] = [];
     readonly tribes: Tribe[] = [];
     readonly settlers: Settler[] = [];
+    /** Read by the map: wandering groups before (and while) the first villages are founded. */
+    readonly bands: Band[] = [];
     readonly outbreaks: Outbreak[] = [];
     readonly conflicts: Conflict[] = [];
     /** What the last step (or sync) has to tell the player; emptied at the start of each. */
     readonly news: CivNews[] = [];
     /** False until the records were derived from the grid (new planet, after a load). */
     synced = false;
-    /** Next id for cities, tribes and settlers alike. */
+    /** Next id for cities, tribes, settlers and bands alike. */
     nextId = 1;
     /** Bumped on every change the map shows: founding, loss, tribe, name, move. */
     revision = 0;
@@ -124,6 +166,10 @@ namespace SE {
     /** Highest tech level on the planet so far, and the tick it was reached (after a load: the load). */
     topTech = 0;
     topSince = 0;
+    /** A band has settled since the records were last cleared (the chronicle keeps it across a load: bands.ts). */
+    settled = false;
+    /** Every people has sworn off the bomb after its first use (conflict.ts); kept in the save. */
+    atomBan = false;
     /** No conflict before this tick: per pair of tribes (`peaceKey`), and per tribe against anyone (`restKey`). */
     readonly peace = new Map<string, number>();
     private readonly byTile = new Map<number, City>();
@@ -134,6 +180,7 @@ namespace SE {
       this.cities.length = 0;
       this.tribes.length = 0;
       this.settlers.length = 0;
+      this.bands.length = 0;
       this.outbreaks.length = 0;
       this.conflicts.length = 0;
       this.peace.clear();
@@ -146,6 +193,8 @@ namespace SE {
       this.calmUntil = 0;
       this.topTech = 0;
       this.topSince = 0;
+      this.settled = false;
+      this.atomBan = false;
       this.revision++;
     }
 

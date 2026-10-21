@@ -214,7 +214,9 @@ namespace SE {
       }
       const coal = `${fmt.int(world.coal)} Gt`;
       const mined = `${fmt.int(world.coalMined)} Gt`;
-      if (!this.changed(`${Array.from(world.techCounts).join(',')}|${world.sentientClass}|${coal}|${mined}`)) return;
+      const oil = `${fmt.int(world.oil)} Gt`;
+      const pumped = `${fmt.int(world.oilMined)} Gt`;
+      if (!this.changed(`${Array.from(world.techCounts).join(',')}|${world.sentientClass}|${coal}|${mined}|${oil}|${pumped}`)) return;
       const road = make('ol', `tech-road${cities === 0 ? ' dormant' : ''}`);
       for (let t = 1; t < TECH_COUNT; t++) {
         const count = world.techCounts[t];
@@ -233,7 +235,9 @@ namespace SE {
         facts.appendChild(s);
       };
       if (cities === 0) {
-        this.host.appendChild(make('p', 'graph-note', 'Noch gibt es keine Städte. Eine Zivilisation entsteht, wenn eine Tiergruppe Intelligenz entwickelt – oder durch den Monolithen.'));
+        this.host.appendChild(make('p', 'graph-note', world.sentientClass !== Life.None
+          ? `Noch gibt es keine Städte. Kleine Gruppen der ${mindName(world)} ziehen umher; bald werden sie sesshaft.`
+          : 'Noch gibt es keine Städte. Eine Zivilisation entsteht, wenn Hominiden (nach dem Kometen) oder überlebende Dinosaurier Intelligenz entwickeln – oder durch den Monolithen.'));
       } else {
         stat(uiIcon('city'), 'Städte', fmt.int(cities));
         stat(eventIcon('civilization'), 'Höchste Stufe', TECH_NAMES[top]);
@@ -242,6 +246,8 @@ namespace SE {
       }
       stat(evoIcon('clubmosses'), 'Kohlevorrat', coal);
       if (world.coalMined > 0) stat(evoIcon('clubmosses'), 'Abgebaute Kohle', mined);
+      stat(uiIcon('oil'), 'Ölvorrat', oil);
+      if (world.oilMined > 0) stat(uiIcon('oil'), 'Gefördertes Öl', pumped);
       this.host.appendChild(facts);
     }
 

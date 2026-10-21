@@ -274,7 +274,7 @@ test('a great people outweighs a lone city: the strength counts every city of a 
   assert.ok(Math.abs(w.cityPop[near.tile] - 0.7) < 1e-6, 'only the two cities at war lose people');
 });
 
-test('atomic war needs two atomic peoples with four atomic cities and a warlike budget, and never falls in a war', () => {
+test('atomic war needs two atomic peoples with four atomic cities and a warlike budget, never falls in a war and only once', () => {
   const s = fixture([[40, 40, 52, 47], [60, 40, 72, 47]]);
   const { SE, world: w, params } = s;
   for (const [x, y] of [[42, 43], [50, 43], [62, 43], [70, 43]]) {
@@ -301,17 +301,16 @@ test('atomic war needs two atomic peoples with four atomic cities and a warlike 
     assert.equal(strikes(20000).length, 0, 'never at the default budget');
     warlike(params);
     const war = strikes(20000);
-    assert.ok(war.length >= 3, `${war.length} strikes`);
-    for (const st of war) {
-      assert.notEqual(st.by.id, st.on.id);
-      assert.equal(st.target.tribe, st.on.id, 'the target belongs to the rival');
-      assert.equal(st.calm, st.tick + SE.CONFLICT_GAP, 'a pause follows');
-      assert.deepEqual(st.rest, [st.tick + SE.CONFLICT_TRIBE_REST, st.tick + SE.CONFLICT_TRIBE_REST], 'both peoples rest');
-    }
-    for (let n = 1; n < war.length; n++) assert.ok(war[n].tick - war[n - 1].tick >= SE.CONFLICT_TRIBE_REST);
-    assert.equal(hits.length, war.length);
-    assert.ok(hits.every((h) => h.kind === SE.EventKind.AtomicBomb && war.some((st) => st.target.tile === h.tile)));
+    assert.equal(war.length, 1, 'the peoples swear off the bomb after its first use');
+    const [st] = war;
+    assert.notEqual(st.by.id, st.on.id);
+    assert.equal(st.target.tribe, st.on.id, 'the target belongs to the rival');
+    assert.equal(st.calm, st.tick + SE.CONFLICT_GAP, 'a pause follows');
+    assert.deepEqual(st.rest, [st.tick + SE.CONFLICT_TRIBE_REST, st.tick + SE.CONFLICT_TRIBE_REST], 'both peoples rest');
+    assert.ok(w.civ.atomBan);
+    assert.deepEqual(hits, [{ kind: SE.EventKind.AtomicBomb, tile: st.target.tile }]);
 
+    w.civ.atomBan = false;
     const [c0, c1, c2, c3] = w.civ.cities;
     SE.startConflict(w, c1, c2);
     assert.equal(strikes(20000).length, 0, 'never during a conventional war');
@@ -344,6 +343,45 @@ test('atomic war needs two atomic peoples with four atomic cities and a warlike 
   const names = t.world.civ.tribes.map((tr) => tr.name);
   assert.ok(m[2] !== m[3] && names.includes(m[2]) && names.includes(m[3]), 'names two peoples');
   assert.ok(t.world.civ.cities.some((c) => c.name === m[1]), 'names the target');
+});
+
+test('the bomb ends a war of an atomic people against one not there yet, then every people swears it off', () => {
+  const s = fixture([[40, 40, 47, 47], [53, 40, 60, 47]]);
+  const { SE, world: w, params } = s;
+  const [ia, ib] = [at(SE, 43, 43), at(SE, 56, 43)];
+  w.tech[ia] = SE.Tech.Atomic;
+  w.tech[ib] = SE.Tech.Industrial;
+  w.cityPop[ia] = w.cityPop[ib] = 0.7;
+  s.civ.sync(w, params);
+  const [a, b] = [ia, ib].map((i) => w.civ.cityAt(i));
+  assert.notEqual(a.tribe, b.tribe);
+  const sink = SE.civEventSink;
+  const hits = [];
+  SE.civEventSink = (kind, x, y) => hits.push({ kind, tile: at(SE, x, y) });
+  try {
+    // The people without the bomb attacks; it falls on its city all the same.
+    const k = SE.startConflict(w, b, a);
+    w.ticks = k.until;
+    SE.stepConflicts(w, params);
+    assert.equal(w.civ.conflicts.length, 0, 'the bomb ends the war');
+    assert.deepEqual(hits, [{ kind: SE.EventKind.AtomicBomb, tile: ib }]);
+    assert.ok(w.civ.atomBan);
+    assert.equal(w.civ.calmUntil, w.ticks + SE.CONFLICT_GAP, 'peace follows as after a war');
+    const texts = w.civ.news.filter((n) => n.chronicle).map((n) => n.text);
+    assert.ok(texts.some((t) => t.startsWith(`Atombombe auf ${b.name}!`)), texts.join(' | '));
+    assert.ok(texts.some((t) => t.includes('nie wieder Atomwaffen')), texts.join(' | '));
+
+    assert.ok(SE.restoreCiv(w, params, JSON.parse(JSON.stringify(SE.civToJSON(w)))));
+    assert.ok(w.civ.atomBan, 'the ban outlives a load');
+    const next = SE.startConflict(w, w.civ.cityAt(ia), w.civ.cityAt(ib));
+    assert.equal(SE.atomicEnd(w, next), null, 'the next war ends as usual');
+    w.civ.atomBan = false;
+    w.tech[ib] = SE.Tech.Atomic;
+    assert.equal(SE.atomicEnd(w, next), null, 'two atomic peoples fight without the bomb');
+    assert.equal(hits.length, 1);
+  } finally {
+    SE.civEventSink = sink;
+  }
 });
 
 test('the same seed fights the same wars', () => {

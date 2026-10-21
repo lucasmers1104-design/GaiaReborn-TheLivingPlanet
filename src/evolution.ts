@@ -71,6 +71,12 @@ namespace SE {
     readonly life?: Life;
     readonly flora?: Flora;
     readonly parent: string | null;
+    /**
+     * The parent must have reached this sub-species (a living population of
+     * it), and the group is founded beside that population: the birds arise
+     * from the last dinosaur stage, the bird precursors.
+     */
+    readonly parentStage?: number;
     /** Annotation on the lineage line, e.g. "über Synapsiden". */
     readonly lineageNote?: string;
     /** Extra oxygen condition, percent. Animals derive theirs from LIFE. */
@@ -603,7 +609,8 @@ namespace SE {
       ecosystem: 'Die meisten frühen Säugetiere waren kleine, nachtaktive Insektenfresser; später nutzen sie Samen, Früchte und Gräser.',
       benefits: [
         'Leben auch in kalten Regionen und in der Tundra',
-        'Öffnet Wale sowie Huftiere & Weidetiere',
+        'Spielregel: Bis ein Komet die Zeit der Dinosaurier beendet, entwickeln sie sich höchstens bis zu den Beuteltieren',
+        'Öffnet nach dem Kometeneinschlag Wale sowie Huftiere & Weidetiere',
         'Können Intelligenz entwickeln',
       ],
       event: {
@@ -619,11 +626,11 @@ namespace SE {
       habitat: { tags: ['dryland', 'forest', 'atmosphere'], text: 'Offenes Land und Wälder' },
       eco: [{ kind: 'food', label: 'Große Pflanzenmengen', any: ['ferns', 'clubmosses', 'seedPlants', 'conifers'] }],
       cost: 110, col: 8, row: 3,
-      description: 'Aus frühen Archosauriern hervorgegangen: riesige Pflanzenfresser wie Sauropoden und Räuber wie Theropoden.',
+      description: 'Aus frühen Archosauriern hervorgegangen: riesige Pflanzenfresser wie Sauropoden und Räuber wie Theropoden. Ihre letzte Unterart, die Vogelvorläufer, sind kleine gefiederte Raubdinosaurier aus dem Umfeld der Vogelentstehung.',
       ecosystem: 'Große Pflanzenfresser brauchen viel Vegetation, Räuber jagen andere Wirbeltiere.',
       benefits: [
         'Große Landtiere in Ebenen und Wäldern',
-        'Öffnet die Vögel',
+        'Öffnet die Vögel, sobald Vogelvorläufer leben',
         'Können Intelligenz entwickeln',
       ],
       event: {
@@ -634,15 +641,16 @@ namespace SE {
     },
     {
       id: 'birds', kingdom: 'animal', name: 'Vögel', short: 'gefiederte Dinosaurier',
-      life: Life.Avian, parent: 'dinosaurs', lineageNote: 'Theropoden',
+      life: Life.Avian, parent: 'dinosaurs', parentStage: SUBSPECIES_PER_CLASS - 1, lineageNote: 'Vogelvorläufer · Theropoden',
       habitat: { tags: ['forest', 'dryland', 'atmosphere'], text: 'Fast überall – auch Inseln' },
       eco: [{ kind: 'food', label: 'Nahrung', any: ['insects', 'pollinators', 'seedPlants', 'flowering'] }],
       cost: 120, col: 9, row: 3,
-      description: 'Vögel sind die heute lebenden Nachfahren gefiederter Raubdinosaurier. Fliegend überqueren sie Meere und Gebirge.',
+      description: 'Vögel sind die heute lebenden Nachfahren kleiner, gefiederter Raubdinosaurier. Sie entstehen bei einer lebenden Population der Vogelvorläufer, der letzten Dinosaurier-Unterart. Fliegend überqueren sie Meere und Gebirge.',
       ecosystem: 'Sie fressen Insekten und Samen und verbreiten Samen weit über das Land.',
       benefits: [
         'Vögel überqueren Meere und besiedeln Inseln',
         'Samenpflanzen verbreiten sich mit Vögeln weiter (mehr Fernverbreitung)',
+        'Die ersten Vögel stellen dich vor die Wahl: Überleben die Dinosaurier, oder schlägt ein Komet ein?',
         'Können Intelligenz entwickeln',
       ],
       event: {
@@ -661,6 +669,7 @@ namespace SE {
       ecosystem: 'Als große Räuber und Planktonfresser brauchen sie reiche Fischbestände oder Krebstiere.',
       benefits: [
         'Säugetiere erobern die Hochsee',
+        'Spielregel: erst nach dem Kometeneinschlag erreichbar',
         'Können Intelligenz entwickeln',
       ],
       event: {
@@ -679,7 +688,7 @@ namespace SE {
       ecosystem: 'Ohne Grasland keine großen Herden – sie sind die Antwort der Tierwelt auf die Ausbreitung der Gräser.',
       benefits: [
         'Große Herden in Graslandschaften',
-        'Beute für Dinosaurier',
+        'Spielregel: erst nach dem Kometeneinschlag erreichbar',
       ],
       event: {
         title: 'Herden im Gras',
@@ -761,6 +770,10 @@ namespace SE {
     readonly spontaneous?: boolean;
     /** Tile of the first founding population, for "show on the map". */
     readonly at?: number;
+    /** Gone for good: the notice shows its picture greyed under an R.I.P. band. */
+    readonly rip?: boolean;
+    /** The sub-species of the node's class it is about; its portrait is the picture. */
+    readonly stage?: number;
   }
 
   /** Everything about the tree that belongs in a save file. */
@@ -791,7 +804,7 @@ namespace SE {
 
   /* ------------------------------------------------------------ conditions -- */
 
-  export type CondKind = 'lineage' | 'atmosphere' | 'ocean' | 'habitat' | 'food' | 'partner' | 'soil' | 'cost';
+  export type CondKind = 'lineage' | 'era' | 'atmosphere' | 'ocean' | 'habitat' | 'food' | 'partner' | 'soil' | 'cost';
   export type NodeState = 'locked' | 'partial' | 'available' | 'developed';
 
   export interface CondResult {
@@ -874,25 +887,38 @@ namespace SE {
       return 0;
     }
 
-    /** Is the node's group present on tile i? */
-    private presentAt(world: WorldState, n: EvoNode, i: number): boolean {
-      if (n.life !== undefined) return world.lifeDensity[i * LIFE_COUNT + n.life] > 0;
+    /** Is the node's group present on tile i, at sub-species `stage` or above? */
+    private presentAt(world: WorldState, n: EvoNode, i: number, stage = 0): boolean {
+      if (n.life !== undefined) {
+        const k = i * LIFE_COUNT + n.life;
+        return world.lifeDensity[k] > 0 && world.lifeStage[k] >= stage;
+      }
       if (n.flora !== undefined) return (world.flora[i] & (1 << n.flora)) !== 0;
       return false;
     }
 
     /** Present on tile i or any tile within `r` (Chebyshev, wrapping in X). */
-    private presentNear(world: WorldState, n: EvoNode, i: number, r: number): boolean {
+    private presentNear(world: WorldState, n: EvoNode, i: number, r: number, stage = 0): boolean {
       const x = i % GRID_W;
       const y = (i / GRID_W) | 0;
       for (let dy = -r; dy <= r; dy++) {
         const yy = y + dy;
         if (yy < 0 || yy >= GRID_H) continue;
         for (let dx = -r; dx <= r; dx++) {
-          if (this.presentAt(world, n, idx(wrapX(x + dx), yy))) return true;
+          if (this.presentAt(world, n, idx(wrapX(x + dx), yy), stage)) return true;
         }
       }
       return false;
+    }
+
+    /** Tiles on which a node's parent lives at the sub-species the node needs (parentStage). */
+    private parentPresence(world: WorldState, n: EvoNode): number {
+      if (!n.parent) return 0;
+      const p = evoNode(n.parent);
+      if (n.parentStage === undefined || p.life === undefined) return this.presence(world, p);
+      let tiles = 0;
+      for (let s = n.parentStage; s < SUBSPECIES_PER_CLASS; s++) tiles += world.lifeStageCounts[p.life * SUBSPECIES_PER_CLASS + s];
+      return tiles;
     }
 
     /* ---- founding sites ---- */
@@ -928,7 +954,7 @@ namespace SE {
         for (let k = 0; k < TILE_COUNT && out.length < limit; k++) {
           const i = scatter(k);
           if (world.isWater(i) !== sea) continue;
-          if (parent && !this.presentNear(world, parent, i, radius)) continue;
+          if (parent && !this.presentNear(world, parent, i, radius, n.parentStage)) continue;
           const room = settle ? this.settledRoom(world, i, c) : this.life.roomFor(world, i, c);
           if (room < SITE_MIN_ROOM) continue;
           out.push(i);
@@ -1011,15 +1037,36 @@ namespace SE {
         const p = evoNode(n.parent);
         const developed = evo.isDeveloped(p.id);
         const living = this.presence(world, p) > 0;
-        conds.push({
-          kind: 'lineage',
-          label: `Abstammung: geht aus ${p.name} hervor`,
-          need: p.name,
-          met: developed && living,
-          detail: !developed ? `${p.name} zuerst entwickeln`
-            : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
-              : 'Vorfahren leben auf dem Planeten',
-        });
+        if (n.parentStage !== undefined && p.life !== undefined) {
+          const form = subspeciesName(p.life, n.parentStage);
+          const ready = this.parentPresence(world, n) > 0;
+          conds.push({
+            kind: 'lineage',
+            label: `Abstammung: geht aus ${form} hervor (${p.name}, Unterart ${n.parentStage + 1} von ${SUBSPECIES_PER_CLASS})`,
+            need: `lebende ${form}`,
+            met: developed && ready,
+            detail: !developed ? `${p.name} zuerst entwickeln`
+              : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
+                : !ready ? `${form} leben noch nicht – sie entstehen als letzte Unterart der ${p.name}`
+                  : `${form} leben auf dem Planeten`,
+          });
+        } else {
+          conds.push({
+            kind: 'lineage',
+            label: `Abstammung: geht aus ${p.name} hervor`,
+            need: p.name,
+            met: developed && living,
+            detail: !developed ? `${p.name} zuerst entwickeln`
+              : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
+                : 'Vorfahren leben auf dem Planeten',
+          });
+        }
+      }
+
+      // --- a rule of this game: the dinosaurs' era (dinoera.ts) ---
+      const bar = evo.isDeveloped(n.id) ? '' : dinoEraStepBar(world, n.id);
+      if (bar) {
+        conds.push({ kind: 'era', label: bar, need: 'das Ende der Dinosaurier-Ära', met: false, detail: '' });
       }
 
       // --- atmosphere ---
@@ -1065,7 +1112,7 @@ namespace SE {
       // --- habitat ---
       let sites = 0;
       if (withSites) {
-        const lineageOk = !n.parent || (evo.isDeveloped(n.parent) && this.presence(world, evoNode(n.parent)) > 0);
+        const lineageOk = !n.parent || (evo.isDeveloped(n.parent) && this.parentPresence(world, n) > 0);
         const o2Ok = world.o2 >= o2 && world.oceanO2 >= oceanO2;
         if (lineageOk && o2Ok) sites = this.foundingSites(world, params, n, 60).length;
         const near = n.parent ? ` nahe ${evoNode(n.parent).name}` : '';
@@ -1136,6 +1183,9 @@ namespace SE {
       if (!n) return { ok: false, reason: 'Unbekannter Entwicklungsschritt.' };
       const evo = world.evo;
       if (evo.isDeveloped(id)) return { ok: false, reason: `${n.name} ist bereits entwickelt.` };
+      // Before anything else, the developer mode included: a rule of the game, not a condition of nature.
+      const bar = dinoEraStepBar(world, id);
+      if (bar) return { ok: false, reason: bar };
 
       const status = this.evaluate(world, params, n);
       this.status.set(id, status);
@@ -1153,6 +1203,7 @@ namespace SE {
       evo.readySince.delete(id);
       const founded = this.found(world, n, sites);
       world.refreshDerived();
+      dinoEraOnDeveloped(world, id);
 
       this.record(world, {
         key: `evo:${id}`, kind: 'evolution', nodeId: id,
@@ -1223,7 +1274,19 @@ namespace SE {
           this.flora.plant(world, n.flora, i, SPAWN_PLANT_COVER);
         }
       });
+      if (n.flora === Flora.FreshwaterAlgae) this.seedRiverMouths(world, n.flora);
       return tiles;
+    }
+
+    /** Plant a group on every river mouth it can live on: the last land tile of a river before the sea. */
+    private seedRiverMouths(world: WorldState, g: Flora): void {
+      const { elevation: e, riverLevel: level, riverDown: down } = world;
+      for (let i = 0; i < TILE_COUNT; i++) {
+        if (e[i] < 0 || level[i] <= 0) continue;
+        const d = down[i];
+        if (d < 0 || e[d] >= 0) continue;
+        if (this.flora.suit(world, g, i) > 0) this.flora.plant(world, g, i, SPAWN_PLANT_COVER);
+      }
     }
 
     /**
@@ -1355,6 +1418,8 @@ namespace SE {
           const alive = this.presence(world, n) > 0;
           if (!alive && !evo.extinct.has(id)) {
             evo.extinct.add(id);
+            // Its R.I.P. notice came when the era ended (lycopsidMilestones).
+            if (n.flora !== undefined && floraGone(world, n.flora)) continue;
             this.record(world, {
               key: `extinct:${id}:${world.ticks}`, kind: 'extinction', nodeId: id,
               title: `${n.name} ausgestorben`,
@@ -1372,7 +1437,13 @@ namespace SE {
       }
 
       for (const e of oxygenMilestones(world)) this.record(world, e);
-      for (const e of lycopsidMilestones(world)) this.record(world, e);
+      // A save without the record of what died out learns it now: history, not news.
+      const quiet = world.fatesQuiet;
+      world.fatesQuiet = false;
+      for (const e of [...stepFates(world), ...lycopsidMilestones(world)]) {
+        if (quiet) evo.reported.add(e.key);
+        this.record(world, e);
+      }
       for (const e of cactusMilestones(world)) this.record(world, e);
 
       // Statuses are cheap to read and moderately costly to build: rebuild a

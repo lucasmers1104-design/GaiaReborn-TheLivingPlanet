@@ -30,7 +30,7 @@ test('the chance is nil during the grace period, then grows and is capped', () =
   assert.equal(c(0), 0);
   assert.equal(c(SE.SPONTANEOUS_GRACE - 1), 0);
   assert.ok(c(SE.SPONTANEOUS_GRACE) > 0);
-  assert.ok(c(SE.SPONTANEOUS_GRACE + 2000) > c(SE.SPONTANEOUS_GRACE + 500));
+  assert.ok(c(SE.SPONTANEOUS_GRACE + 300) > c(SE.SPONTANEOUS_GRACE + 100));
   assert.equal(c(1e7), c(2e7), 'capped');
   assert.ok(c(1e7) < 0.01, 'never more than a small chance per tick');
   assert.equal(c(5000, 0), 0, 'evolution rate 0 stops it');

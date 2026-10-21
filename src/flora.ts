@@ -161,7 +161,7 @@ namespace SE {
           const waterF = 1 - def.needsWater * (1 - this.waterAccess[i]);
           const altF = e <= def.maxElevation ? 1 : clamp(1 - (e - def.maxElevation) / 0.15, 0, 1);
           const s = tempF * wetF * waterF * altF;
-          return g === Flora.Clubmosses ? s * clubmossCompetition(world, i) : s;
+          return s * floraCompetition(world, g, i);
         }
       }
     }
@@ -175,6 +175,8 @@ namespace SE {
     problem(world: WorldState, g: Flora, i: number): string | null {
       const def = FLORA[g];
       const e = world.elevation[i];
+      const gone = floraGoneReason(world, g);
+      if (gone) return gone;
       if (def.realm === 'sea' && e >= 0) return 'braucht flaches Meerwasser';
       if (def.realm === 'sea' && e <= COAST_DEPTH) return 'braucht lichtdurchflutetes Küstenmeer';
       if (def.realm !== 'sea' && e < 0) return 'wächst nicht im Meer';
@@ -189,7 +191,8 @@ namespace SE {
         if (e > def.maxElevation + 0.1) return 'das Gelände liegt zu hoch';
       }
       if (this.suit(world, g, i) < SPREAD_MIN) {
-        if (g === Flora.Clubmosses && clubmossCompetition(world, i) < 1) return 'Nadel- und Laubbäume verdrängen dort die Bärlappe';
+        if (g === Flora.Clubmosses && floraCompetition(world, g, i) < 1) return 'Nadel- und Laubbäume verdrängen dort die Bärlappe';
+        if (floraCompetition(world, g, i) < 1) return `${floraRivalNames(g)} verdrängen sie dort`;
         return 'die Bedingungen sind dort zu ungünstig';
       }
       return null;
@@ -271,6 +274,7 @@ namespace SE {
       const pollBase = Life.Pollinator;
 
       let present = 0;
+      const iceShare = cometIceShare(world);
 
       // --- growth, die-back and which group leads each tile ---
       for (let i = 0; i < TILE_COUNT; i++) {
@@ -287,6 +291,10 @@ namespace SE {
         let cap = 0;
         let top = Flora.None;
         let topScore = 0;
+        // Within the reach of the comet's winter (cometwinter.ts) every group holds on
+        // until it is over, under the ice at a trace of cover.
+        const dormant = iceShare > 0 && cometIceAt(world, i, COMET_ICE_SHARE);
+        const frozen = dormant && cometIceAt(world, i, iceShare);
 
         let m = mask;
         while (m !== 0) {
@@ -294,7 +302,7 @@ namespace SE {
           m &= m - 1;
           const s = this.suit(world, g as Flora, i);
           if (s < DIEBACK) {
-            if (rng.chance(0.06)) mask &= ~(1 << g);
+            if (!dormant && rng.chance(0.06)) mask &= ~(1 << g);
             continue;
           }
           const k = this.reach(world, g as Flora, s, pollinated, insects);
@@ -316,6 +324,7 @@ namespace SE {
         } else {
           next = v - v * 0.06;
         }
+        if (frozen) next = COMET_ICE_COVER;
         vegetation[i] = next < 0.002 ? 0 : Math.min(1, next);
       }
       this.presentMask = present;
@@ -375,7 +384,7 @@ namespace SE {
 
       this.globalDispersal(world, present);
       clubmossSpores(world, this, present);
-      updateLycopsidEra(world, present);
+      updateFloraEras(world, present);
     }
 
     /**

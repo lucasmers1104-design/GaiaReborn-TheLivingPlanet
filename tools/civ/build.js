@@ -29,6 +29,15 @@ function loadEras() {
   return out;
 }
 
+/** Recipes of the blocks of no era: camp.js, fire.js, smoke.js (when drawn) and the pennant. */
+function loadShared() {
+  const out = { banner: (v) => banner(v.index) };
+  for (const file of ['camp', 'fire', 'smoke']) {
+    if (fs.existsSync(path.join(__dirname, `${file}.js`))) Object.assign(out, require(`./${file}`).blocks);
+  }
+  return out;
+}
+
 /** Problems of one sprite against the style rules. */
 function spriteProblems(id, t, box) {
   const out = [];
@@ -52,13 +61,14 @@ function spriteProblems(id, t, box) {
 /** `only`: restrict to one era id (the banner is always built). */
 function build(only = null) {
   const eras = loadEras();
+  const shared = loadShared();
   const problems = [];
   const blocks = {};
   for (const b of C.BLOCKS) {
     if (b.era && only && b.era !== only) continue;
-    const recipe = b.era ? eras[b.era]?.blocks?.[b.id] : (v) => banner(v.index);
+    const recipe = b.era ? eras[b.era]?.blocks?.[b.id] : shared[b.id];
     if (!recipe) {
-      if (eras[b.era]) problems.push(`${b.id}: no recipe in ${b.era}.js`);
+      if (b.era && eras[b.era]) problems.push(`${b.id}: no recipe in ${b.era}.js`);
       continue;
     }
     blocks[b.id] = variantsOf(b).map((v) => {

@@ -14,18 +14,12 @@ namespace SE {
   /** Indexed by EventKind. */
   export const HAZARD_CHAINS: (HazardChainRule | undefined)[] = [];
 
-  /** Dry plant cover a fire could start in. */
-  function dryFuel(world: WorldState, i: number): boolean {
-    return world.elevation[i] >= 0 && world.vegetation[i] >= CHAIN_FIRE_COVER && world.moisture[i] < CHAIN_FIRE_MOISTURE &&
-      HAZARD_RULES[EventKind.Fire]?.refuse(world, i % GRID_W, (i / GRID_W) | 0) === '';
-  }
-
-  /** A fire on one of `tiles`, the one with the lowest hash, so the choice is stable. */
+  /** A fire on one of `tiles` that can catch (fireCanCatch), the one with the lowest hash, so the choice is stable. */
   function fireAmong(world: WorldState, h: Hazard, tiles: Iterable<number>): { kind: EventKind; x: number; y: number } | null {
     let best = -1;
     let bestRoll = 2;
     for (const i of tiles) {
-      if (!dryFuel(world, i)) continue;
+      if (!fireCanCatch(world, i)) continue;
       const roll = hazardRoll(world.seed ^ h.id, i, 0xc4a1);
       if (roll < bestRoll) { bestRoll = roll; best = i; }
     }
@@ -50,7 +44,8 @@ namespace SE {
 
   // Ring 2 of the blast and the tiles beside it.
   HAZARD_CHAINS[EventKind.Meteor] = (world, h) =>
-    atSea(world, h) ? { kind: EventKind.TidalWave, x: h.x, y: h.y } : fireAmong(world, h, ringTiles(h.x, h.y, 2, 3));
+    atSea(world, h) ? { kind: EventKind.TidalWave, x: h.x, y: h.y }
+      : fireAmong(world, h, ringTiles(h.x, h.y, 2 * meteorScale(h), 3 * meteorScale(h)));
 
   // A bolt of the tick before on dry plants; the storm has soaked its strip, so mostly one in the bands.
   HAZARD_CHAINS[EventKind.Hurricane] = (world, h) =>

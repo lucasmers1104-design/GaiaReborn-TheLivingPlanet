@@ -748,6 +748,238 @@ function dolphin(f, west) {
   return t;
 }
 
+/* ----------------------------------------------------------- salmon -- */
+
+/**
+ * Leap box: waterline row, exit column (catalog `mouth`), span and height of
+ * the body centre's arc, px. Short and steep, so the whole leap stays over a
+ * river whichever way it runs; spray stays within x 1 .. w − 2.
+ */
+const SALMON = { w: 16, h: 16, water: 12, exit: 4, span: 6, high: 8.5 };
+/** Arc progress of the body centre per frame (0 out, 1 back in); null: under again, only the splash is left. */
+const SALMON_P = [-0.07, 0.08, 0.22, 0.36, 0.5, 0.64, 0.78, 0.93, null, null];
+/** The frame the fish flashes in the sun, and the frame the entry splash starts. */
+const SALMON_APEX = 4;
+const SALMON_ENTRY = 7;
+/**
+ * A salmon from the side, east-facing: snout at u = len, half-heights along
+ * s = u / len, forked tail fin in (u, v), v towards the back. Spawning
+ * colours: dark back, red flank, silver belly; each ramp shadow, lit.
+ */
+const FISH = {
+  len: 6.3,
+  prof: [[0, 0.5], [0.25, 1.15], [0.55, 1.7], [0.8, 1.45], [0.95, 0.9], [1, 0.55]],
+  tail: [[0.5, 0], [-1.4, 1.5], [-1.8, 1.1], [-0.7, 0], [-1.8, -1.1], [-1.4, -1.5]],
+  back: ['rock0', 'rock1'],
+  flank: ['red0', 'red1'],
+  belly: ['ice3', 'white0'],
+};
+
+/** Spray `a` frames after the fish cut the surface at column x0: drops up and back, foam, a small ring. */
+function spray(t, free, x0, a, seed) {
+  const W = SALMON.water;
+  const put = (x, y, name) => { if (x >= 1 && x <= SALMON.w - 2 && free(x, y)) t.set(x, y, P.c(name)); };
+  for (let j = 0; j < 6; j++) {
+    const vx = (k.hash(j, 1, seed) - 0.5) * 2;
+    const vy = 1.1 + k.hash(j, 2, seed) * 0.9;
+    const tt = a + 0.7;
+    const up = vy * tt - 0.45 * tt * tt;
+    if (up >= 0.5) put(Math.round(x0 + vx * tt), Math.round(W - up), a < 1 ? 'white0' : a < 2 ? 'ice4' : 'ice3');
+  }
+  if (a <= 1) for (let dx = -2; dx <= 2; dx++) if (k.hash(dx, a, seed + 5) < (Math.abs(dx) <= 1 ? 0.95 : 0.6)) put(x0 + dx, W, Math.abs(dx) <= 1 && a === 0 ? 'white0' : 'ice3');
+  if (a < 1) return;
+  const rx = 1.2 + a * 0.9;
+  const keep = 1.15 - a * 0.3;
+  for (let y = W - 1; y <= W + 1; y++) {
+    for (let x = Math.floor(x0 - rx - 1); x <= Math.ceil(x0 + rx + 1); x++) {
+      const dx = (x - x0) / rx;
+      const dy = y - W;
+      const d = Math.hypot(dx, dy);
+      if (Math.abs(d - 1) * rx >= 0.55 || k.hash(x - x0, y, seed + 9 + a) >= keep) continue;
+      put(x, y, -(dx * 0.6 + dy * 0.8) > 0.3 ? 'ice4' : 'water7');
+    }
+  }
+}
+
+/** Frame f of a salmon's leap upstream, east-facing (`west`: the form mirrored, lit afresh). */
+function salmon(f, west) {
+  const { w: W, h: H, water, exit, span, high } = SALMON;
+  const t = new k.Tex(W, H);
+  const p = SALMON_P[f];
+  const parts = new Array(W * H).fill(null);
+  let tx = 1;
+  let ty = 0;
+  if (p !== null) {
+    const cx = exit + span * p;
+    const cy = water - high * 4 * p * (1 - p);
+    const th = Math.atan2(4 * high * (1 - 2 * p), span);
+    tx = Math.cos(th);
+    ty = -Math.sin(th);
+    const at = (x, y) => {
+      const u = (x - cx) * tx + (y - cy) * ty + FISH.len / 2;
+      const v = (x - cx) * ty - (y - cy) * tx;
+      if (u >= 0 && u <= FISH.len) {
+        const hw = lerpProf(FISH.prof, u / FISH.len);
+        if (Math.abs(v) <= hw) return { kind: 'body', s: u / FISH.len, r: v / hw };
+      }
+      return u < 0.6 && inPoly(FISH.tail, u, v) ? { kind: 'fin' } : null;
+    };
+    const SUB = [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]];
+    for (let y = 0; y < water; y++) {
+      for (let x = 0; x < W; x++) {
+        const ex = (sx) => (west ? W - sx : sx);
+        const centre = at(ex(x + 0.5), y + 0.5);
+        let hits = 0;
+        let any = null;
+        for (const [sx, sy] of SUB) { const q = at(ex(x + sx), y + sy); if (q) { hits++; any = any || q; } }
+        if (centre || hits >= 2) parts[y * W + x] = centre || any;
+      }
+    }
+  }
+  const part = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? null : parts[y * W + x]);
+  let glint = null;
+  for (let y = 0; y < water; y++) {
+    for (let x = 0; x < W; x++) {
+      const q = part(x, y);
+      if (!q) continue;
+      const rim = !part(x + 1, y) && !part(x, y + 1);
+      let ramp = FISH.back;
+      let s = !part(x - 1, y) || !part(x, y - 1) ? 1 : 0;
+      if (q.kind === 'body') {
+        const r = Math.max(-1, Math.min(1, q.r));
+        const lam = (west ? -1 : 1) * ty * r * LIGHT[0] - tx * r * LIGHT[1] + Math.sqrt(1 - r * r) * LIGHT[2];
+        ramp = r > 0.5 || q.s > 0.82 ? FISH.back : r < -0.35 ? FISH.belly : FISH.flank;
+        s = lam > 0.45 ? 1 : 0;
+        if (q.s > 0.82 && q.s < 0.95 && Math.abs(r) < 0.5) s = 0; // the eye
+        if (q.s > 0.3 && q.s < 0.75 && (!glint || lam > glint.lam)) glint = { x, y, lam };
+      }
+      t.set(x, y, P.c(rim ? ramp[0] : ramp[s]));
+    }
+  }
+  // The flash: scales catch the sun at the top of the arc.
+  if (f === SALMON_APEX && glint) {
+    t.set(glint.x, glint.y, P.c('white0'));
+    if (part(glint.x + 1, glint.y)) t.set(glint.x + 1, glint.y, P.c('ice4'));
+  }
+  const free = (x, y) => !part(x, y);
+  const sx = (x) => Math.round(west ? W - 1 - x : x);
+  if (f <= 3) spray(t, free, sx(exit), f, west ? 251 : 241);
+  if (f >= SALMON_ENTRY) spray(t, free, sx(exit + span), f - SALMON_ENTRY, west ? 271 : 261);
+  return t;
+}
+
+/* ------------------------------------------------------------ stork -- */
+
+/**
+ * A white stork from straight above like the map, 24×24, drawn flying south
+ * (down the screen) with the torso centred (x 10–13, rows 8–15): legs and
+ * tail behind, neck and red beak ahead, wings spread across. The north set
+ * is the same grid flipped top to bottom and lit afresh, never a flipped
+ * image. Materials: 'W' white plumage, 'K' black flight feathers, 'O'/'R'
+ * the beak's lit and shaded side, 'L' legs; poses swap in 'w' (shaded
+ * white), 'k' (black catching the light) and 'X' (black in shadow).
+ */
+const STORK_BODY = {
+  3: '...........LL...........',
+  4: '...........LL...........',
+  5: '...........LL...........',
+  6: '..........WWWW..........',
+  7: '..........WWWW..........',
+  8: '..........WWWW..........',
+  9: '..........WWWW..........',
+  10: '..........WWWW..........',
+  11: '..........WWWW..........',
+  12: '..........WWWW..........',
+  13: '..........WWWW..........',
+  14: '..........WWWW..........',
+  15: '..........WWWW..........',
+  16: '...........WW...........',
+  17: '...........WW...........',
+  18: '...........WW...........',
+  19: '...........OR...........',
+  20: '...........OR...........',
+  21: '...........R............',
+};
+/**
+ * One wing column, read top (tail) to bottom (beak), from the root out:
+ * black secondaries behind, white coverts ahead, the hand swept back,
+ * black, with fingered primaries.
+ */
+const WING = {
+  root: '.......KKKKWWWW.........',
+  mid: '........KKKWWWW.........',
+  wrist: '.......KKKKWWW..........',
+  hand: '.......KKKKKW...........',
+  tip: '......KKKKKK............',
+  fingers: '......K.K.K.............',
+};
+/**
+ * Columns per wing and pose. Seen from above, a raised or lowered wing is
+ * foreshortened: level and glide span 22 px, raised 18, lowered 16. The
+ * raised hand catches the light, the lowered wing turns its shaded side up.
+ */
+const POSE = {
+  raised: { cols: ['root', 'mid', 'wrist', 'hand', 'hand', 'tip', 'fingers'], tone: { 4: { K: 'k' } } },
+  level: { cols: ['root', 'mid', 'mid', 'mid', 'wrist', 'hand', 'hand', 'tip', 'fingers'] },
+  lowered: { cols: ['root', 'mid', 'wrist', 'hand', 'tip', 'fingers'], tone: { 0: { W: 'w', K: 'X' } } },
+};
+/**
+ * Frames 0–3 one wing beat, 4–7 the glide on level wings. `fix` [x, y, char]
+ * (south grid) closes the left wing's outer primary (5–6) and lets one foot
+ * dangle (6–7), each for two frames, so the glide breathes without flickering.
+ */
+const STORK_FRAMES = [
+  { pose: 'raised' }, { pose: 'level' }, { pose: 'lowered' }, { pose: 'level' },
+  { pose: 'level' },
+  { pose: 'level', fix: [[1, 6, '.'], [1, 7, 'K']] },
+  { pose: 'level', fix: [[1, 6, '.'], [1, 7, 'K'], [11, 2, 'L'], [12, 3, '.']] },
+  { pose: 'level', fix: [[11, 2, 'L'], [12, 3, '.']] },
+];
+/** Ramps per material: rim (open right and below), lower-right edge, inside, upper-left edge. */
+const STORK_RAMP = {
+  W: ['ice3', 'ice4', 'white0', 'white0'],
+  w: ['ice2', 'ice3', 'ice4', 'ice4'],
+  K: ['pine0', 'rock0', 'rock0', 'rock1'],
+  k: ['pine0', 'rock0', 'rock1', 'rock1'],
+  X: ['pine0', 'pine0', 'rock0', 'rock0'],
+  O: ['orange0', 'orange0', 'orange0', 'orange0'],
+  R: ['red1', 'red1', 'red1', 'red1'],
+  L: ['red0', 'red0', 'red1', 'red1'],
+};
+
+/** Frame f of a flying stork, heading south (`north`: the grid flipped top to bottom, lit afresh). */
+function stork(f, north) {
+  const N = 24;
+  const { pose, fix = [] } = STORK_FRAMES[f];
+  const { cols, tone = {} } = POSE[pose];
+  const grid = Array.from({ length: N }, (_, y) => (STORK_BODY[y] || '.'.repeat(N)).split(''));
+  cols.forEach((name, i) => {
+    let swap = {};
+    for (const from of Object.keys(tone)) if (i >= +from) swap = tone[from];
+    for (let y = 0; y < N; y++) {
+      const ch = WING[name][y];
+      if (ch === '.') continue;
+      grid[y][14 + i] = swap[ch] || ch;
+      grid[y][9 - i] = swap[ch] || ch;
+    }
+  });
+  for (const [x, y, ch] of fix) grid[y][x] = ch;
+  const at = (x, y) => (x < 0 || y < 0 || x >= N || y >= N ? '.' : grid[north ? N - 1 - y : y][x]);
+  const S = (x, y) => at(x, y) !== '.';
+  const t = new k.Tex(N, N);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const ch = at(x, y);
+      if (ch === '.') continue;
+      const lr = !S(x + 1, y) || !S(x, y + 1);
+      const ul = !S(x - 1, y) || !S(x, y - 1);
+      const s = !S(x + 1, y) && !S(x, y + 1) ? 0 : lr && !ul ? 1 : ul && !lr ? 3 : 2;
+      t.set(x, y, P.c(STORK_RAMP[ch][s]));
+    }
+  }
+  return t;
+}
+
 module.exports = {
   sprites: {
     whale_great: set('great'),
@@ -757,6 +989,8 @@ module.exports = {
     whale_blow_sperm: (f) => blow(f % 8, f >= 8 ? -1 : 1),
     whale_wake: wake,
     dolphin_leap: (f) => dolphin(f % 16, f >= 16),
+    salmon_leap: (f) => salmon(f % 10, f >= 10),
+    stork_glide: (f) => stork(f % 8, f >= 8),
   },
   textures: {},
 };

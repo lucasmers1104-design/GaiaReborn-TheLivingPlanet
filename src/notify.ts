@@ -32,6 +32,21 @@ namespace SE {
     info: 'Hinweis',
   };
 
+  /**
+   * A chronicle entry's picture, `px` pixels across: a sub-species' portrait,
+   * else its icon. What is gone for good shows greyed under the R.I.P. band.
+   */
+  export function chronicleArt(e: ChronicleEntry, cls: string, px: number): HTMLElement {
+    const life = e.nodeId !== undefined ? EVO_BY_ID.get(e.nodeId)?.life : undefined;
+    const pic = life !== undefined && e.stage !== undefined
+      ? pixelArt(speciesPicture(life, e.stage, 'full', 'fauna-svg'), px, cls)
+      : img(e.icon, cls);
+    if (!e.rip) return pic;
+    const box = make('span', 'rip-art');
+    box.append(pic, ripBand());
+    return box;
+  }
+
   export class Notifier {
     private readonly queue: ChronicleEntry[] = [];
     private cards = 0;
@@ -52,6 +67,8 @@ namespace SE {
         milestone: (open: boolean) => void;
         /** Small screen: one card at a time, never under a milestone. */
         narrow: () => boolean;
+        /** Open the space project's window, from its cards (keys `space:…`). */
+        spaceport: () => void;
         /** Every new evolution step gets the showcase; `done` when it closes. */
         showcase: { show(e: ChronicleEntry, done: () => void): void; close(): void };
       },
@@ -173,7 +190,7 @@ namespace SE {
 
       const card = make('div', `toast toast-card glass kind-${e.kind}`);
       card.setAttribute('role', 'status');
-      const art = img(e.icon, 'toast-art');
+      const art = chronicleArt(e, 'toast-art', 28);
       const main = make('div', 'toast-main');
       main.append(
         make('div', 'toast-kicker', this.kicker(e)),
@@ -191,6 +208,10 @@ namespace SE {
           label: 'Im Evolutionsbaum ansehen', icon: uiIcon('evolution'), cls: 'btn btn-small',
           onClick: () => { this.hooks.view(e.nodeId as string); close(); },
         }));
+        main.appendChild(actions);
+      } else if (e.key.startsWith('space:')) {
+        const actions = make('div', 'toast-actions');
+        actions.appendChild(button({ label: 'Zum Raumhafen', icon: uiIcon('rocket'), cls: 'btn btn-small', onClick: () => { this.hooks.spaceport(); close(); } }));
         main.appendChild(actions);
       }
       const x = button({ label: 'Hinweis schließen', icon: uiIcon('close'), cls: 'icon-btn toast-close', showLabel: false, onClick: () => close() });
@@ -273,6 +294,8 @@ namespace SE {
           label: 'Im Evolutionsbaum ansehen', icon: uiIcon('evolution'), cls: 'btn btn-primary',
           onClick: () => { this.hooks.view(e.nodeId as string); close(); },
         }));
+      } else if (e.key.startsWith('space:')) {
+        actions.appendChild(button({ label: 'Zum Raumhafen', icon: uiIcon('rocket'), cls: 'btn btn-primary', onClick: () => { this.hooks.spaceport(); close(); } }));
       }
       const ok = button({ label: 'Weiter', cls: 'btn btn-ghost', onClick: () => close() });
       actions.appendChild(ok);

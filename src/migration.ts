@@ -131,6 +131,23 @@ namespace SE {
   }
 
   /**
+   * The way over land from `from` to the tile within `range` steps that
+   * `value(tile, steps)` rates highest, the first found on a tie; null if it
+   * rates every tile -Infinity.
+   */
+  export function bestLandRoute(
+    world: WorldState, from: number, range: number, value: (tile: number, d: number) => number,
+  ): number[] | null {
+    let best = -Infinity;
+    let at = -1;
+    spread(world, from, range, 0, (tile, d, state) => {
+      const v = value(tile, d);
+      if (v > best) { best = v; at = state; }
+    });
+    return at >= 0 ? routeTo(at) : null;
+  }
+
+  /**
    * The best site for settlers carrying `tech` from `from` (spec §2.5): any
    * allowed tile in reach, by score minus SETTLER_PATH_COST per tile of way,
    * ties drawn from `world.rng`. A site reachable over land is walked to over

@@ -30,16 +30,21 @@ const COAST = 6;
 /**
  * A warm planet with one sea strip: coastal sea along both shores, open ocean
  * between. Corals of `coral` stage live on all coastal sea, grazing fish on
- * rows `fishRows`, molluscs where `molluscs`. Land is low forest with the
+ * rows `fishRows`, molluscs and shelled arthropods at densities `molluscs` and
+ * `arthropods` on all coastal sea, islands of low forest on the tiles `isles`
+ * out in the open ocean. Land is low forest with the
  * flowering plants, which arose at year 1e9; the clock stands at `yearsAgo`.
+ * With `grown` the planet starts with its reefs grown in full (the chronicle
+ * entries dated back, as for a new planet); without, they have just begun.
  */
-function reefWorld({ temp = 26, coral = STONY, fishRows = [0, 64], fishStage = GRAZER, grazerEvolved = true, molluscs = false, yearsAgo = 50e6, landscape = () => L.Forest } = {}) {
+function reefWorld({ temp = 26, coral = STONY, fishRows = [0, 64], fishStage = GRAZER, grazerEvolved = true, molluscs = 0, arthropods = 0, isles = [], yearsAgo = 50e6, landscape = () => L.Forest, grown = true } = {}) {
   const s = makeSim(11);
   const w = s.world;
+  const isle = new Set(isles.map(([x, y]) => tile(x, y)));
   for (let i = 0; i < SE.TILE_COUNT; i++) {
     const x = i % SE.GRID_W;
     const y = (i / SE.GRID_W) | 0;
-    const sea = x >= SEA[0] && x <= SEA[1];
+    const sea = x >= SEA[0] && x <= SEA[1] && !isle.has(i);
     const coast = sea && (x < SEA[0] + COAST || x > SEA[1] - COAST);
     w.elevation[i] = !sea ? 0.03 : coast ? -0.05 : -0.5;
     w.biome[i] = !sea ? SE.Biome.Forest : coast ? SE.Biome.Coast : SE.Biome.Ocean;
@@ -65,15 +70,18 @@ function reefWorld({ temp = 26, coral = STONY, fishRows = [0, 64], fishStage = G
       w.lifeDensity[i * LC + SE.Life.Fish] = 0.5;
       w.lifeStage[i * LC + SE.Life.Fish] = fishStage;
     }
-    if (coast && molluscs) w.lifeDensity[i * LC + SE.Life.Mollusc] = 0.25;
+    if (coast) w.lifeDensity[i * LC + SE.Life.Mollusc] = molluscs;
+    if (coast) w.lifeDensity[i * LC + SE.Life.Arthropod] = arthropods;
   }
   w.lifeStageCounts.fill(0);
   if (coral >= 0) w.lifeStageCounts[SE.Life.Radiate * N + coral] = 100;
   if (grazerEvolved) w.lifeStageCounts[SE.Life.Fish * N + GRAZER] = 100;
   w.lifeCounts[SE.Life.Mollusc] = molluscs ? 100 : 0;
+  w.lifeCounts[SE.Life.Arthropod] = arthropods ? 100 : 0;
   w.evo.developed.set('flowering', { tick: 0, years: 1e9 });
   w.absoluteYears = SE.PLANET_AGE - yearsAgo;
   w.revision++;
+  if (grown) for (const e of SE.reefMilestones(w, true)) w.evo.chronicle.push(e);
   return { s, w };
 }
 
@@ -106,11 +114,11 @@ test('the species art marks the reef builders and the grazing fish', () => {
   assert.equal(SE.SPECIES[SE.Life.Fish].stages[GRAZER].name, 'Echte Knochenfische');
 });
 
-test('the palette keeps every index: the lagoon, reef and shelf ramps come after the mask', () => {
+test('the palette keeps every index: the lagoon, reef, shelf and coral ramps come after the mask', () => {
   const names = Object.keys(M.ramps);
-  assert.deepEqual(names.slice(-4), ['mask', 'waterWarm', 'reefUnder', 'shelf']);
+  assert.deepEqual(names.slice(-5), ['mask', 'waterWarm', 'reefUnder', 'shelf', 'coral']);
   assert.equal(M.maskIndex, M.ramps.mask[0]);
-  assert.ok(M.ramps.waterWarm[0] > M.maskIndex && M.ramps.reefUnder[0] > M.maskIndex && M.ramps.shelf[0] > M.maskIndex);
+  assert.ok(M.ramps.waterWarm[0] > M.maskIndex && M.ramps.reefUnder[0] > M.maskIndex && M.ramps.shelf[0] > M.maskIndex && M.ramps.coral[0] > M.maskIndex);
   assert.ok(M.overlays.beach_sand && !M.materials.beach, 'beach sand is an overlay, no ground of its own');
   for (const id of ['coral_rugose', 'coral_stony', 'reef_sand']) assert.equal(M.objects[id].kind, 'reef', id);
 });
@@ -233,14 +241,25 @@ test('lagoons: turquoise over the reef, a tile landward of it, and up to the sho
   assert.ok(count(m.lagoon, (g) => g > 0) > m.reefTiles);
 });
 
-test('shell beaches: now and then on warm coasts beside molluscs, never in cold water', () => {
-  const { w } = reefWorld({ coral: -1, molluscs: true });
-  const m = reefs(w);
+test('shell beaches: in stretches beside molluscs and shelled arthropods, more the denser they live, never in cold water', () => {
   const coastal = 2 * SE.GRID_H;
+  const shellsOf = (o) => count(reefs(reefWorld({ coral: -1, ...o }).w).beach, (b) => b === 1);
+  // Counted from where they live at all (0.05), like grazing fish: a young population leaves a little shell sand.
+  const m = reefs(reefWorld({ coral: -1, molluscs: 0.1 }).w);
   const shells = count(m.beach, (b) => b === 1);
   assert.equal(count(m.beach, (b) => b === 2), 0);
-  assert.ok(shells > 0.05 * coastal && shells < 0.3 * coastal, `${shells} shell beaches on ${coastal} coastal tiles`);
-  assert.equal(count(reefs(reefWorld({ coral: -1, molluscs: true, temp: 12 }).w).beach), 0);
+  assert.ok(shells > 0.15 * coastal && shells < 0.45 * coastal, `${shells} shell beaches on ${coastal} coastal tiles`);
+  assert.equal(shellsOf({ molluscs: 0.04 }), 0, 'none below the density they count as living from');
+  const dense = shellsOf({ molluscs: 0.65 });
+  assert.ok(dense > shells * 1.4, `denser molluscs, more shell beach: ${dense} vs ${shells}`);
+  assert.ok(shellsOf({ arthropods: 0.1 }) > 0.15 * coastal, 'shelled arthropods leave shell beaches too');
+  assert.ok(shellsOf({ molluscs: 0.1, temp: SE.SHELL_MIN_TEMP }) > 0, `from ${SE.SHELL_MIN_TEMP} °C water`);
+  assert.equal(shellsOf({ molluscs: 0.1, temp: SE.SHELL_MIN_TEMP - 0.5 }), 0, 'none in cold water');
+  // Stretches, not specks: along the west shore the beach runs average well over one tile.
+  let runs = 0;
+  for (let y = 0; y < SE.GRID_H; y++) if (m.beach[tile(SEA[0] - 1, y)] && (y === 0 || !m.beach[tile(SEA[0] - 1, y - 1)])) runs++;
+  const west = count([...Array(SE.GRID_H).keys()], (y) => m.beach[tile(SEA[0] - 1, y)] > 0);
+  assert.ok(west / runs >= 2, `${west} beach tiles in ${runs} stretches`);
 });
 
 test('palms: once the flowering plants exist and the calendar has passed the oldest palm fossils', () => {
@@ -273,10 +292,130 @@ test('the Examine window and the chronicle read the same derivation', () => {
   assert.match(SE.reefNotes(w, reef)[0], /^Korallenriff \(Steinkorallen\) · Wassertemperatur 26 °C$/);
   assert.equal(SE.reefNotes(w, reef)[1], 'Fische raspeln Kalk zu Sand');
   assert.deepEqual(SE.reefNotes(w, m.beach.findIndex((b) => b === 2)), ['Weißer Kalksand vom Riff']);
-  const first = SE.reefMilestones(w);
-  assert.deepEqual(first.map((e) => e.title), ['Erste Riffe', 'Weiße Strände']);
-  for (const e of first) w.evo.chronicle.push(e);
-  assert.deepEqual(SE.reefMilestones(w), [], 'once each');
+  assert.equal(SE.reefNotes(w, m.cay.findIndex((c) => c > 0))[2], 'Sandinsel aus Riffsand');
+  // A planet whose corals have just begun: the first reef, pointed at, and white beaches only once a reef has grown.
+  const fresh = reefWorld({ grown: false }).w;
+  const first = SE.reefMilestones(fresh);
+  assert.deepEqual(first.map((e) => e.title), ['Erste Riffe', 'Steinkorallen bauen Riffe']);
+  for (const e of first) {
+    assert.ok(SE.reefMap(fresh).coral[e.at] > 0, `${e.title} points at the first reef`);
+    assert.equal(e.years, fresh.absoluteYears);
+    fresh.evo.chronicle.push(e);
+  }
+  fresh.absoluteYears += GROWN;
+  fresh.revision++;
+  assert.deepEqual(SE.reefMilestones(fresh).map((e) => e.title), ['Weiße Strände']);
+  for (const e of SE.reefMilestones(fresh)) fresh.evo.chronicle.push(e);
+  assert.deepEqual(SE.reefMilestones(fresh), [], 'once each');
+  // What a new planet starts with is history, dated back to the corals' date on Earth.
+  const history = SE.reefMilestones(reefWorld({ grown: false }).w, true);
+  assert.equal(history[0].years, SE.PLANET_AGE - SE.SPECIES[SE.Life.Radiate].stages[RUGOSE].ma * 1e6);
+  assert.equal(history[1].years, SE.PLANET_AGE - SE.SPECIES[SE.Life.Radiate].stages[STONY].ma * 1e6);
+});
+
+/** Years from the first reef until all have grown in full. */
+const GROWN = SE.REEF_SPREAD_YEARS + 3 * SE.REEF_RING_YEARS + (SE.REEF_PATCHES + 1) * SE.REEF_PATCH_YEARS;
+const patchesOf = (m) => m.corals.reduce((n, v) => n + v, 0) + m.sands.reduce((n, v) => n + v, 0);
+
+test('reefs spread from the first one and grow ring by ring, patch by patch', () => {
+  const { w } = reefWorld({ grown: false });
+  const start = w.absoluteYears;
+  const m0 = reefs(w);
+  assert.equal(m0.reefTiles, 1, 'at first one reef tile');
+  assert.equal(m0.corals[m0.origin] + m0.sands[m0.origin], 1, 'with one coral patch');
+  for (const e of SE.reefMilestones(w)) w.evo.chronicle.push(e);
+  let before = Array.from(m0.coral);
+  let tiles = [m0.reefTiles];
+  let patches = [patchesOf(m0)];
+  for (let t = 1e6; t <= GROWN; t += 1e6) {
+    w.absoluteYears = start + t;
+    w.revision++;
+    const m = reefs(w);
+    for (let i = 0; i < SE.TILE_COUNT; i++) if (before[i]) assert.ok(m.coral[i] > 0, `a reef tile stays (${t} years)`);
+    before = Array.from(m.coral);
+    tiles.push(m.reefTiles);
+    patches.push(patchesOf(m));
+    assert.ok(patches.at(-1) >= patches.at(-2), `patches never shrink (${t} years)`);
+  }
+  const full = reefs(reefWorld().w);
+  assert.equal(tiles.at(-1), full.reefTiles, 'in the end as large as a grown planet');
+  const half = tiles[Math.round(SE.REEF_SPREAD_YEARS / 2 / 1e6)];
+  assert.ok(half > 0.2 * full.reefTiles && half < 0.9 * full.reefTiles, `halfway ${half} of ${full.reefTiles} tiles: a spread, not a jump`);
+  // Near the first reef first: halfway through the spread, the reefs lie closer to it than the grown ones do.
+  const ox = m0.origin % SE.GRID_W;
+  const oy = (m0.origin / SE.GRID_W) | 0;
+  const meanDistance = (m) => {
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < SE.TILE_COUNT; i++) {
+      if (!m.coral[i]) continue;
+      const dx = Math.abs((i % SE.GRID_W) - ox);
+      sum += Math.hypot(Math.min(dx, SE.GRID_W - dx), ((i / SE.GRID_W) | 0) - oy);
+      n++;
+    }
+    return sum / n;
+  };
+  w.absoluteYears = start + SE.REEF_SPREAD_YEARS / 2;
+  w.revision++;
+  assert.ok(meanDistance(reefs(w)) < 0.85 * meanDistance(full), 'the reefs spread out from the first one');
+});
+
+test('stony corals take the reefs over one by one; the old reefs stand on until then, even once the rugose corals are gone', () => {
+  const { w } = reefWorld({ grown: false });
+  w.lifeStageCounts[SE.Life.Radiate * N + RUGOSE] = 100;
+  w.revision++;
+  w.evo.chronicle.push(SE.reefMilestones(w, true).find((e) => e.key === 'reefs:first'));
+  const start = w.absoluteYears;
+  const kinds = (m) => [count(m.coral, (k) => k === 1), count(m.coral, (k) => k === 2)];
+  const m0 = reefs(w);
+  const [rugose0, stony0] = kinds(m0);
+  assert.ok(stony0 > 0 && stony0 <= 25 && rugose0 > 5 * stony0, `grown rugose reefs, one stony reef: ${rugose0}/${stony0}`);
+  w.evo.chronicle.push(SE.reefMilestones(w).find((e) => e.key === 'reefs:stony'));
+  w.absoluteYears = start + SE.REEF_SPREAD_YEARS / 2;
+  w.revision++;
+  const [rugose1, stony1] = kinds(reefs(w));
+  assert.ok(rugose1 < rugose0 && stony1 > stony0 && rugose1 > 0, `halfway: ${rugose1}/${stony1}`);
+  w.absoluteYears = start + SE.REEF_SPREAD_YEARS;
+  w.revision++;
+  assert.equal(kinds(reefs(w))[0], 0, 'in the end all stony');
+  // The rugose sub-species ends once the stony one has spread: its reefs do not vanish with it.
+  w.lifeStageCounts[SE.Life.Radiate * N + RUGOSE] = 0;
+  w.absoluteYears = start + SE.REEF_SPREAD_YEARS / 2;
+  w.revision++;
+  assert.deepEqual(kinds(reefs(w)), [rugose1, stony1]);
+});
+
+test('sand cays on the grown reef out from the shore; palm islands and palms on the cays once broadleaf trees exist', () => {
+  const isles = [[128, 20], [129, 20], [128, 21], [131, 28], [132, 28], [133, 36], [133, 37], [134, 37], [135, 45]];
+  const { w } = reefWorld({ isles, fishRows: [0, 128] });
+  const m = reefs(w);
+  const cays = count(m.cay);
+  assert.ok(cays > 3, `${cays} sand cays`);
+  for (let i = 0; i < SE.TILE_COUNT; i++) {
+    if (!m.cay[i]) continue;
+    const x = i % SE.GRID_W;
+    assert.ok(m.coral[i] && m.fish[i] >= SE.CAY_FISH, 'on a grazed reef');
+    assert.ok(x - SEA[0] >= SE.CAY_OFFSHORE - 1 && SEA[1] - x >= SE.CAY_OFFSHORE - 1, `cay at column ${x} out from the shore`);
+    assert.equal(m.palms[i], 0, 'no palms before broadleaf trees');
+  }
+  const onIsles = (mm) => isles.reduce((n, [x, y]) => n + (mm.beach[tile(x, y)] ? 1 : 0), 0);
+  assert.equal(onIsles(m), 0, 'no beach on the bare islands yet');
+  w.evo.developed.set('broadleaf', { tick: 0, years: 1e9 });
+  w.revision++;
+  const lush = reefs(w);
+  assert.ok(onIsles(lush) >= isles.length - 2, `${onIsles(lush)} of ${isles.length} island tiles with a beach`);
+  assert.ok(isles.reduce((n, [x, y]) => n + lush.palms[tile(x, y)], 0) >= isles.length, 'palms all over the islands');
+  for (let i = 0; i < SE.TILE_COUNT; i++) if (lush.cay[i]) assert.ok(lush.palms[i] >= 1 && lush.palms[i] <= 2, 'palms on every cay');
+  assert.deepEqual(SE.reefMilestones(w).map((e) => e.title), ['Weiße Strände', 'Palmeninseln']);
+  // Not in cool water, nor before the palms.
+  const cool = reefWorld({ isles, temp: SE.PALM_ISLAND_TEMP - 1 }).w;
+  cool.evo.developed.set('broadleaf', { tick: 0, years: 1e9 });
+  cool.revision++;
+  assert.equal(onIsles(reefs(cool)), 0, 'no palm islands in cool seas');
+  const early = reefWorld({ isles, yearsAgo: SE.PALM_FIRST_YEARS_AGO + 1 }).w;
+  early.evo.developed.set('broadleaf', { tick: 0, years: 1e9 });
+  early.revision++;
+  assert.equal(count(reefs(early).palms), 0, 'no palms before the oldest palm fossils');
 });
 
 /* ------------------------------------------------------------- the map -- */
@@ -388,6 +527,42 @@ test('palms stand on dry sand, their crowns over the water and out of the surf',
     for (const at of motion.surfAt) assert.ok(!here.has((at >>> 16) * CHUNK * 16 + (at & 0xffff)), 'no surf under a crown');
   }
   assert.ok(crowns > 0, 'crown pixels over the sea');
+});
+
+test('sand cays and their palms rise over the water: no surf and no sea for the wave effects on them', () => {
+  const w = reefWorld({ fishRows: [0, 128] }).w;
+  w.evo.developed.set('broadleaf', { tick: 0, years: 1e9 });
+  w.revision++;
+  const f = new SE.TerrainField();
+  f.refresh(w);
+  // Chunk column 7 (columns 112–127) holds the west reefs' cays.
+  const list = [];
+  SE.placeLandObjects(f, art, 7 * CHUNK - 1, 0, 8 * CHUNK, SE.GRID_H - 1, list);
+  const onCay = list.filter((p) => {
+    const i = Math.floor(p.fy / 16) * SE.GRID_W + SE.wrapX(Math.floor(p.fx / 16));
+    return p.sprite.id === 'reef_cay' || (p.sprite.id === 'coconut_palm' && f.cay[i]);
+  });
+  assert.ok(onCay.some((p) => p.sprite.id === 'reef_cay') && onCay.some((p) => p.sprite.id === 'coconut_palm'), 'cays with palms');
+  let covered = 0;
+  for (let cy = 0; cy < SE.GRID_H / CHUNK; cy++) {
+    const ox = 7 * CHUNK * 16;
+    const oy = cy * CHUNK * 16;
+    composer.compose(f, 7 * CHUNK, cy * CHUNK, CHUNK, CHUNK, MARGIN, new Uint32Array(SIDE * SIDE), null);
+    const motion = composer.motion;
+    const here = new Set();
+    for (const p of onCay) {
+      for (let n = 0; n < p.sprite.px.length; n++) {
+        if (!p.sprite.px[n]) continue;
+        const x = p.fx - p.sprite.ax + (n % p.sprite.w) - ox;
+        const y = p.fy - p.sprite.ay + Math.floor(n / p.sprite.w) - oy;
+        if (x >= 0 && y >= 0 && x < CHUNK * 16 && y < CHUNK * 16) here.add(y * CHUNK * 16 + x);
+      }
+    }
+    covered += here.size;
+    for (const k of here) assert.equal(motion.sea ? motion.sea[k] : 0, 0, 'no sea under a cay or its palm');
+    for (const at of motion.surfAt) assert.ok(!here.has((at >>> 16) * CHUNK * 16 + (at & 0xffff)), 'no surf on a cay');
+  }
+  assert.ok(covered > 100, `${covered} cay and palm pixels`);
 });
 
 test('only palms stand on the beach sand', () => {

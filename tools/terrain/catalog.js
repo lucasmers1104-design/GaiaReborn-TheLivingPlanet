@@ -154,7 +154,8 @@ function m(all, except = {}) {
  * low (≤ 16×16, 3 variants), rock (≤ 16×16), water (≤ 16×16, drawn in the
  * sea), cactus (≤ 16×20, 3 variants; no slot of its own: the renderer sets
  * one on some desert tiles once cacti exist, src/cacti.ts), reef (≤ 12×10,
- * patches under the lagoon's water, set by src/reefs.ts). Anchored bottom
+ * patches under the lagoon's water, set by src/reefs.ts), cay (≤ 14×10, a
+ * sand islet on a reef, drawn over the water). Anchored bottom
  * centre; a tree may reach 4 px into the tile above.
  * `group` is the flora id the object belongs to (null for rocks and ice).
  */
@@ -199,9 +200,11 @@ const OBJECTS = [
   // --- water ---
   { id: 'kelp', name: 'Tang', group: 'marineAlgae', kind: 'water', family: 'wet' },
   // --- reefs: in no group's list, src/reefs.ts sets them ---
-  { id: 'coral_rugose', name: 'Runzelkorallen', group: null, kind: 'reef', family: 'coast', variants: 4 },
-  { id: 'coral_stony', name: 'Steinkorallen', group: null, kind: 'reef', family: 'coast', variants: 4 },
-  { id: 'reef_sand', name: 'Riffsand', group: null, kind: 'reef', family: 'coast', variants: 3 },
+  // Variants run from small heads to large colonies (landcoast.ts picks by that order).
+  { id: 'coral_rugose', name: 'Runzelkorallen', group: null, kind: 'reef', family: 'coast', variants: 12 },
+  { id: 'coral_stony', name: 'Steinkorallen', group: null, kind: 'reef', family: 'coast', variants: 12 },
+  { id: 'reef_sand', name: 'Riffsand', group: null, kind: 'reef', family: 'coast', variants: 4 },
+  { id: 'reef_cay', name: 'Sandinsel', group: null, kind: 'cay', family: 'coast', variants: 3 },
   // --- rocks and ice ---
   { id: 'boulder', name: 'Felsbrocken', group: null, kind: 'rock', family: 'cold', variants: 3 },
   { id: 'scree', name: 'Geröll', group: null, kind: 'rock', family: 'cold', variants: 2 },
@@ -214,7 +217,7 @@ const OBJECTS = [
 const TREE_SIZES = { s: [10, 13], m: [13, 17], l: [16, 20] };
 const TREE_FORMS = 2;
 /** Largest box per kind, [w, h]. */
-const KIND_BOX = { tree: [16, 20], bush: [16, 16], low: [16, 16], water: [16, 16], rock: [16, 16], cactus: [16, 20], reef: [12, 10] };
+const KIND_BOX = { tree: [16, 20], bush: [16, 16], low: [16, 16], water: [16, 16], rock: [16, 16], cactus: [16, 20], reef: [12, 10], cay: [14, 10] };
 
 /**
  * Which object a plant group shows where. A slot of one kind goes to one of

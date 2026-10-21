@@ -69,7 +69,8 @@ test('format 8 keeps the mountain type; a format-7 save gets it from its belts',
   a.world.upliftKind[SE.idx(3, 3)] = 4;
   const text = await SE.SaveSystem.encode(SE.SaveSystem.serialize(ctx(a)));
   const doc = await SE.SaveSystem.decode(text);
-  assert.equal(doc.version, 8);
+  assert.equal(doc.version, SE.SAVE_FORMAT);
+  assert.ok(doc.version >= 8, 'the mountain type is stored from format 8 on');
   const b = makeSim(1);
   SE.SaveSystem.load(doc, ctx(b), b.life, b.flora);
   assert.equal(hash(b.world.upliftKind), hash(a.world.upliftKind), 'the type survives the round trip');

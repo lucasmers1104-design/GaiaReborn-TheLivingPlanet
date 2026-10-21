@@ -56,7 +56,7 @@ namespace SE {
   }
 
   /** High mountains: above the tree line by the climate zone, or by height while a tile has no zone yet. */
-  function aboveTreeLine(world: WorldState, i: number): boolean {
+  export function aboveTreeLine(world: WorldState, i: number): boolean {
     const z = world.landscapeZone[i];
     return z === ZONE_NONE ? world.elevation[i] > TREE_LINE : (z & ZONE_TREELINE) !== 0;
   }
@@ -127,9 +127,19 @@ namespace SE {
     return false;
   }
 
+  /** The space project's launch site lies closer than SPACE_CITY_GAP, or tile `i` is under its apron or rocket (spaceport.ts). */
+  export function spaceportTooClose(world: WorldState, i: number): boolean {
+    const site = world.space.site;
+    if (site < 0) return false;
+    const dy = Math.floor(i / GRID_W) - Math.floor(site / GRID_W);
+    let dx = Math.abs((i % GRID_W) - (site % GRID_W));
+    if (dx > GRID_W / 2) dx = GRID_W - dx;
+    return tileDistance(i, site) < SPACE_CITY_GAP || (dx <= 1 && dy <= 0 && dy >= -SPACE_RISE);
+  }
+
   /** A new city may be founded here (spec §2.2). */
   export function citySiteAllowed(world: WorldState, i: number, except?: Settler, species: Life = world.sentientClass): boolean {
-    return cityGroundFits(world, i, species) && cityTooClose(world, i) < 0 && !goalTooClose(world, i, except);
+    return cityGroundFits(world, i, species) && cityTooClose(world, i) < 0 && !goalTooClose(world, i, except) && !spaceportTooClose(world, i);
   }
 
   /** Why the player may not found a city of `species` on tile `i`, or '' if they may (spec §2.10). */
@@ -142,6 +152,7 @@ namespace SE {
     const near = cityTooClose(world, i);
     if (near >= 0) return `Zu nah an ${world.civ.cityAt(near)?.name ?? 'einer Stadt'} (mind. ${CITY_MIN_DIST} Felder).`;
     if (goalTooClose(world, i)) return `Hier in der Nähe wollen schon Siedler eine Stadt gründen (mind. ${CITY_MIN_DIST} Felder).`;
+    if (spaceportTooClose(world, i)) return `Zu nah am Raumhafen (mind. ${SPACE_CITY_GAP} Felder).`;
     return '';
   }
 

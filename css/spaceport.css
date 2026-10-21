@@ -1,0 +1,114 @@
+/* =============================================================================
+   The space project window, its big red launch button and the closing dialog
+   "Die Reise geht weiter" (src/spaceportview.ts). Without this file all of it
+   simply stacks and still works.
+   ========================================================================== */
+
+.spaceport { display: flex; flex-direction: column; gap: 12px; padding: 12px 14px 16px; color: var(--ink-2); }
+
+.spaceport-hero {
+  border: 2px solid var(--glass-border);
+  background: #1d1838;
+  clip-path: var(--px-clip);
+  line-height: 0;
+}
+.spaceport-art { width: 100%; height: auto; image-rendering: pixelated; }
+
+.spaceport-phases { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.spaceport-phase { display: flex; align-items: center; gap: 10px; padding: 5px 8px; background: var(--raise); clip-path: var(--px-clip); color: var(--ink-3); }
+.spaceport-phase-num {
+  display: inline-grid; place-items: center; flex: none;
+  width: 22px; height: 22px;
+  border: 2px solid var(--line-2);
+  font-weight: 700; font-size: 12px;
+}
+.spaceport-phase.now { color: var(--ink); background: var(--raise-2); }
+.spaceport-phase.now .spaceport-phase-num { border-color: var(--energy); color: var(--energy); }
+.spaceport-phase.done { color: var(--ink-2); }
+.spaceport-phase.done .spaceport-phase-num { border-color: var(--ok); background: var(--ok); color: var(--ink-dark); }
+
+.spaceport-progress-head { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 13px; }
+.spaceport-percent { color: var(--ink); font-weight: 700; }
+.spaceport-track { height: 12px; border: 2px solid var(--line-2); background: var(--bg-0); }
+.spaceport-bar {
+  height: 100%;
+  background: repeating-linear-gradient(90deg, var(--energy-fill) 0 6px, var(--energy) 6px 8px);
+  transition: width 400ms linear;
+}
+.spaceport-bar.paused { background: repeating-linear-gradient(90deg, #5d6878 0 6px, #7a8698 6px 8px); }
+
+.spaceport-status { margin: 0; font-size: 13px; line-height: 1.45; }
+.spaceport-status.warn { color: #ffd9d3; padding: 6px 8px; background: rgba(255, 122, 107, 0.12); border-left: 3px solid var(--warn); }
+.spaceport-site { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--ink-3); }
+.spaceport-site [hidden] { display: none; }
+
+/* The big red button: a chunky pixel push button that lights up once the rocket is ready. */
+.spaceport-go { display: grid; justify-items: center; gap: 6px; margin-top: 4px; }
+.spaceport-go[hidden], .spaceport-done[hidden] { display: none; }
+.btn.launch-btn {
+  width: 100%;
+  min-height: 64px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff6f0;
+  text-shadow: 0 2px 0 #6b0f0b;
+  background: linear-gradient(#ef4a3c, #c52a20 55%, #a51d15);
+  border: 2px solid #ff8c7a;
+  box-shadow: inset 0 -6px 0 #7d140e, inset 0 3px 0 rgba(255, 255, 255, 0.28);
+}
+.btn.launch-btn:hover:not([disabled]) { background: linear-gradient(#ff5a4a, #d6322a 55%, #b2221a); border-color: #ffb0a3; }
+.btn.launch-btn:active:not([disabled]) { transform: translateY(2px); box-shadow: inset 0 -2px 0 #7d140e, inset 0 3px 0 rgba(255, 255, 255, 0.2); }
+.btn.launch-btn[disabled] { opacity: 0.45; filter: saturate(0.5); }
+.btn.launch-btn.ready:not([disabled]):not(.still) { animation: launch-glow 1.6s steps(8, jump-none) infinite; }
+@keyframes launch-glow {
+  0%, 100% { box-shadow: inset 0 -6px 0 #7d140e, inset 0 3px 0 rgba(255, 255, 255, 0.28), 0 0 0 0 rgba(255, 90, 74, 0); }
+  50% { box-shadow: inset 0 -6px 0 #7d140e, inset 0 3px 0 rgba(255, 255, 255, 0.28), 0 0 18px 2px rgba(255, 90, 74, 0.55); }
+}
+.spaceport-go-hint { margin: 0; font-size: 12px; color: var(--ink-3); text-align: center; }
+
+.spaceport-done { display: grid; justify-items: center; gap: 6px; padding: 14px; text-align: center; background: var(--raise); border: 2px solid var(--ok); clip-path: var(--px-clip); }
+.spaceport-done-icon { width: 48px; height: 48px; }
+.spaceport-done-title { margin: 0; font-size: 17px; color: var(--ink); }
+.spaceport-done-text { margin: 0; font-size: 13px; line-height: 1.5; }
+
+/* The closing dialog after the film: a starry night over the next worlds. */
+.modal.launch-finale-modal {
+  width: min(560px, 100%);
+  background: radial-gradient(120% 90% at 50% 0%, #2b2357 0%, #141633 55%, #0b0f22 100%);
+  border: 2px solid #6d63c7;
+  box-shadow: 0 0 0 2px #0b0f22, 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.launch-finale-modal .modal-head { border-bottom-color: rgba(109, 99, 199, 0.5); }
+.launch-finale-modal .modal-title { color: #fff1d6; font-size: 22px; }
+.launch-finale-modal .modal-foot { border-top-color: rgba(109, 99, 199, 0.5); }
+.launch-finale { display: grid; justify-items: center; gap: 14px; text-align: center; position: relative; }
+.launch-finale::before {
+  content: "";
+  position: absolute; inset: -14px -20px auto; height: 120px;
+  background-image:
+    radial-gradient(1px 1px at 12% 30%, #fff 99%, transparent), radial-gradient(1px 1px at 28% 70%, #cfd8ff 99%, transparent),
+    radial-gradient(1px 1px at 46% 18%, #fff 99%, transparent), radial-gradient(1px 1px at 63% 58%, #ffe9c2 99%, transparent),
+    radial-gradient(1px 1px at 79% 26%, #fff 99%, transparent), radial-gradient(1px 1px at 91% 64%, #cfd8ff 99%, transparent);
+  pointer-events: none;
+}
+.launch-finale-badge { width: 72px; height: 72px; image-rendering: auto; position: relative; }
+.launch-finale-lead { margin: 0; font-size: 16px; line-height: 1.55; color: #f3ecff; white-space: pre-line; position: relative; }
+.launch-finale-worlds { display: flex; justify-content: center; gap: 22px; margin: 4px 0; }
+.launch-finale-world { display: grid; justify-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.launch-finale-disc { width: 44px; height: 44px; border-radius: 50%; box-shadow: inset -9px -7px 0 rgba(0, 0, 0, 0.35); }
+.launch-finale-world.mars .launch-finale-disc { background: radial-gradient(circle at 35% 30%, #f0a070, #c4583a 55%, #7e2e22); }
+.launch-finale-world.venus .launch-finale-disc { background: radial-gradient(circle at 35% 30%, #fff3c8, #e6c27a 55%, #a07a3c); }
+.launch-finale-world.more .launch-finale-disc {
+  background: radial-gradient(circle at 35% 30%, #c8f3ff, #5aa6c8 55%, #2a4e7a);
+  outline: 2px dashed rgba(207, 216, 255, 0.45); outline-offset: 4px;
+}
+.launch-finale-note {
+  margin: 0; padding: 10px 14px;
+  font-size: 14px; line-height: 1.5; color: #ffe2a8; white-space: pre-line;
+  background: rgba(255, 209, 102, 0.08); border: 2px solid rgba(255, 209, 102, 0.35); clip-path: var(--px-clip);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn.launch-btn.ready:not([disabled]) { animation: none; }
+}

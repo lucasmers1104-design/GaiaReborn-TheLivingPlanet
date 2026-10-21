@@ -74,8 +74,8 @@ namespace SE {
       return out;
     }
 
-    /** One frame at 1× with PAD, or enlarged k times by nearest neighbour. */
-    private frame(id: string, f: number, k: number): HTMLCanvasElement | null {
+    /** One frame at 1× with PAD, or enlarged k times by nearest neighbour; cached and shared, so never draw into it. */
+    frame(id: string, f: number, k: number): HTMLCanvasElement | null {
       const key = `${id}|${f}|${k}`;
       const hit = this.frames.get(key);
       if (hit) return hit;

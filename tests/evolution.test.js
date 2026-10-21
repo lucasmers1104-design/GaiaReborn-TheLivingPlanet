@@ -224,10 +224,11 @@ test('an extinct ancestor blocks its descendants until it is re-introduced', () 
   assert.equal(s.evo.statusOf('marineAlgae').conds.find((c) => c.kind === 'lineage').met, true);
 });
 
+// The whales and grazers wait for the comet (src/dinoera.ts), so these players let it strike.
 test('the full tree is reachable: cheapest first', { timeout: 600000 }, () => {
   const s = makeSim(12345);
   s.evo.develop(s.world, s.params, 'cells');
-  const order = s.play(9000);
+  const order = s.play(9000, undefined, 'comet');
   assert.equal(s.world.evo.developed.size, NODES.length, `stuck after ${order.map((o) => o.id).join(', ')}`);
   const at = (id) => order.findIndex((o) => o.id === id);
   assert.ok(at('flowering') < at('pollinators'), 'flowers before pollinators');
@@ -245,7 +246,7 @@ test('the full tree is reachable on another planet, animals first', { timeout: 6
   const order = s.play(12000, (ids) => {
     const animals = ids.filter((id) => byId(id).kingdom !== 'plant');
     return (animals.length ? animals : ids).sort((a, b) => byId(a).cost - byId(b).cost)[0];
-  });
+  }, 'comet');
   assert.equal(s.world.evo.developed.size, NODES.length, `stuck after ${order.map((o) => o.id).join(', ')}`);
 });
 
@@ -255,6 +256,6 @@ test('the full tree is reachable plants first, most expensive first', { timeout:
   const order = s.play(12000, (ids) => {
     const plants = ids.filter((id) => byId(id).kingdom === 'plant');
     return (plants.length ? plants : ids).sort((a, b) => byId(b).cost - byId(a).cost)[0];
-  });
+  }, 'comet');
   assert.equal(s.world.evo.developed.size, NODES.length, `stuck after ${order.map((o) => o.id).join(', ')}`);
 });

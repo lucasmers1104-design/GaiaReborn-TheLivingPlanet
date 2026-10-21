@@ -90,7 +90,7 @@ test('a city does not burn but loses a fifth of its people', () => {
   assert.equal(w.hazards.scar[city], SE.ScarKind.None);
 });
 
-test('a fire keeps to its caps: 10 tiles from the origin, 90 tiles, 40 ticks', () => {
+test('a fire keeps to its caps: reach, tiles and ticks (the ticks are as long as its sound at the slowest speed)', () => {
   {
     const { SE, world: w } = makeSim(777, 'today');
     const hz = new SE.HazardSystem();
@@ -99,19 +99,20 @@ test('a fire keeps to its caps: 10 tiles from the origin, 90 tiles, 40 ticks', (
     const ticks = burn(hz, w);
     const tiles = burnt(SE, w);
     assert.ok(ticks <= SE.FIRE_MAX_TICKS, `${ticks} ticks`);
-    assert.equal(tiles.length, SE.FIRE_MAX_TILES, 'a dry forest burns up to the cap');
-    assert.equal(h.fire.caught, SE.FIRE_MAX_TILES);
+    // Six ticks spread a fire less far than 90 tiles used to; the tile cap only holds.
+    assert.ok(tiles.length > 50 && tiles.length <= SE.FIRE_MAX_TILES, `${tiles.length} tiles`);
+    assert.equal(h.fire.caught, tiles.length);
     for (const i of tiles) assert.ok(SE.hazardDistance(X, Y, i % SE.GRID_W, Math.floor(i / SE.GRID_W)) <= SE.FIRE_REACH);
   }
   {
-    // A long narrow strip: the reach binds before the tile cap does.
+    // A long narrow strip: the fire spreads one tile per tick, so the tick cap binds before the reach.
     const { SE, world: w } = makeSim(777, 'today');
     const hz = new SE.HazardSystem();
     forest(SE, w, X - 30, Y, X + 30, Y + 1);
     hz.start(w, SE.EventKind.Fire, X, Y, 'player');
     burn(hz, w);
     const reach = Math.max(...burnt(SE, w).map((i) => SE.hazardDistance(X, Y, i % SE.GRID_W, Math.floor(i / SE.GRID_W))));
-    assert.equal(reach, SE.FIRE_REACH, 'it burns out at the reach');
+    assert.ok(reach > 3 && reach <= Math.min(SE.FIRE_REACH, SE.FIRE_MAX_TICKS), `reach ${reach}`);
   }
   {
     // A tile that would smoulder on for ever: the fire still ends at the tick cap, in its aftermath.
@@ -278,7 +279,7 @@ test('the show: a smoke thread first, then a growing flame; flames and capped pl
   const main = show.build(w, cam, 28, 18, t0 + SE.HAZARD_OMEN_MS[SE.EventKind.Fire] + 1200, 0.1, particles);
   const origin = (d) => Math.floor(d.x / 16) === X && Math.floor(d.foot / 16) === Y;
   assert.equal(main.objects.filter((d) => d.id.startsWith('flame_') && origin(d)).length, 1, 'the growing flame stands alone on its tile');
-  for (let t = 0; t < 6; t++) hz.step(w);
+  for (let t = 0; t < SE.FIRE_MAX_TICKS - 1; t++) hz.step(w);
   const n = h.fire.burning.length;
   assert.ok(n > 40, `${n} tiles burning`);
   const live = show.build(w, cam, 28, 18, t0 + 20000, 0.1, particles);
@@ -352,4 +353,70 @@ test('a fire on lava or rubble names what is there instead of claiming nothing c
   assert.equal(hz.refusal(w, SE.EventKind.Fire, X, Y), 'Hier fließt glühende Lava.');
   w.hazards.tile[SE.idx(X, Y)] = SE.HazardTile.Rubble;
   assert.equal(hz.refusal(w, SE.EventKind.Fire, X, Y), 'Hier liegen Trümmer.');
+});
+
+test('a fire uses up air oxygen: the bigger and longer it burns, the more', () => {
+  const lost = (x0, y0, x1, y1) => {
+    const { SE, world: w } = makeSim(777, 'today');
+    const hz = new SE.HazardSystem();
+    forest(SE, w, x0, y0, x1, y1);
+    w.o2 = 21;
+    hz.start(w, SE.EventKind.Fire, X, Y, 'player');
+    burn(hz, w);
+    return 21 - w.o2;
+  };
+  const one = lost(X, Y, X, Y);
+  const big = lost(X - 20, Y - 15, X + 20, Y + 15);
+  assert.ok(one > 0, `a single tile costs ${one} %`);
+  assert.ok(big > 20 * one && big > 0.3 && big < 1.5, `a forest fire costs ${big} %, one tile ${one} %`);
+});
+
+test('the fire window: above today\'s oxygen plants catch more readily and fire spreads further', () => {
+  const { SE } = makeSim(777, 'today');
+  assert.equal(SE.fireOxygen(0), 1);
+  assert.equal(SE.fireOxygen(SE.O2_PRESENT), 1);
+  assert.ok(SE.fireOxygen(30) > 2);
+  const tiles = (o2) => {
+    const { SE, world: w } = makeSim(777, 'today');
+    const hz = new SE.HazardSystem();
+    forest(SE, w, X - 20, Y - 15, X + 20, Y + 15, { moisture: 0.5, temp: 20, veg: 0.6 });
+    w.o2 = o2;
+    hz.start(w, SE.EventKind.Fire, X, Y, 'player');
+    burn(hz, w);
+    return burnt(SE, w).length;
+  };
+  const today = tiles(21);
+  const rich = tiles(32);
+  assert.ok(rich > today * 1.5, `${rich} tiles at 32 % against ${today} at 21 %`);
+  // Moist plants that lava or lightning cannot light today catch in oxygen-rich air.
+  const { world: w } = makeSim(777, 'today');
+  forest(SE, w, X, Y, X, Y, { moisture: 0.6 });
+  const i = SE.idx(X, Y);
+  w.o2 = 21;
+  assert.equal(SE.fireCanCatch(w, i), false);
+  w.o2 = 30;
+  assert.equal(SE.fireCanCatch(w, i), true);
+});
+
+test('lightning lights fires now and then, far more often in oxygen-rich air, on dry plants and without world.rng', () => {
+  const strikes = (o2) => {
+    const { SE, world: w } = makeSim(777, 'today');
+    forest(SE, w, 0, 10, SE.GRID_W - 1, SE.GRID_H - 11, { moisture: 0.2 });
+    w.o2 = o2;
+    const rng = w.rng.getState();
+    let n = 0;
+    for (let t = 0; t < 4000; t++) {
+      w.ticks = t;
+      const i = SE.lightningFireTile(w);
+      if (i < 0) continue;
+      assert.ok(SE.fireCanCatch(w, i), `tick ${t}: tile ${i} can burn`);
+      n++;
+    }
+    assert.equal(w.rng.getState(), rng, 'the rolls are hashes');
+    return n;
+  };
+  const today = strikes(21);
+  const rich = strikes(30);
+  assert.ok(today >= 1 && today <= 8, `${today} lightning fires in 4000 ticks at 21 %`);
+  assert.ok(rich > 6 * today, `${rich} at 30 % against ${today} at 21 %`);
 });

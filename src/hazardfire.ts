@@ -9,7 +9,9 @@
  * burn but loses people. A tile burns FIRE_BURN_MIN–FIRE_BURN_MAX ticks by
  * its fuel, then keeps a fifth of its cover, loses its trees and becomes
  * burnt earth: a scar that holds it at bare soil for SCAR_MIN_TICKS before
- * succession grows it back (scars.ts).
+ * succession grows it back (scars.ts). Every burning tile uses up air O₂ by
+ * its fuel each tick (FIRE_O2), and above today's O₂ the fire spreads faster
+ * (fireOxygen, hazardlightning.ts).
  * ========================================================================== */
 
 namespace SE {
@@ -97,6 +99,7 @@ namespace SE {
   /** Every burning tile tries to light its neighbours; tiles lit this tick spread from the next. */
   function spread(world: WorldState, h: Hazard, fire: FireFront, lit: number[]): void {
     const seed = world.seed ^ h.id;
+    const oxygen = fireOxygen(world.o2);
     for (const i of fire.burning) {
       if (world.hazards.tile[i] !== HazardTile.Burning) continue;
       const x = i % GRID_W;
@@ -119,7 +122,7 @@ namespace SE {
         const along = HAZARD_NX[k] * wind.dx + HAZARD_NY[k] * wind.dy;
         const wf = along > 0 ? FIRE_DOWNWIND : along < 0 ? FIRE_UPWIND : FIRE_CROSSWIND;
         const diagonal = HAZARD_NX[k] !== 0 && HAZARD_NY[k] !== 0 ? FIRE_DIAGONAL : 1;
-        const p = FIRE_SPREAD * fireFuel(world, j) * fireDryness(world, j) * wf * diagonal;
+        const p = FIRE_SPREAD * fireFuel(world, j) * fireDryness(world, j) * wf * diagonal * oxygen;
         if (hazardRoll(seed, i * 8 + k, h.age) < p) ignite(world, fire, j, lit);
       }
     }
@@ -157,8 +160,10 @@ namespace SE {
       const lit: number[] = [];
       spread(world, h, fire, lit);
       const still: number[] = [];
+      let fuel = 0;
       for (const i of fire.burning) {
         if (hz.tile[i] !== HazardTile.Burning) continue;
+        fuel += fireFuel(world, i);
         const level = hz.level[i] - 1;
         if (level <= 0) {
           burnOut(world, fire, i);
@@ -168,6 +173,8 @@ namespace SE {
         }
       }
       fire.burning = still.concat(lit);
+      // Oxygen-rich air burns hotter and more completely: the fire window's brake on too much O₂.
+      world.o2 = Math.max(0, world.o2 - fuel * FIRE_O2 * fireOxygen(world.o2));
       return fire.burning.length > 0;
     },
 

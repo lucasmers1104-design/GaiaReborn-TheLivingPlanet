@@ -5,8 +5,9 @@
  * `path[step]` and glides there from the tile it stood on before, over the
  * time between two ticks (at most 800 ms), facing the way it goes, like the
  * herds (herds.ts). Its figure shows the era it carries, on land and on
- * water (raft to freighter). People other than humans get a neutral bundle
- * until their own figures exist. Between two cities at war stands the battle
+ * water (raft to freighter). People other than humans walk as their own
+ * creature with a bundle and the pennant on a pole (civart/bands.ts); the
+ * wandering groups glide the same way (bandlayer.ts). Between two cities at war stands the battle
  * symbol (spec §3.7). Graphics only.
  * ========================================================================== */
 
@@ -33,10 +34,86 @@ namespace SE {
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
-  /** The figure of a group of era `tech`, on land or on water; non-human peoples travel as a bundle on land. */
-  export function settlerArt(kind: SettlerKind, flag: PaletteKey, tech: Tech = Tech.Stone): Art {
+  /**
+   * The figure of a group of era `tech`, on land or on water. Non-human
+   * peoples walk on land as `creature` (their class's figure) with a bundle
+   * and the pennant on a pole, or as a plain bundle without one.
+   */
+  export function settlerArt(kind: SettlerKind, flag: PaletteKey, tech: Tech = Tech.Stone, creature?: Art): Art {
     const t = clamp(tech, Tech.Stone, Tech.Nanotech);
-    return kind === 'water' ? WATER_FIGURES[t](flag) : kind === 'bundle' ? bundleSettlerArt(flag) : LAND_FIGURES[t](flag);
+    if (kind === 'water') return WATER_FIGURES[t](flag);
+    if (kind === 'bundle') return creature ? thinkerArt(creature, flag) : bundleSettlerArt(flag);
+    return LAND_FIGURES[t](flag);
+  }
+
+  /** The sub-species a thinking class walks as: its most advanced one alive on the planet, else its last. */
+  export function thinkerStage(world: WorldState, c: Life): number {
+    for (let s = SUBSPECIES_PER_CLASS - 1; s >= 0; s--) if (world.lifeStageCounts[c * SUBSPECIES_PER_CLASS + s] > 0) return s;
+    return SUBSPECIES_PER_CLASS - 1;
+  }
+
+  /** A figure's place this frame in view tiles (rx on the copy of the planet nearest the view's left edge). */
+  export interface FigureSpot { readonly rx: number; readonly ry: number; readonly rest: number; readonly from: number; readonly flip: boolean }
+
+  /**
+   * Figures that walk tile by tile: each glides to the tile it stands on from
+   * the one before, over the time between two ticks (at most GLIDE_MAX_MS),
+   * facing the way it goes, like the herds (herds.ts). Without motion
+   * (prefers-reduced-motion) they step.
+   */
+  export class FigureGlide {
+    private readonly tracks = new Map<number, Track>();
+    private tick = -1;
+    private tickAt = 0;
+    private interval = GLIDE_MAX_MS;
+    private glide = GLIDE_MAX_MS;
+    /** Counts the frames. */
+    frame = 0;
+
+    constructor(readonly still = reducedMotion()) {}
+
+    /** Start a frame of the world at tick `ticks`. */
+    begin(ticks: number, now: number): void {
+      if (ticks !== this.tick) {
+        if (this.tick >= 0 && ticks === this.tick + 1) {
+          this.interval += (Math.min(GLIDE_MAX_MS * 4, now - this.tickAt) - this.interval) * INTERVAL_WEIGHT;
+        }
+        this.tick = ticks;
+        this.tickAt = now;
+      }
+      this.glide = Math.min(GLIDE_MAX_MS, this.interval);
+      this.frame++;
+    }
+
+    /** Where figure `id` stands this frame: on `tile`, coming from `before` when first seen. */
+    place(id: number, tile: number, before: number, now: number, view: AmbientView): FigureSpot {
+      let tr = this.tracks.get(id);
+      if (!tr) {
+        tr = { tile, from: before, since: now, flip: false, seen: this.frame };
+        this.tracks.set(id, tr);
+      } else if (tr.tile !== tile) {
+        tr.from = tr.tile;
+        tr.tile = tile;
+        tr.since = now;
+      }
+      tr.seen = this.frame;
+      let dx = (tile % GRID_W) - (tr.from % GRID_W);
+      if (dx > GRID_W / 2) dx -= GRID_W;
+      if (dx < -GRID_W / 2) dx += GRID_W;
+      if (dx !== 0) tr.flip = dx < 0;
+      const dy = ((tile / GRID_W) | 0) - ((tr.from / GRID_W) | 0);
+      const rest = this.still ? 0 : 1 - smoothstep(clamp((now - tr.since) / this.glide, 0, 1));
+      let rx = (tile % GRID_W) - dx * rest - view.scrollX;
+      rx -= Math.floor(rx / GRID_W) * GRID_W;
+      if (rx > GRID_W - SHADOW_SPAN) rx -= GRID_W;
+      const ry = ((tile / GRID_W) | 0) - dy * rest - view.scrollY;
+      return { rx, ry, rest, from: tr.from, flip: tr.flip };
+    }
+
+    /** End the frame: forget the figures it did not place. */
+    end(): void {
+      for (const [id, tr] of this.tracks) if (tr.seen !== this.frame) this.tracks.delete(id);
+    }
   }
 
   /** A conflict can be over within a second at full speed; its symbol stays at least this long. */
@@ -112,26 +189,12 @@ namespace SE {
 
   export class SettlerLayer {
     private readonly battles = new BattleMarks();
-    private readonly tracks = new Map<number, Track>();
+    private readonly glide = new FigureGlide();
     private readonly pictures = new Map<string, HTMLCanvasElement>();
     private picturePx = 0;
-    private tick = -1;
-    private tickAt = 0;
-    private interval = GLIDE_MAX_MS;
-    private frame = 0;
-
-    constructor(private readonly still = reducedMotion()) {}
 
     draw(ctx: CanvasRenderingContext2D, view: AmbientView, world: WorldState, now: number, dpr: number): void {
-      if (world.ticks !== this.tick) {
-        if (this.tick >= 0 && world.ticks === this.tick + 1) {
-          this.interval += (Math.min(GLIDE_MAX_MS * 4, now - this.tickAt) - this.interval) * INTERVAL_WEIGHT;
-        }
-        this.tick = world.ticks;
-        this.tickAt = now;
-      }
-      const glide = Math.min(GLIDE_MAX_MS, this.interval);
-      const frame = ++this.frame;
+      this.glide.begin(world.ticks, now);
       const size = view.tilePx;
       const big = size * SHADOW_SPAN;
       const px = Math.max(8, Math.round(size * dpr));
@@ -139,45 +202,29 @@ namespace SE {
         this.pictures.clear();
         this.picturePx = px;
       }
-      const human = world.sentientClass === Life.Mammal;
+      const c = world.sentientClass;
+      const human = c === Life.Mammal;
+      const stage = human ? 0 : thinkerStage(world, c);
       ctx.imageSmoothingEnabled = false;
       for (const s of world.civ.settlers) {
         if (s.path.length === 0) continue;
         const tile = s.path[clamp(s.step, 0, s.path.length - 1)];
-        let tr = this.tracks.get(s.id);
-        if (!tr) {
-          tr = { tile, from: s.step > 0 ? s.path[s.step - 1] : tile, since: now, flip: false, seen: frame };
-          this.tracks.set(s.id, tr);
-        } else if (tr.tile !== tile) {
-          tr.from = tr.tile;
-          tr.tile = tile;
-          tr.since = now;
-        }
-        tr.seen = frame;
-        let dx = (tile % GRID_W) - (tr.from % GRID_W);
-        if (dx > GRID_W / 2) dx -= GRID_W;
-        if (dx < -GRID_W / 2) dx += GRID_W;
-        if (dx !== 0) tr.flip = dx < 0;
-        const dy = ((tile / GRID_W) | 0) - ((tr.from / GRID_W) | 0);
-        const rest = this.still ? 0 : 1 - smoothstep(clamp((now - tr.since) / glide, 0, 1));
-        let rx = (tile % GRID_W) - dx * rest - view.scrollX;
-        rx -= Math.floor(rx / GRID_W) * GRID_W;
-        if (rx > GRID_W - SHADOW_SPAN) rx -= GRID_W;
-        const ry = ((tile / GRID_W) | 0) - dy * rest - view.scrollY;
+        const spot = this.glide.place(s.id, tile, s.step > 0 ? s.path[s.step - 1] : tile, now, view);
+        const { rx, ry } = spot;
         if (rx >= view.cols || ry <= -SHADOW_SPAN || ry >= view.rows) continue;
-        const kind: SettlerKind = world.isWater(rest > 0.5 ? tr.from : tile) ? 'water' : human ? 'land' : 'bundle';
+        const kind: SettlerKind = world.isWater(spot.rest > 0.5 ? spot.from : tile) ? 'water' : human ? 'land' : 'bundle';
         const flag = tribeArtColor(world.civ.tribe(s.tribe)?.color ?? -1);
-        const key = `${kind}|${s.tech}|${flag}|${+tr.flip}`;
+        const key = `${kind}|${s.tech}|${flag}|${+spot.flip}|${c}|${stage}`;
         let pic = this.pictures.get(key);
         if (!pic) {
-          pic = rasterArt(settlerArt(kind, flag, s.tech), px, CREATURE_LOOK, tr.flip, true);
+          pic = rasterArt(settlerArt(kind, flag, s.tech, SPECIES[c]?.stages[stage]?.art), px, CREATURE_LOOK, spot.flip, true);
           this.pictures.set(key, pic);
         }
         const sy = Math.round(ry * size);
         for (let x = rx; x < view.cols; x += GRID_W) ctx.drawImage(pic, Math.round(x * size), sy, big, big);
       }
-      for (const [id, tr] of this.tracks) if (tr.seen !== frame) this.tracks.delete(id);
-      this.battles.draw(ctx, view, world, now, dpr, frame, this.still);
+      this.glide.end();
+      this.battles.draw(ctx, view, world, now, dpr, this.glide.frame, this.glide.still);
     }
   }
 }

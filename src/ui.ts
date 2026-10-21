@@ -100,7 +100,9 @@ namespace SE {
   /**
    * A centred dialog with focus trapped inside, Escape to cancel, and focus
    * returned to wherever it came from. Used for the few questions that must
-   * not be missed: discarding a planet, overwriting a save.
+   * not be missed: discarding a planet, overwriting a save. A `mandatory`
+   * one closes only through its buttons — no Escape, no click beside it —
+   * and starts with no button focused, so no key press chooses by accident.
    */
   export class Modal {
     private static root: HTMLElement | null = null;
@@ -119,8 +121,11 @@ namespace SE {
       body: string | HTMLElement;
       actions: readonly ModalAction[];
       wide?: boolean;
+      /** Extra class on the dialog box, for a dialog with its own look. */
+      cls?: string;
       /** Receives the close function, for buttons inside a custom body. */
       bind?: (close: (value: string) => void) => void;
+      mandatory?: boolean;
     }): Promise<string> {
       const root = Modal.root;
       if (!root) return Promise.resolve('');
@@ -128,7 +133,7 @@ namespace SE {
 
       return new Promise((resolve) => {
         const backdrop = make('div', 'modal-backdrop');
-        const box = make('div', `modal glass${opts.wide ? ' wide' : ''}`);
+        const box = make('div', `modal glass${opts.wide ? ' wide' : ''}${opts.cls ? ` ${opts.cls}` : ''}`);
         box.setAttribute('role', 'dialog');
         box.setAttribute('aria-modal', 'true');
         const titleId = `modal-title-${Date.now()}`;
@@ -166,7 +171,7 @@ namespace SE {
           if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
-            finish('');
+            if (!opts.mandatory) finish('');
             return;
           }
           if (e.key !== 'Tab') return;
@@ -175,18 +180,26 @@ namespace SE {
           if (focusable.length === 0) return;
           const first = focusable[0];
           const last = focusable[focusable.length - 1];
-          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+          const at = document.activeElement;
+          // Focus on the box itself (a mandatory dialog's start) or outside it goes to the ends, never past them.
+          if (!(at instanceof HTMLElement) || !focusable.includes(at)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+          else if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
         };
         document.addEventListener('keydown', onKey, true);
         backdrop.addEventListener('pointerdown', (e) => {
-          if (e.target === backdrop) finish('');
+          if (e.target === backdrop && !opts.mandatory) finish('');
         });
 
         box.append(head, body, foot);
         backdrop.appendChild(box);
         root.appendChild(backdrop);
         opts.bind?.(finish);
+        if (opts.mandatory) {
+          box.tabIndex = -1;
+          box.focus();
+          return;
+        }
         const primary = buttons.find((_, k) => opts.actions[k].kind === 'primary') ?? buttons[0];
         primary?.focus();
       });

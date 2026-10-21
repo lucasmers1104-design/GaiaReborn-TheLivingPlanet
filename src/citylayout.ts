@@ -2,14 +2,18 @@
  * SimEarth 2.0 — how a city is built up from blocks
  * -----------------------------------------------------------------------------
  * A city is a handful of the civ atlas's blocks on its own tile
- * (docs/zivilisation-spec.md §3.2): a village has 2–3 small houses, a town
- * 4–5 with medium ones and a hall, a metropolis 6–8 with a landmark. Each
- * plan item has a target spot; it takes the nearest foot where its block
- *   - stays inside the tile (feet x 2..13, y 5..13, at most 4 px above it),
+ * (docs/zivilisation-spec.md §3.2), arranged by its era's plan
+ * (cityplans.ts): a village has few small houses, a town more with a hall,
+ * a metropolis a landmark. Each plan item has a target spot; it takes the
+ * nearest foot where its block
+ *   - keeps its foot and ground footprint on the tile (feet x 2..13,
+ *     y 5..13) and its picture in the civ box (2 px beside the tile, up to
+ *     8 px above it),
  *   - keeps its foot 2 px and its ground footprint 1 px clear of the river,
- *     and its footprint off the others,
+ *     and its footprint off the others and off the plan's free places,
  *   - leaves every block drawn so far mostly visible.
  * Choice, spot and variant come from hashes of the tile, never per frame.
+ * A wandering group's camp is laid out the same way (layoutCamp).
  * Pure: no DOM, so tests run it in Node.
  * ========================================================================== */
 
@@ -51,66 +55,16 @@ namespace SE {
    */
   export const CITY_RIVER_CLEARANCE = 2;
   export const CITY_RIVER_CLEARANCE_EDGE = 1;
-  /** Share of a block's pixels that blocks in front of it must leave visible; houses by size stage (a metropolis is a dense pile). */
-  const MIN_VISIBLE: Readonly<Record<string, number>> = { banner: 0.75, yard: 0.6, landmark: 0.6, ring: 0, bridge: 0.75 };
-  const MIN_VISIBLE_HOUSES = [0.85, 0.5, 0.42];
+  /** Share of a block's pixels that blocks in front of it must leave visible; houses by the plan. */
+  const MIN_VISIBLE: Readonly<Record<string, number>> = { banner: 0.75, yard: 0.6, landmark: 0.6, ring: 0, bridge: 0.75, fire: 0.9 };
+  /** Roles whose footprint may stand on the plan's free places. */
+  const MAY_KEEP = ['fire', 'banner', 'bridge', 'ring'];
   /** Rows weigh more than columns in the distance to a target: a block rather slides sideways than out of its row. */
   const ROW_WEIGHT = 1.5;
   /** Share of a city's houses in its main material (straw or hide). */
   const MAIN_MATERIAL = 0.7;
 
-  interface PlanItem { readonly role: string; readonly size?: string; readonly x: number; readonly y: number; readonly chance?: number }
-
-  /** Buildings (houses, hall, landmark) per size stage at most; spare plan items only fill up to this. */
-  const BUILDINGS_MAX = [3, 5, 8];
   const BUILDING_ROLES = ['dwelling', 'hall', 'landmark'];
-
-  /**
-   * Targets per size stage, in plan order: the pennant first, at the back,
-   * so whatever follows must leave it in sight; then big things, then spare
-   * houses (they take the room a river or a big block left). A house too
-   * large for its spot shrinks (SMALLER), so the smallest size is what
-   * stands between river and edge.
-   */
-  const PLANS: readonly (readonly PlanItem[])[] = [
-    [
-      { role: 'banner', x: 8, y: 6 },
-      { role: 'dwelling', size: 'm', x: 5, y: 9 },
-      { role: 'dwelling', size: 'm', x: 11, y: 12 },
-      { role: 'dwelling', size: 's', x: 11, y: 7, chance: 0.5 },
-      { role: 'yard', x: 8, y: 11 },
-    ],
-    [
-      { role: 'banner', x: 3, y: 7 },
-      { role: 'hall', x: 8, y: 6 },
-      { role: 'dwelling', size: 'l', x: 4, y: 12 },
-      { role: 'dwelling', size: 'm', x: 12, y: 12 },
-      { role: 'dwelling', size: 'm', x: 13, y: 8 },
-      { role: 'dwelling', size: 's', x: 8, y: 13, chance: 0.5 },
-      { role: 'dwelling', size: 's', x: 2, y: 7 },
-      { role: 'wall', x: 11, y: 13 },
-      { role: 'yard', x: 8, y: 9 },
-      { role: 'yard', x: 13, y: 6, chance: 0.6 },
-    ],
-    [
-      { role: 'banner', x: 4, y: 6 },
-      { role: 'landmark', x: 9, y: 5 },
-      { role: 'dwelling', size: 'l', x: 3, y: 8 },
-      { role: 'hall', x: 8, y: 11 },
-      { role: 'dwelling', size: 'm', x: 12, y: 13 },
-      { role: 'dwelling', size: 'm', x: 4, y: 13 },
-      { role: 'dwelling', size: 's', x: 8, y: 6 },
-      { role: 'dwelling', size: 's', x: 12, y: 10 },
-      { role: 'dwelling', size: 's', x: 3, y: 10 },
-      { role: 'dwelling', size: 's', x: 8, y: 13 },
-      { role: 'dwelling', size: 's', x: 13, y: 6 },
-      { role: 'dwelling', size: 's', x: 6, y: 12 },
-      { role: 'dwelling', size: 's', x: 10, y: 8 },
-      { role: 'wall', x: 3, y: 13 },
-      { role: 'yard', x: 8, y: 13 },
-      { role: 'yard', x: 3, y: 6, chance: 0.6 },
-    ],
-  ];
 
   /** Foot row of the yard per size stage: it covers the lower middle of the tile, never its two bottom rows. */
   const YARD_FOOT = [13, 13, 13];
@@ -158,10 +112,34 @@ namespace SE {
 
   const drawOrder = (a: Placed, b: Placed): number => a.fy - b.fy || a.fx - b.fx || a.seq - b.seq;
 
-  /** The blocks of a city, sorted for drawing (back to front). */
-  export function layoutCity(input: CityLayoutInput, m: CivManifest = CIV_MANIFEST): CityBlock[] {
+  /** What layoutCamp needs to know about the camp's tile. */
+  export interface CampLayoutInput {
+    readonly x: number;
+    readonly y: number;
+    /** Shelters standing, 0..CAMP_SHELTERS_MAX (fewer while it is pitched or struck). */
+    readonly shelters: number;
+    readonly near: (x: number, y: number, pad: number) => boolean;
+    readonly wet?: Uint8Array;
+  }
+
+  /** The blocks of a wandering group's camp: its fire place and `shelters` shelters round it (CAMP_PLAN). */
+  export function layoutCamp(input: CampLayoutInput, m: CivManifest = CIV_MANIFEST): CityBlock[] {
+    const n = clamp(input.shelters, 0, CAMP_SHELTERS_MAX);
+    let shelters = 0;
+    const items = CAMP_PLAN.items.filter((it) => it.role !== 'shelter' || shelters++ < n);
+    const stage: CityStagePlan = { ...CAMP_PLAN, items };
+    return layoutCity(
+      { x: input.x, y: input.y, era: Tech.Stone, size: CitySize.Village, tribe: -1, near: input.near, rivers: 0, wet: input.wet },
+      m, { stages: [stage, stage, stage], ground: null },
+    );
+  }
+
+  /** The blocks of a city, sorted for drawing (back to front); `plans` defaults to its era's (cityplans.ts). */
+  export function layoutCity(input: CityLayoutInput, m: CivManifest = CIV_MANIFEST, plans?: CityEraPlan): CityBlock[] {
     const era = cityArtEra(input.era, m);
     if (!era) return [];
+    const plan = plans ?? cityEraPlan(era);
+    const stage = plan.stages[input.size];
     const { x, y } = input;
     const roll = (salt: number): number => landHash(x, y, salt);
     const ofEra = (role: string, e: string | null): string[] =>
@@ -174,12 +152,23 @@ namespace SE {
     };
     const T = 16;
     const top = T - m.box.h;
+    /** Pixels a picture may reach past the tile on either side, and the width of the box. */
+    const side = (m.box.w - T) / 2;
+    const BW = m.box.w;
 
     const wet = input.wet ?? cityWetMask(x, y, input.near);
     const riverside = wet.some((v) => v !== 0);
     const ground = new Uint8Array(T * T);
     const placed: Placed[] = [];
-    const cover = new Int16Array(T * m.box.h);
+    const cover = new Int16Array(BW * m.box.h);
+    const mirror = roll(1) < 0.5;
+    /** The plan's free places, mirrored with it. */
+    const kept = new Uint8Array(T * T);
+    for (const [x0, y0, x1, y1] of stage.keep ?? []) {
+      for (let py = Math.max(0, y0); py <= Math.min(T - 1, y1); py++) {
+        for (let px = Math.max(0, x0); px <= Math.min(T - 1, x1); px++) kept[py * T + (mirror ? T - 1 - px : px)] = 1;
+      }
+    }
 
     const footprint = (s: CivSprite, depth: number, fx: number, fy: number, fn: (i: number) => boolean): boolean => {
       const left = fx - s.ax;
@@ -190,16 +179,34 @@ namespace SE {
       return false;
     };
 
-    /** Every block (with `next`) keeps its share of visible pixels, front ones drawn over back ones. */
+    /** The still flame the map draws over every fire place (cityfire.ts), on top of the whole picture. */
+    const flame = m.blocks.flame?.variants[0];
+    const flamed = new Uint8Array(BW * m.box.h);
+
+    /**
+     * Every block (with `next`) keeps its share of visible pixels, front ones
+     * drawn over back ones and the flames over all; a fire place counts its
+     * own flame as part of it.
+     */
     const visible = (next: Placed): boolean => {
       const all = [...placed, next].sort(drawOrder);
       cover.fill(-1);
+      flamed.fill(0);
       all.forEach((p, n) => {
         const left = p.fx - p.s.ax;
         const topY = p.fy - p.s.ay - top;
         for (let r = 0; r < p.s.rect.h; r++) {
-          const row = (topY + r) * T;
+          const row = (topY + r) * BW + side;
           for (let c = p.s.spans[r * 2]; c <= p.s.spans[r * 2 + 1]; c++) cover[row + left + c] = n;
+        }
+        if (!flame || p.role !== 'fire') return;
+        const fl = p.fx - flame.ax + side;
+        const ft = p.fy - 1 - flame.ay - top;
+        for (let r = 0; r < flame.rect.h; r++) {
+          if (ft + r < 0 || ft + r >= m.box.h) continue;
+          for (let c = flame.spans[r * 2]; c <= flame.spans[r * 2 + 1]; c++) {
+            if (fl + c >= 0 && fl + c < BW) flamed[(ft + r) * BW + fl + c] = 1;
+          }
         }
       });
       return all.every((p, n) => {
@@ -207,14 +214,15 @@ namespace SE {
         let seen = 0;
         const left = p.fx - p.s.ax;
         const topY = p.fy - p.s.ay - top;
+        const own = p.role === 'fire';
         for (let r = 0; r < p.s.rect.h; r++) {
-          const row = (topY + r) * T;
+          const row = (topY + r) * BW + side;
           for (let c = p.s.spans[r * 2]; c <= p.s.spans[r * 2 + 1]; c++) {
             total++;
-            if (cover[row + left + c] === n) seen++;
+            if (cover[row + left + c] === n && (own || flamed[row + left + c] === 0)) seen++;
           }
         }
-        return total === 0 || seen / total >= (MIN_VISIBLE[p.role] ?? MIN_VISIBLE_HOUSES[input.size]);
+        return total === 0 || seen / total >= (MIN_VISIBLE[p.role] ?? stage.visible);
       });
     };
 
@@ -225,18 +233,21 @@ namespace SE {
      * off the others'. `loose`: the last resort on a cramped river tile, the
      * foot 1 px from the water and the footprint just out of it.
      */
-    const clear = (id: string, v: number, fx: number, fy: number, loose = false): boolean => {
+    const clear = (id: string, v: number, fx: number, fy: number, role: string, loose = false): boolean => {
       const b = m.blocks[id];
       if (wet[fy * T + fx] > (loose ? 1 : 0)) return false;
-      return !footprint(b.variants[v], b.depth, fx, fy, (i) => wet[i] >= (loose ? 3 : 2) || ground[i] === 1);
+      const free = MAY_KEEP.includes(role);
+      return !footprint(b.variants[v], b.depth, fx, fy, (i) => wet[i] >= (loose ? 3 : 2) || ground[i] === 1 || (!free && kept[i] === 1));
     };
 
     const fits = (id: string, v: number, fx: number, fy: number, role: string, loose = false): boolean => {
       const s = m.blocks[id].variants[v];
       const left = fx - s.ax;
-      if (left < 0 || left + s.rect.w > T || fy - s.ay < top || fy > CITY_FOOT_Y1) return false;
-      if (role !== 'banner' && (left < inner || left + s.rect.w > T - inner)) return false;
-      return clear(id, v, fx, fy, loose) && visible({ id, v, fx, fy, s, role, seq: placed.length });
+      if (left < -side || left + s.rect.w > T + side || fy - s.ay < top || fy > CITY_FOOT_Y1) return false;
+      // The ground footprint stays on the tile; only the picture may reach over the neighbours.
+      if (left + s.bx0 < 0 || left + s.bx1 >= T) return false;
+      if (role !== 'banner' && inner > 0 && (left < inner || left + s.rect.w > T - inner)) return false;
+      return clear(id, v, fx, fy, role, loose) && visible({ id, v, fx, fy, s, role, seq: placed.length });
     };
 
     const place = (id: string, v: number, fx: number, fy: number, role: string): void => {
@@ -248,8 +259,8 @@ namespace SE {
 
     // The worn yard under it all: ground, so it takes no part in the checks; the map leaves out its wet pixels.
     const out: CityBlock[] = [];
-    const yardId = byRole('ground')[0];
-    if (yardId) {
+    const yardId = plan.ground === undefined ? byRole('ground')[0] : plan.ground;
+    if (yardId && m.blocks[yardId]) {
       const vars = m.blocks[yardId].variants;
       const v = Math.min(input.size, vars.length - 1);
       const s = vars[v];
@@ -284,11 +295,11 @@ namespace SE {
     // A walled era rings its metropolis: back wall, sides running forward, a front wall with a gate.
     // A river through the tile would break the ring: there the town's single piece stands instead.
     const wall = byRole('wall')[0];
-    const ringed = !!wall && input.size === CitySize.Metropolis && m.blocks[wall].variants.length >= 2 && !riverside;
+    const ringed = !!wall && !!stage.ring && m.blocks[wall].variants.length >= 2 && !riverside;
     if (ringed && wall) {
       const [hs, vs] = m.blocks[wall].variants;
       const ring = (v: number, fx: number, fy: number): void => {
-        if (clear(wall, v, fx, fy)) place(wall, v, fx, fy, 'ring');
+        if (clear(wall, v, fx, fy, 'ring')) place(wall, v, fx, fy, 'ring');
       };
       for (let left = 0; left + hs.rect.w <= T; left += hs.rect.w) ring(0, left + hs.ax, RING_BACK);
       for (const left of [0, T - vs.rect.w]) {
@@ -302,7 +313,6 @@ namespace SE {
     }
 
     const modern = m.eras.indexOf(era) >= m.eras.indexOf(MODERN_FROM);
-    const mirror = roll(1) < 0.5;
     const dwellings = byRole('dwelling');
     const mainHouse = Math.floor(roll(2) * dwellings.length);
     let yards = 0;
@@ -338,19 +348,24 @@ namespace SE {
       }
     }
 
-    PLANS[input.size].forEach((item, k) => {
+    stage.items.forEach((item, k) => {
       if (item.chance !== undefined && roll(10 + k) >= item.chance) return;
       const building = BUILDING_ROLES.includes(item.role);
-      if (building && buildings >= BUILDINGS_MAX[input.size]) return;
+      if (building && buildings >= stage.max) return;
       const options: [string, number][] = [];
-      if (item.role === 'banner') {
+      if (item.id !== undefined && item.role !== 'dwelling') {
+        // The plan names the block: its variants from a hashed start.
+        const n = m.blocks[item.id]?.variants.length ?? 0;
+        const first = Math.floor(roll(40 + k) * n);
+        for (let j = 0; j < n; j++) options.push([item.id, (first + j) % n]);
+      } else if (item.role === 'banner') {
         const id = byRole('banner')[0];
         if (id && input.tribe >= 0 && input.tribe < m.blocks[id].variants.length) options.push([id, input.tribe]);
       } else if (item.role === 'dwelling') {
-        const id = dwellings.length < 2 || roll(20 + k) < MAIN_MATERIAL ? dwellings[mainHouse] : dwellings[(mainHouse + 1) % dwellings.length];
-        if (id) {
+        const id = item.id ?? (dwellings.length < 2 || roll(20 + k) < MAIN_MATERIAL ? dwellings[mainHouse] : dwellings[(mainHouse + 1) % dwellings.length]);
+        if (id && m.blocks[id]) {
           const wanted = item.size ?? 's';
-          const cap = modern ? MODERN_CAP[input.size] : 'l';
+          const cap = stage.cap ?? (modern ? MODERN_CAP[input.size] : 'l');
           for (const size of SMALLER[SMALLER[cap].includes(wanted) ? wanted : cap]) {
             const v = m.blocks[id].variants.findIndex((s) => s.size === size);
             if (v >= 0) options.push([id, v]);

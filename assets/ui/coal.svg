@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#e9f1ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <title>Kohle</title>
+  <path d="M3 19.5L4.8 12.8L10.4 9.8L14.6 13.6L13.2 19.5z" fill="#968c80" fill-opacity=".45"/>
+  <path d="M4.8 12.8L9.6 15.2L14.6 13.6M9.6 15.2L10.4 9.8"/>
+  <path d="M15.6 19.5L16.8 14.8L19.8 13.2L21.6 16.6L20.8 19.5z" fill="#968c80" fill-opacity=".45"/>
+</svg>

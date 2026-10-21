@@ -211,13 +211,15 @@ namespace SE {
         cities += world.techCounts[t];
         if (world.techCounts[t] > 0 && top === Tech.None) top = t as Tech;
       }
-      const civSig = `${world.sentientClass}|${top}|${cities}|${fmt.one(world.totalCityPop)}`;
+      const coal = `${fmt.int(world.coal)} Gt`;
+      const oil = `${fmt.int(world.oil)} Gt`;
+      const civSig = `${world.sentientClass}|${top}|${cities}|${fmt.one(world.totalCityPop)}|${coal}|${oil}`;
       if (civSig === this.civSig) return;
       this.civSig = civSig;
       const civ = this.civHost;
       civ.innerHTML = '';
       if (world.sentientClass === Life.None) {
-        civ.appendChild(make('p', 'report-note', 'Noch keine intelligente Art. Weichtiere, Wale, Insekten, Reptilien, Dinosaurier, Vögel und Säugetiere können Intelligenz entwickeln, sobald sie weit verbreitet sind und die Luft mindestens 14 % Sauerstoff enthält.'));
+        civ.appendChild(make('p', 'report-note', 'Noch keine intelligente Art. Von selbst erwachen nur die Hominiden, nachdem ein Komet die Dinosaurier ausgelöscht hat – oder die Dinosaurier, wenn sie überlebt haben. Dazu müssen sie weit verbreitet sein, und die Luft muss mindestens 14 % Sauerstoff enthalten. Andere Tiergruppen erweckt nur der Monolith.'));
         return;
       }
       const grid = make('div', 'stat-grid');
@@ -230,6 +232,8 @@ namespace SE {
       stat(eventIcon('civilization'), 'Technologie', TECH_NAMES[top]);
       stat(uiIcon('city'), 'Städte', fmt.int(cities));
       stat(resIcon('population'), 'Bevölkerungsindex', fmt.one(world.totalCityPop));
+      stat(uiIcon('coal'), 'Kohlevorrat', coal);
+      stat(uiIcon('oil'), 'Ölvorrat', oil);
       civ.appendChild(grid);
       if (top === Tech.Nanotech) {
         civ.appendChild(make('p', 'report-note', 'Deine Zivilisation hat die höchste Technologiestufe erreicht. Das Spiel geht frei weiter – halte den Planeten im Gleichgewicht.'));

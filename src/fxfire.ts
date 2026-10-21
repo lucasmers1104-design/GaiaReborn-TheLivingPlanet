@@ -195,7 +195,12 @@ namespace SE {
       for (let k = 0; k < n; k++) spark(s, gx + (Math.random() - 0.5) * 6, gy - 1, dx * 4, 0.7);
     },
 
-    main(s: FxScene, st: FxStarted, t: number): void {
+    main(s: FxScene, st: FxStarted, t: number, world: WorldState): void {
+      // A natural fire is lightning's (hazardlightning.ts): the bolt comes down where the flame grows.
+      if (world.hazards.hazard(st.id)?.cause === 'natural' && s.once(`${st.id}:lightning`)) {
+        const [bx, by] = flameAt(st.x, st.y, 0);
+        fxLightningBolt(s, bx, by);
+      }
       const m = mains.get(st.id) ?? { seen: 0, out: false };
       m.seen = s.now;
       mains.set(st.id, m);
@@ -237,10 +242,12 @@ namespace SE {
 
     reset(): void {
       mains.clear();
+      fireSoundReset();
     },
 
     live(s: FxScene, world: WorldState): void {
       const hz = world.hazards;
+      const heard = new Map<number, boolean>();
       for (const [id, m] of mains) {
         if (s.now - m.seen > 1000) { mains.delete(id); continue; }
         const h = hz.hazard(id);
@@ -255,12 +262,14 @@ namespace SE {
         const single = fire.burning.length > FIRE_FLAMES_ONE;
         const wind = ClimateSystem.airCurrent(h.y);
         const seen: number[] = [];
+        heard.set(h.id, false);
         for (const i of fire.burning) {
           if (hz.tile[i] !== HazardTile.Burning) continue;
           const x = i % GRID_W;
           const y = (i / GRID_W) | 0;
           if (!s.sees(x, y)) continue;
           seen.push(i);
+          heard.set(h.id, true);
           if (i === origin) continue;
           const size = fireFlameSize(fireFuel(world, i), hz.level[i]);
           if (!single && hz.level[i] >= 2 && hazardRoll(i, 9, 0xf1) < 0.65) {
@@ -281,6 +290,7 @@ namespace SE {
           spark(s, (i % GRID_W) * 16 + 3 + Math.random() * 10, ((i / GRID_W) | 0) * 16 + 2 + Math.random() * 6, wind.dx * 8);
         }
       }
+      fireSoundUpdate(s, heard);
       smoulder(s, world);
     },
   };

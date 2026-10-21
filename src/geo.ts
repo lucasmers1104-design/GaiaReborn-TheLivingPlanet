@@ -250,6 +250,11 @@ namespace SE {
         else this.trigger(world, EventKind.Meteor, mx, my);
       }
 
+      if (hazardSink) {
+        const fire = lightningFireTile(world);
+        if (fire >= 0) hazardSink(EventKind.Fire, fire, 'natural');
+      }
+
       // Natural plagues now run over the city list (epidemic.ts, spec E5). The
       // old roll still draws its random numbers, unused, so every later draw
       // and every seed's history stay as they were (like CivSystem.LEGACY_DRAWS).

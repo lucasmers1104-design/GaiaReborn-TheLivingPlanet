@@ -10,7 +10,8 @@
  * ring frames lead in and out, never alpha (docs/ereignisse-2026-10/stil.md).
  * A whale takes over its marker's tile and facing only while submerged, so
  * the herd's steps happen out of sight, and it rises only where no other
- * surfaced whale is within SPACING. Visual only: the simulation never reads this.
+ * surfaced whale is within SPACING and fewer than MAX_SURFACED hold room on the
+ * planet. Visual only: the simulation never reads this.
  *
  * Sprite points come from the catalog's `mouth` in the east frames (west:
  * w − 1 − x): [blowX, blowY, snoutX, snoutY, flukeX, flukeY]; missing
@@ -66,6 +67,8 @@ namespace SE {
   const BOB_PERIOD = 3.2;
   /** Free water kept between two surfaced whales, art px. */
   const SPACING = 6;
+  /** Whales holding room on the whole planet at once, so a surfacing whale stays a rare sight. */
+  const MAX_SURFACED = 2;
   /** Blowhole, snout and fluke in the east frames when the catalog's `mouth` lacks them, as shares of w and h. */
   const DEFAULT_POINTS: readonly number[] = [0.62, 0.3, 0.92, 0.5, 0.15, 0.5];
   const WORLD_PX = GRID_W * 16;
@@ -206,7 +209,8 @@ namespace SE {
           s.tile = m.tile;
           s.flip = m.flip;
         }
-        if (cycle !== s.cycle) {
+        // Still: no cycles, so a whale left under retries whenever a place on the planet frees up.
+        if (cycle !== s.cycle || (still && s.under)) {
           if (still) {
             s.tile = m.tile;
             s.flip = m.flip;
@@ -289,7 +293,7 @@ namespace SE {
       s.y1 = y - sp.ay + sp.h;
       this.live = this.live.filter((o) => o !== s);
       // Joining a cycle after its boil (a whale first seen mid-cycle) would pop up: it stays under.
-      s.under = late || this.live.some((o) => {
+      s.under = late || this.live.length >= MAX_SURFACED || this.live.some((o) => {
         let dx = (o.x0 + o.x1) / 2 - (s.x0 + s.x1) / 2;
         dx -= Math.round(dx / WORLD_PX) * WORLD_PX;
         return Math.abs(dx) * 2 < o.x1 - o.x0 + s.x1 - s.x0 + 2 * SPACING &&

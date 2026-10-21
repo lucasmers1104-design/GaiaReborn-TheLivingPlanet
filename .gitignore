@@ -2,3 +2,5 @@ node_modules/
 _shot*.png
 _sprite*
 _screens/
+tmp/
+output/

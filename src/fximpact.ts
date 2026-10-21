@@ -8,6 +8,11 @@
  *            main  flash, shock ring, a dust ring along the ground, debris,
  *                  a dust cloud that grows, billows and crumbles; at sea a
  *                  water fountain, splash rings, spray and steam instead
+ *   comet    the meteor at COMET_STRENGTH (comet.ts): a light high up and left
+ *                  that brightens and grows a tail while the shadow on the
+ *                  2 × 2 crater widens, then a long flight trailing embers;
+ *                  the impact at twice the size, with a second shock ring
+ *                  and a ring of dust clouds that drift off with the wind
  *   atomic   omen  a point of light flares high over the tile
  *            main  flash, shock ring and dust ring, the mushroom cloud rises,
  *                  spreads and dissolves; flames on the burning ring die down
@@ -49,6 +54,15 @@ namespace SE {
   /** The swell the splash sends out over the water: art pixels and ms. */
   const SWELL_R = 36;
   const SWELL_MS = 1600;
+  /** The comet's light stands this many tiles up and left of its crater and flies in over the omen's last COMET_FLIGHT_MS. */
+  const COMET_SKY_TILES = 10;
+  const COMET_FLIGHT_MS = 1100;
+  /** Dust clouds round the comet's crater, how far out they start (art pixels) and how long they live. */
+  const COMET_CLOUDS = 7;
+  const COMET_CLOUD_R = 26;
+  const COMET_CLOUD_MS = 9000;
+  /** The second shock ring follows the first after this long. */
+  const COMET_ECHO_MS = 450;
 
   const one = (ramp: string, step: number): readonly string[] => [fxColor(ramp, step)];
   /** The light point's two flicker frames, as 2×2 pixel colours. */
@@ -70,9 +84,14 @@ namespace SE {
   const DEBRIS_ROCK: readonly string[] = [fxColor('rock', 3), fxColor('rock', 2), fxColor('soil', 1), fxColor('rock', 0)];
   const SPRAY: readonly string[] = [fxColor('white', 0), fxColor('ice', 4), fxColor('water', 7), fxColor('water', 6)];
 
-  /** World art pixel of a tile's centre. */
-  function centre(x: number, y: number): [number, number] {
-    return [x * 16 + 8, y * 16 + 8];
+  /** World art pixel of a tile's centre, or of the centre of the k × k block from it (the comet's crater). */
+  function centre(x: number, y: number, k = 1): [number, number] {
+    return [x * 16 + 8 * k, y * 16 + 8 * k];
+  }
+
+  /** A staged or started meteor's size: 1, or the comet's COMET_STRENGTH. */
+  function scaleOf(strength: number | undefined): number {
+    return Math.max(1, Math.round(strength ?? 1));
   }
 
   /** A light in the sky at (x, y) for one frame: 2×2 and flickering when `big`, else one faint pixel. */
@@ -93,11 +112,85 @@ namespace SE {
     s.particles.spawn(x, y + 1 + d, 0, 0, 0.001, 0, HALO, true);
   }
 
-  /** Dust thrown out along the ground behind the shock wave: a dashed ring, slower and shorter. */
-  function dustRing(s: FxScene, cx: number, cy: number, t: number): void {
-    if (t < 0 || t >= DUST_RING_MS) return;
-    const p = t / DUST_RING_MS;
-    s.ring(cx, cy, Math.max(2, DUST_RING_R * (1 - (1 - p) * (1 - p))), DUST_LIGHT, DUST_DARK, true, p < 0.5 ? 3 : 2);
+  /** Dust thrown out along the ground behind the shock wave: a dashed ring, slower and shorter; `k` times the size. */
+  function dustRing(s: FxScene, cx: number, cy: number, t: number, k = 1): void {
+    const ms = DUST_RING_MS * k;
+    if (t < 0 || t >= ms) return;
+    const p = t / ms;
+    s.ring(cx, cy, Math.max(2, DUST_RING_R * k * (1 - (1 - p) * (1 - p))), DUST_LIGHT, DUST_DARK, true, p < 0.5 ? 3 : 2);
+  }
+
+  /** The dithered shadow on the target, in three growing steps of `k` times the meteor's size. */
+  function shadow(s: FxScene, cx: number, cy: number, t: number, end: number, k: number): void {
+    // Consecutive pixel rings leave gaps between them, a dithered disc. Zoomed out past the art (pixel < 1)
+    // every ring is still a device pixel wide and neighbours merge into a solid square, so only rings two
+    // device pixels apart are drawn there.
+    const radius = (3 + 2 * Math.min(2, Math.floor((t / end) * 3))) * k;
+    const step = s.pixel < 1 ? Math.ceil(2 / s.pixel) : 1;
+    for (let r = radius; r >= 1; r -= step) s.ring(cx, cy, r, r < radius ? SHADOW_INNER : SHADOW_OUTER, SHADOW_INNER, true);
+  }
+
+  /**
+   * The comet's omen: high up and left a light brightens and grows a tail
+   * of faint sparks; then it flies in, trailing embers, and strikes as the
+   * omen ends.
+   */
+  function cometOmen(s: FxScene, x: number, y: number, t: number, k: number): void {
+    const [cx, cy] = centre(x, y, k);
+    const end = COMET_OMEN_MS;
+    shadow(s, cx, cy, t, end, k);
+    const sky = COMET_SKY_TILES * 16;
+    const fly = t - (end - COMET_FLIGHT_MS);
+    if (fly < 0) {
+      const lx = cx - sky;
+      const ly = cy - sky;
+      light(s, lx, ly, t, true, t > end * 0.2);
+      // The tail streams away from the sun-lit head, longer as it nears.
+      const tail = 2 + Math.floor((t / end) * 10);
+      if (Math.random() < 0.6) s.particles.spawn(lx - Math.random() * tail, ly - Math.random() * tail, -4, -4, 0.5, 0, HALO, true);
+      return;
+    }
+    const sp = FX_MANIFEST.sprites.meteor_streak;
+    const left = sky * (1 - fly / COMET_FLIGHT_MS);
+    const hx = cx - left;
+    const hy = cy - left;
+    for (let n = 0; n < 3; n++) {
+      s.particles.spawn(hx - 6 - Math.random() * 10, hy - 6 - Math.random() * 10, -10 - Math.random() * 14, -10 - Math.random() * 14, 0.45, 0, DEBRIS_HOT, true);
+    }
+    s.add({ id: 'meteor_streak', frame: Math.floor(fly / 83) % (sp?.frames.length ?? 1), x: hx, y: hy, foot: cy + 16 * k, sx: 24, sy: 24 });
+    s.add({ id: 'meteor_streak', frame: Math.floor(fly / 83 + 2) % (sp?.frames.length ?? 1), x: hx - 10, y: hy - 10, foot: cy + 16 * k - 1, sx: 24, sy: 24 });
+  }
+
+  /** The comet strikes: a long fireball, two shock rings, the ground dust ring, debris and a ring of dust clouds. */
+  function cometMain(s: FxScene, st: FxStarted, t: number, k: number): void {
+    const [cx, cy] = centre(st.x, st.y, k);
+    flash(s, cx, cy, t);
+    if (t >= FLASH_MS && t < FIREBALL_MS * k) {
+      s.add({ id: 'flash', frame: 2, x: cx, y: cy, foot: cy });
+      s.add({ id: 'flash', frame: 2, x: cx + 10, y: cy - 6, foot: cy - 1 });
+      s.add({ id: 'flash', frame: 2, x: cx - 10, y: cy - 4, foot: cy - 1 });
+    }
+    const shockMs = SHOCK_MS * k;
+    if (t < shockMs) s.ring(cx, cy, Math.max(1, (SHOCK_R * k * t) / shockMs), RING_LIGHT, RING_DARK);
+    const echo = t - COMET_ECHO_MS;
+    if (echo >= 0 && echo < shockMs) s.ring(cx, cy, Math.max(1, (SHOCK_R * k * echo) / shockMs), RING_LIGHT, RING_DARK);
+    if (t < 500 * k) s.shake(st.x, st.y, 2 * k, t < 300 * k ? 2 : 1);
+    dustRing(s, cx, cy, t - 80, k);
+    if (s.once(`${st.id}:debris`)) throwUp(s, cx, cy, DEBRIS * 2, 110, 50 * k, 150, [DEBRIS_HOT, DEBRIS_ROCK, DEBRIS_ROCK]);
+    if (t > 600 && s.once(`${st.id}:debris2`)) throwUp(s, cx, cy, DEBRIS, 70, 40 * k, 150, [DEBRIS_ROCK, DEBRIS_HOT]);
+    if (s.once(`${st.id}:dust`)) {
+      const wind = ClimateSystem.airCurrent(st.y);
+      s.spawn({ id: 'dust_cloud', x: cx, y: cy - 6, vx: wind.dx * DUST_DRIFT, vy: -DUST_RISE, life: COMET_CLOUD_MS, mode: 'once' });
+      for (let n = 0; n < COMET_CLOUDS; n++) {
+        const a = (n / COMET_CLOUDS) * Math.PI * 2;
+        const ox = Math.cos(a) * COMET_CLOUD_R;
+        const oy = Math.sin(a) * COMET_CLOUD_R * 0.6;
+        s.spawn({
+          id: 'dust_cloud', x: cx + ox, y: cy + oy - 4,
+          vx: wind.dx * DUST_DRIFT + ox * 0.08, vy: -DUST_RISE + oy * 0.05, life: COMET_CLOUD_MS - n * 300, mode: 'once',
+        });
+      }
+    }
   }
 
   /** Flash frames 0–1; with reduced effects the fireball without white (frame 2) instead. */
@@ -120,16 +213,13 @@ namespace SE {
   }
 
   FX_SCRIPTS[EventKind.Meteor] = {
-    omen(s: FxScene, x: number, y: number, t: number): void {
+    omen(s: FxScene, x: number, y: number, t: number, strength?: number): void {
+      const k = scaleOf(strength);
+      if (k > 1) { cometOmen(s, x, y, t, k); return; }
       const [cx, cy] = centre(x, y);
       const end = HAZARD_OMEN_MS[EventKind.Meteor];
       const sky = SKY_TILES * 16;
-      // The shadow grows in three steps; consecutive pixel rings leave gaps between them, a dithered disc.
-      // Zoomed out past the art (pixel < 1) every ring is still a device pixel wide and neighbours merge into a
-      // solid square, so only rings two device pixels apart are drawn there.
-      const radius = 3 + 2 * Math.min(2, Math.floor((t / end) * 3));
-      const step = s.pixel < 1 ? Math.ceil(2 / s.pixel) : 1;
-      for (let r = radius; r >= 1; r -= step) s.ring(cx, cy, r, r < radius ? SHADOW_INNER : SHADOW_OUTER, SHADOW_INNER, true);
+      shadow(s, cx, cy, t, end, 1);
       const fly = t - (end - STREAK_MS);
       if (fly < 0) {
         light(s, cx - sky, cy - sky, t, true, t > end * 0.35);
@@ -145,8 +235,11 @@ namespace SE {
     },
 
     main(s: FxScene, st: FxStarted, t: number, world: WorldState): void {
-      const [cx, cy] = centre(st.x, st.y);
+      const k = scaleOf(st.strength);
       const sea = world.elevation[idx(st.x, st.y)] < 0;
+      // The comet always strikes land (cometSite).
+      if (k > 1 && !sea) { cometMain(s, st, t, k); return; }
+      const [cx, cy] = centre(st.x, st.y);
       flash(s, cx, cy, t);
       if (t >= FLASH_MS && t < FIREBALL_MS && !sea) s.add({ id: 'flash', frame: 2, x: cx, y: cy, foot: cy });
       if (t < SHOCK_MS) {

@@ -61,6 +61,18 @@ namespace SE {
     // Even, like every card edge, so cards stay sharp at half-pixel zoom levels.
     return PAD_TOP + (n.row - MIN_ROW) * ROW_H + Math.floor((ROW_H - NODE_H) / 4) * 2;
   }
+  /** Colour class: sea animals take the ocean blue of the first cells. */
+  function tint(n: EvoNode): string {
+    const sea = n.kingdom === 'animal'
+      && n.habitat.tags.every((t) => t === 'coastalsea' || t === 'opensea' || t === 'atmosphere');
+    return `k-${sea ? 'origin' : n.kingdom}`;
+  }
+
+  /** Why developed step n is gone for good, or '': a plant group its rivals displaced, the comet's dinosaurs. */
+  export function stepGoneReason(world: WorldState, n: EvoNode, alive: boolean): string {
+    if (n.flora !== undefined && floraGone(world, n.flora)) return `Für immer ausgestorben – abgelöst durch ${floraRivalNames(n.flora)}.`;
+    return alive ? '' : dinoEraStepBar(world, n.id);
+  }
 
   export interface TreeHooks {
     develop(id: string): { ok: boolean; reason: string };
@@ -69,6 +81,8 @@ namespace SE {
     world(): WorldState;
     evo(): EvolutionSystem;
     dex(): FaunaDex;
+    /** Open a sub-species' lexicon entry. */
+    openSpecies(c: Life, stage: number): void;
   }
 
   export class EvolutionTreeView {
@@ -227,7 +241,7 @@ namespace SE {
         const mx = Math.floor((x1 + x2) / 4) * 2 + 1;
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('d', `M${x1},${y1} H${mx} V${y2} H${x2}`);
-        path.setAttribute('class', `edge-lineage k-${n.kingdom}`);
+        path.setAttribute('class', `edge-lineage ${tint(n)}`);
         this.edgeSvg.appendChild(path);
         this.lineagePaths.set(n.id, path);
       }
@@ -236,7 +250,7 @@ namespace SE {
     private buildCard(n: EvoNode): HTMLButtonElement {
       const card = document.createElement('button');
       card.type = 'button';
-      card.className = `tree-node k-${n.kingdom}`;
+      card.className = `tree-node ${tint(n)}`;
       card.dataset.id = n.id;
       card.style.left = `${nodeX(n)}px`;
       card.style.top = `${nodeY(n)}px`;
@@ -255,7 +269,10 @@ namespace SE {
         chips.appendChild(img(habitatAsset(tag), 'hab-chip', ''));
       }
       text.appendChild(chips);
-      card.append(art, text, progress, badge);
+      const rip = make('span', 'tree-node-rip', 'R.I.P.');
+      rip.setAttribute('aria-hidden', 'true');
+      rip.hidden = true;
+      card.append(art, rip, text, progress, badge);
       // The lineage note rides above the card it describes rather than on the
       // line, where neighbouring cards kept covering it.
       if (n.lineageNote) {
@@ -573,13 +590,18 @@ namespace SE {
         if (st.state === 'available') available++;
         card.classList.remove('state-locked', 'state-partial', 'state-available', 'state-developed');
         card.classList.add(`state-${st.state}`);
-        const extinct = st.state === 'developed' && !st.alive;
+        const gone = st.state === 'developed' && stepGoneReason(world, n, st.alive) !== '';
+        const extinct = st.state === 'developed' && (!st.alive || gone);
         card.classList.toggle('extinct', extinct);
+        card.classList.toggle('gone', gone);
+        const rip = card.querySelector<HTMLElement>('.tree-node-rip');
+        if (rip) rip.hidden = !gone;
 
         const met = st.conds.filter((c) => c.met).length;
         const total = st.conds.length;
         let status: string;
         switch (st.state) {
+          // "Für immer" is what the R.I.P. band says; the card has room for one word.
           case 'developed': status = extinct ? 'Ausgestorben' : 'Entwickelt'; break;
           case 'available': status = n.cost > 0 ? `Entwickeln · ${n.cost} EP` : 'Entwickeln · kostenlos'; break;
           case 'partial': status = `${met} von ${total} erfüllt`; break;
@@ -596,7 +618,7 @@ namespace SE {
           const src = uiIcon(icon);
           if (!badge.src.endsWith(src)) badge.src = src;
         }
-        card.setAttribute('aria-label', `${n.name}, ${KINGDOM_NAMES[n.kingdom]}: ${extinct ? 'entwickelt, derzeit ausgestorben' : STATE_NAMES[st.state]}${st.state === 'partial' ? `, ${met} von ${total} Bedingungen erfüllt` : ''}`);
+        card.setAttribute('aria-label', `${n.name}, ${KINGDOM_NAMES[n.kingdom]}: ${gone ? 'für immer ausgestorben' : extinct ? 'entwickelt, derzeit ausgestorben' : STATE_NAMES[st.state]}${st.state === 'partial' ? `, ${met} von ${total} Bedingungen erfüllt` : ''}`);
 
         const path = this.lineagePaths.get(n.id);
         if (path) {
@@ -675,9 +697,10 @@ namespace SE {
       const evo = this.hooks.evo();
       const world = this.hooks.world();
       const st = evo.statusOf(id);
+      const gone = st.state === 'developed' ? stepGoneReason(world, n, st.alive) : '';
       const costCond = st.conds.find((c) => c.kind === 'cost');
       const sig = [
-        id, st.state, st.alive, world.evo.chronicle.length, n.life !== undefined ? this.hooks.dex().version : -1,
+        id, st.state, st.alive, world.evo.chronicle.length, n.life !== undefined ? this.hooks.dex().version : -1, world.dinoEra.fate, world.floraEnded,
         st.conds.map((c) => (c.kind === 'cost' ? `${c.met}` : `${c.met}${c.pending}${c.detail}`)).join('|'),
       ].join('#');
       if (sig === this.detailSig) {
@@ -695,7 +718,7 @@ namespace SE {
       const active = document.activeElement as HTMLElement | null;
       const focusKey = active && d.contains(active) ? active.dataset.focusKey ?? 'main' : null;
       d.innerHTML = '';
-      d.className = `tree-detail k-${n.kingdom} state-${st.state}`;
+      d.className = `tree-detail ${tint(n)} state-${st.state}`;
 
       const main = make('div', 'detail-main');
       main.tabIndex = -1;
@@ -705,7 +728,7 @@ namespace SE {
       const chips = make('div', 'detail-chips');
       chips.append(
         make('span', `chip chip-k k-${n.kingdom}`, KINGDOM_NAMES[n.kingdom]),
-        make('span', `chip chip-state state-${st.state}`, st.state === 'developed' && !st.alive ? 'Ausgestorben' : STATE_NAMES[st.state]),
+        make('span', `chip chip-state state-${st.state}`, gone ? 'Für immer ausgestorben' : st.state === 'developed' && !st.alive ? 'Ausgestorben' : STATE_NAMES[st.state]),
       );
       ht.append(chips, make('h3', 'detail-name', n.name), make('div', 'detail-short', n.short));
       head.appendChild(ht);
@@ -734,12 +757,12 @@ namespace SE {
           : rec.migrated ? 'Entwickelt – aus einem älteren Spielstand übernommen'
             : `${verb}${yearsAgo(rec.years) > 0 ? '' : ':'} ${formatEarthDate(rec.years)}`;
         action.appendChild(make('div', 'detail-when', when));
-        if (!st.alive) {
+        if (!st.alive || gone) {
           const warn = make('div', 'detail-warn');
           warn.append(img(uiIcon('warning'), 'ico'), make('span', undefined,
-            n.life !== undefined
+            gone || (n.life !== undefined
               ? 'Derzeit ausgestorben. Mit „Leben ansiedeln“ an einem geeigneten Ort neu ansiedeln.'
-              : 'Derzeit ausgestorben. Mit dem Werkzeug „Pflanzen“ an einem geeigneten Ort neu ansiedeln.'));
+              : 'Derzeit ausgestorben. Mit dem Werkzeug „Pflanzen“ an einem geeigneten Ort neu ansiedeln.')));
           action.appendChild(warn);
         }
         const row = make('div', 'detail-buttons');
@@ -747,11 +770,13 @@ namespace SE {
           label: 'Auf der Karte zeigen', icon: uiIcon('target'), cls: 'btn btn-small',
           onClick: () => { if (!this.hooks.showOnMap(id)) this.flash('Derzeit lebt nirgends eine Population.'); },
         }));
-        row.appendChild(button({
-          label: n.life !== undefined ? 'Ansiedeln' : 'Pflanzen', icon: uiIcon(n.life !== undefined ? 'tool-life' : 'tool-plant'), cls: 'btn btn-small btn-ghost',
-          title: 'Werkzeug mit dieser Gruppe auswählen',
-          onClick: () => this.hooks.placeTool(id),
-        }));
+        if (!gone) {
+          row.appendChild(button({
+            label: n.life !== undefined ? 'Ansiedeln' : 'Pflanzen', icon: uiIcon(n.life !== undefined ? 'tool-life' : 'tool-plant'), cls: 'btn btn-small btn-ghost',
+            title: 'Werkzeug mit dieser Gruppe auswählen',
+            onClick: () => this.hooks.placeTool(id),
+          }));
+        }
         action.appendChild(row);
       } else {
         const can = st.state === 'available';
@@ -812,7 +837,13 @@ namespace SE {
       // --- sub-species ---
       if (n.life !== undefined) {
         main.appendChild(heading('Unterarten', 'tool-life'));
-        main.appendChild(speciesStrip(n.life, this.hooks.dex()));
+        main.appendChild(speciesStrip(n.life, this.hooks.dex(), this.hooks.world(), (c, s) => this.hooks.openSpecies(c, s)));
+        const cap = n.life === Life.Mammal ? mammalCapNote(this.hooks.world()) : '';
+        if (cap) {
+          const note = make('div', 'detail-warn');
+          note.append(img(uiIcon('lock'), 'ico'), make('span', undefined, cap));
+          main.appendChild(note);
+        }
       }
 
       // --- ecosystem ---

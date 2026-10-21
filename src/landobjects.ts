@@ -14,8 +14,9 @@
  * lifted mountain range (landridgedraw.ts) an object stands as high as the
  * ground under its foot and hides behind nearer ground; plants stop at the
  * crest's tree line. Volcanic cones are relief, not objects (landridges.ts).
- * Reefs show coral and sand patches under the water's ripples; on a beach
- * only palms stand, on the dry sand, their crowns leaning over the sea.
+ * Reefs show coral and sand patches under the water's ripples, sand cays
+ * over them; on a beach only palms stand, on the dry sand, their crowns
+ * leaning over the sea.
  * ========================================================================== */
 
 namespace SE {
@@ -24,7 +25,7 @@ namespace SE {
     /** Foot in world pixels (x unwrapped, as the caller's tiles were). */
     readonly fx: number;
     readonly fy: number;
-    /** Kelp, corals: drawn on sea water only, without a shadow. */
+    /** Kelp, corals, sand cays: drawn on sea water only, without a shadow. */
     readonly water: boolean;
     /** World-stable tie-break for objects with the same foot. */
     readonly seq: number;
@@ -249,7 +250,8 @@ namespace SE {
         if (depth && y >= (top as Int16Array)[x] && y <= (bottom as Int32Array)[x] && depth[k] > ground + DEPTH_SLACK) continue;
         px[k] = tone ? tone[uv[n]] : uv[n];
         occupied[k] = 1;
-        if (!p.water && water[k] === 1) water[k] = 0;
+        // A crown or a cay hides the water: no surf or wave is drawn on it; a cay keeps a palm drawn before it.
+        if ((!p.water || look.island) && water[k] === 1) water[k] = 0;
       }
     }
   }
@@ -272,6 +274,8 @@ namespace SE {
     readonly plant: boolean; readonly tree: boolean;
     /** Lies under the water's surface (corals): drawn below its ripples. */
     readonly under: boolean;
+    /** Rises out of the water (sand cays): drawn over its ripples, hides the water like a crown. */
+    readonly island: boolean;
   }
   const LOOKS = new WeakMap<LandSprite, SpriteLook>();
 
@@ -303,7 +307,7 @@ namespace SE {
     const look: SpriteLook = {
       x: Uint8Array.from(xs), y: Uint8Array.from(ys), v: Uint8Array.from(vs),
       shadowX: Int8Array.from(dxs), shadowY: Int8Array.from(dys),
-      plant: ob.group !== null, tree: ob.kind === 'tree', under: ob.kind === 'reef',
+      plant: ob.group !== null, tree: ob.kind === 'tree', under: ob.kind === 'reef', island: ob.kind === 'cay',
     };
     LOOKS.set(t, look);
     return look;

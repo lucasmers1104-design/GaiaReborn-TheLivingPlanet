@@ -1,8 +1,7 @@
 # Grafiken (SVG)
 
-Alle Grafiken sind handgeschriebene SVG-Dateien ohne Schrift, Skripte oder externe Verweise und werden
-per `<img src="assets/…">` eingebunden (funktioniert auch direkt über `file://`). Die Kachelkarte selbst
-bleibt Pixelkunst (`src/sprites.ts`) – so behält die Spielwelt den Look des Originals von 1990, während
+Alle Grafiken werden per `<img src="assets/…">` eingebunden (funktioniert auch direkt über `file://`). Die Kachelkarte selbst
+bleibt Pixelkunst (`src/sprites.ts`) – so behält die Spielwelt den Look des Originals, während
 Menüs, Baum und Ereignisse eine moderne Bildsprache bekommen. Seit Oktober 2026 nutzt die Pixelkunst eine
 abgestimmte Naturpalette statt reiner EGA-Farben (siehe `docs/grafik-2026-10/bericht.md`).
 

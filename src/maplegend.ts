@@ -95,8 +95,10 @@ namespace SE {
         swatch(host, 'Strömung nach Westen', [30, 60, 150]);
         break;
       case MapMode.AirCurrents:
-        swatch(host, 'Wind nach Osten', [200, 200, 120]);
-        swatch(host, 'Wind nach Westen', [110, 130, 180]);
+        swatch(host, 'Passate', WIND_BELTS[2].color);
+        swatch(host, 'Westwinde', WIND_BELTS[1].color);
+        swatch(host, 'Polare Ostwinde', WIND_BELTS[0].color);
+        host.appendChild(make('span', 'legend-line', 'Bodenwinde · Pfeile zeigen die Richtung'));
         break;
       case MapMode.Events:
         swatch(host, 'Aktuelles Ereignis', EGA.lightRed);

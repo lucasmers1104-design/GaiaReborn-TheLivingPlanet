@@ -202,8 +202,7 @@ test('adopting a save without lexicon data is silent and fills the ladder', () =
   // A population two rungs above everything known: the rung between is entered first.
   let tile = -1;
   for (let i = 0; i < SE.TILE_COUNT && tile < 0; i++) {
-    const li = i * SE.LIFE_COUNT + CELLS;
-    if (w.lifeDensity[li] > 0 && w.lifeStage[li] === 0) tile = i;
+    if (w.lifeDensity[i * SE.LIFE_COUNT + CELLS] > 0) tile = i;
   }
   w.lifeStage[tile * SE.LIFE_COUNT + CELLS] = h + 2;
   advance(w, dex, 1);
@@ -307,8 +306,9 @@ test('the lexicon survives saving; damaged entries are dropped', () => {
   assert.equal(loaded.pending.length, 0, 'already discovered entries are not announced again');
   hide(w, CELLS);
   advance(w, loaded, 1);
-  assert.equal(loaded.status(CELLS, 0), 'extinct');
-  assert.equal(b.status(CELLS, 0), 'living');
+  // Stage 4: never hidden above, and unlike the first cells not gone for good.
+  assert.equal(loaded.status(CELLS, 3), 'extinct');
+  assert.equal(b.status(CELLS, 3), 'living');
 });
 
 test('a notice that never showed survives saving and is owed once more', () => {

@@ -2,8 +2,8 @@
  * SimEarth 2.0 — a city's picture at 1×
  * -----------------------------------------------------------------------------
  * Composes the blocks of one city (citylayout.ts) from the civ atlas into a
- * small RGBA picture: its tile plus 4 px above, with a transparent pixel all
- * round. First the yard, without its pixels near the river, then the union of
+ * small RGBA picture: the civ box (its tile, 2 px on either side and up to
+ * 8 px above), with a transparent pixel all round. First the yard, without its pixels near the river, then the union of
  * the blocks' drop shadows blended once, then the blocks back to front.
  * Pure arithmetic on typed arrays, so tests compose cities in Node; the map
  * (citylayer.ts) puts the result into a canvas.
@@ -18,7 +18,12 @@ namespace SE {
 
   /** Width and height of a city picture in art pixels. */
   export function cityPictureSize(m: CivManifest = CIV_MANIFEST): { w: number; h: number } {
-    return { w: 16 + 2 * CITY_PAD, h: m.box.h + 2 * CITY_PAD };
+    return { w: m.box.w + 2 * CITY_PAD, h: m.box.h + 2 * CITY_PAD };
+  }
+
+  /** Art pixels of the box beside the tile on either side. */
+  export function cityBoxSide(m: CivManifest = CIV_MANIFEST): number {
+    return (m.box.w - 16) / 2;
   }
 
   /** Ground and bridges cast no shadow: the yard is ground itself, a bridge stands over water. */
@@ -52,6 +57,8 @@ namespace SE {
   ): void {
     const { w: W, h: H } = cityPictureSize(m);
     const oy = CITY_PAD + m.box.h - 16;
+    const side = cityBoxSide(m);
+    const ox = CITY_PAD + side;
     out.fill(0);
     const solid = new Uint8Array(W * H);
     const copy = (b: CityBlock, yard: boolean): void => {
@@ -66,7 +73,7 @@ namespace SE {
           const px = left + sx;
           const py = top + sy;
           if (yard && (px < 0 || px >= 16 || py < 0 || py >= 16 || wet[py * 16 + px] !== 0)) continue;
-          const o = ((oy + py) * W + CITY_PAD + px) * 4;
+          const o = ((oy + py) * W + ox + px) * 4;
           if (!yard && casts(m.blocks[b.id].role)) solid[o >> 2] = 1;
           out[o] = atlas.data[a];
           out[o + 1] = atlas.data[a + 1];
@@ -77,20 +84,21 @@ namespace SE {
     };
     for (const b of blocks) if (m.blocks[b.id].role === 'ground') copy(b, true);
 
-    // Shadows as one union, so where two overlap the ground darkens once.
-    const shade = new Uint8Array(16 * 16);
+    // Shadows as one union, so where two overlap the ground darkens once; on the tile's rows, across the box.
+    const BW = m.box.w;
+    const shade = new Uint8Array(BW * 16);
     for (const b of blocks) {
       const blk = m.blocks[b.id];
       if (!casts(blk.role)) continue;
       const sp = blk.variants[b.v];
       cityShadow(sp, b.fx - sp.ax, b.fy, (px, py) => {
-        if (px >= 0 && px < 16 && py >= 0 && py < 16) shade[py * 16 + px] = 1;
+        if (px >= -side && px < 16 + side && py >= 0 && py < 16) shade[py * BW + px + side] = 1;
       }, m);
     }
     const { rgb, alpha } = m.shadow;
-    for (let i = 0; i < 256; i++) {
+    for (let i = 0; i < BW * 16; i++) {
       if (shade[i] === 0) continue;
-      const o = ((oy + (i >> 4)) * W + CITY_PAD + (i & 15)) * 4;
+      const o = ((oy + Math.floor(i / BW)) * W + CITY_PAD + (i % BW)) * 4;
       if (out[o + 3] === 255) {
         for (let c = 0; c < 3; c++) out[o + c] = Math.round(out[o + c] * (1 - alpha) + rgb[c] * alpha);
       } else {

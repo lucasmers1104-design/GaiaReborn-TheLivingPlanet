@@ -1,0 +1,34 @@
+/* Drop-down under the Ω and EP chips (hudinfo.ts); top/left are set inline. */
+.hud-info {
+  z-index: 700;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 11px;
+  background: var(--glass-strong);
+  font-size: 13px;
+  color: var(--ink-2);
+  transform-origin: top center;
+  animation: hud-info-in 180ms var(--ease);
+}
+.hud-info[hidden] { display: none; }
+@keyframes hud-info-in { from { opacity: 0; transform: translateY(-6px) scaleY(0.94); } }
+.hud-info-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--glass-border);
+}
+.hud-info-title { margin: 0; font-size: 14px; font-weight: 700; color: var(--ink); }
+.hud-info-num { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.hud-info-rate { font-size: 16px; font-weight: 700; }
+.hud-info-omega { color: var(--energy); }
+.hud-info-ep { color: var(--ep); }
+.hud-info-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hud-info-note { font-size: 12px; color: var(--ink-3); }
+.hud-info-pips { display: inline-flex; gap: 3px; }
+.hud-info-pips i { width: 8px; height: 8px; background: var(--raise-2); border: 1px solid var(--line-2); }
+.hud-info-pips i.on { background: var(--energy-fill); border-color: var(--energy); }

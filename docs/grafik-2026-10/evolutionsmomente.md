@@ -32,14 +32,14 @@ Die Drehbücher aller Filme stehen in `drehbuecher.md`.
 - **Bereit** ist ein Schritt, wenn alle Bedingungen außer den EP-Kosten erfüllt sind
   (`EvolutionSystem.isReady`). Ab diesem Zeitschritt läuft eine Uhr (`readySince`). Fällt eine
   Bedingung weg, beginnt sie von vorn.
-- **Schonfrist:** In den ersten 240 Zeitschritten passiert nichts. So kommt der Spieler zuerst zum Zug.
-- **Danach** wächst die Chance je Zeitschritt linear von 0,002 % bis zu einer Obergrenze von 0,4 %.
+- **Schonfrist:** In den ersten 120 Zeitschritten passiert nichts. So kommt der Spieler zuerst zum Zug.
+- **Danach** wächst die Chance je Zeitschritt linear von 0,1 % bis zu einer Obergrenze von 0,8 %.
   Sie wird mit dem Regler „Evolutionstempo“ multipliziert.
 
-  | Zeit nach der Schonfrist | 500 Schritte | 2.000 | 4.000 |
+  | Zeit nach der Schonfrist | 100 Schritte | 220 | 500 |
   |---|---|---|---|
-  | kumulierte Chance (Regler auf Standard) | ≈ 5 % | ≈ 50 % | ≈ 94 % |
-  | bei mittlerer Geschwindigkeit | ≈ 3 min | ≈ 13 min | ≈ 27 min |
+  | kumulierte Chance (Regler auf Standard) | ≈ 18 % | ≈ 50 % | ≈ 94 % |
+  | bereit insgesamt, bei mittlerer Geschwindigkeit | ≈ 1,5 min | ≈ 2,3 min | ≈ 4 min |
 
 - Geprüft wird alle 6 Zeitschritte. Je Prüfung entsteht höchstens ein Schritt.
 - **Der Zufall verschiebt nichts:** Gewürfelt wird mit einem Hash aus Planetensamen, Zeitschritt und

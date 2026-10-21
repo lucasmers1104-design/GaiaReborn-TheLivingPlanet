@@ -94,3 +94,35 @@ das Technologie-Fenster; sie ist durch einen Test abgedeckt, aber nicht im Bild 
 - Der Auslöser für das Ende der Schuppenbäume ist im Spiel die Konkurrenz. Auf der Erde war es vor allem das trockener
   werdende Klima um 305 Mio. J.
 - Folgen eines leeren Vorrats und die Kopplung an den CO₂-Kreislauf fehlen noch, ebenso Kohlevorkommen pro Feld.
+
+## 5. Nachtrag: Erdöl (20. 10. 2026)
+
+**Ölvorrat** (`src/oil.ts`)
+- Wie die Kohle ein einziger weltweiter Wert in Gt, nicht pro Feld und nicht auf der Karte.
+- Abgestorbene Meerestiere sinken zum Meeresboden. In jedem Jahr wird Kerogen abgelagert, im Verhältnis zur summierten
+  Dichte aller Meerestierklassen (Schwämme und Nesseltiere bis Wale; Einzeller zählen nicht).
+- Kerogen reift mit einer Halbwertszeit von 20 Mio. Jahren zu Öl. In den Zeitskalen Zivilisation und Technologie
+  entsteht praktisch keins.
+- Rechenaufwand: Der Schritt liest nur die Summen je Tierklasse, die `refreshDerived` ohnehin bildet. Es gibt keine
+  eigene Schleife über die Felder.
+- Ab dem Industriezeitalter fördern die Städte den Ölanteil ihrer fossilen Energie: 10 % im Industriezeitalter, danach
+  45 %. Gefördertes Öl ist verbraucht. Wie bei der Kohle bleibt die CO₂-Rechnung unverändert.
+- Anzeige: Kurve „Ölvorrat“ im Fenster „Verlauf“. Kacheln „Ölvorrat“ und „Gefördertes Öl“ im Fenster „Technologie“.
+  Im Fenster „Bericht“ stehen unter „Zivilisation“ Kohle- und Ölvorrat.
+- Karte: Mit dem Industriezeitalter erscheinen einmalig eine Bohrinsel vor der Küste und ein Förderturm mit
+  Pferdekopfpumpe in der Wüste, beide animiert (Einzelheiten: `docs/zivilisation-spec.md` §2.9).
+- Speichern: neues optionales Feld `oil` (Vorrat, Kerogen, gefördert, Standorte der Bohrtürme), die Formatnummer bleibt. Fehlt das Feld, wird der
+  Vorrat aus der Zeit seit den ersten Meerestieren geschätzt (`OIL_EST_YEAR`).
+
+**Messung** (gieriger Evolutionsbaum, Headless, Zeitskalen wie im Spiel, Komet)
+
+| Seed | erste Meerestiere | Intelligenz | Öl bei Intelligenz | Kohle bei Intelligenz | Öl aufgebraucht nach |
+|---|---|---|---|---|---|
+| 12345 | 4.043 Mio. J. | 4.419 Mio. J. | 1.361 Gt | 8.104 Gt | ca. 4.000 Jahren Industrie |
+| 2024 | 4.043 Mio. J. | 4.375 Mio. J. | 890 Gt | 3.550 Gt | ca. 4.700 Jahren Industrie |
+
+- Öl zu Kohle steht im Spiel bei etwa 1 : 4 bis 1 : 6. Die nachgewiesenen Reserven der Erde liegen bei etwa 1 : 4,5
+  (rund 240 Gt Öl zu 1.070 Gt Kohle).
+- Im Industriezeitalter ist der Ölanteil klein. Deshalb ist auf beiden Seeds zuerst die Kohle verbraucht und das Öl
+  erst etwa 1.500 Jahre später.
+- Nicht geprüft: Speichern und Laden im Browser, andere Browser.

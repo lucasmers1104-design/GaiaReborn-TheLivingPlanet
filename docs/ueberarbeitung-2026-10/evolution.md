@@ -27,6 +27,23 @@ erreichbaren Lebensraum); von dort breitet sie sich selbst aus. Unterarten entst
 selbst – seit 14. 10. 2026 acht Stufen je Tierklasse statt drei, mit Namen und Erstauftreten in
 `src/species/` (siehe `docs/oekosystem-2026-10/bericht.md`).
 
+**Für immer ausgestorben** (seit 20. 10. 2026, `src/stagefates.ts`, Bericht
+`docs/aussterben-2026-10/bericht.md`). 37 Unterarten, deren Formen auf der Erde ausgestorben sind,
+nennen eine spätere Unterart ihrer Gruppe als Nachfolger (`STAGE_SUCCESSORS`), etwa Urzellen →
+Archaeen, Trilobiten und Seeskorpione → Zehnfußkrebse, Urwale bis Basilosaurier → Bartenwale. Halten
+der Nachfolger und die Unterarten nach ihm zusammen 24 Felder (`STAGE_SUCCESSOR_TILES`), stirbt die
+ältere für immer aus: Ihre Populationen gehen an den Nachfolger, der Aufstieg überspringt sie, neue
+Populationen beginnen hinter ihr. Es entscheidet nur die Ausbreitung, kein Erddatum. Unterarten mit
+heute lebenden Vertretern (Vasenamöben, Stummelfüßer, Kieferlose Fische …) bleiben. Zusammen mit den
+Opfern des Kometen (`cometLost`) zeigen Lexikon, Unterarten-Leiste im Baum, Meldung und Chronik sie
+grau unter einem R.I.P.-Band. Bei den Pflanzen sterben **Frühe Gefäßpflanzen** (Rivalen: Farne,
+Bärlappe, Urbäume) und **Urbäume** (Rivalen: Samenpflanzen, Nadel- und Laubbäume) nach dem Muster der
+Schuppenbäume aus (`FLORA_DISPLACEMENT` in `src/lycopsids.ts`): erst wenn alle Tochtergruppen im Baum
+entstanden sind, dann neben ihren Rivalen zurückgedrängt, endgültig, sobald die Rivalen 10 % des
+Landes führen (`FLORA_GONE_SHARE`). Ihre Baumkarte zeigt dann „Ausgestorben“ mit R.I.P., das Werkzeug
+„Pflanzen“ lehnt sie ab. Erste Landpflanzen (ähnlich heutigen Lebermoosen) und der Knoten
+„Samenpflanzen“ (Nadel- und Blütenpflanzen sind auch Samenpflanzen) bleiben.
+
 **Die Natur wartet nicht ewig** (seit 12. 10. 2026, `src/spontaneous.ts`). Sind für einen Schritt alle
 Bedingungen außer den EP-Kosten erfüllt, beginnt eine Uhr zu laufen. Nach einer Schonfrist von
 240 Zeitschritten bekommt der Schritt eine sehr kleine Chance je Zeitschritt, ganz ohne EP von selbst
@@ -43,11 +60,83 @@ entwickelter Gruppe, multipliziert mit dem Regler „Evolutionstempo“. Ohne Le
 **Keine Sackgassen.** Stirbt eine Gruppe aus, meldet die Chronik das mit dem Hinweis, wie man sie
 mit „Leben ansiedeln“ bzw. „Pflanzen“ wieder ansiedelt; abhängige Schritte zeigen
 „… sind ausgestorben – neu ansiedeln“. Drei vollständige Testdurchläufe mit verschiedenen Strategien
-(günstigste zuerst, Tiere zuerst, Pflanzen zuerst und teuerste zuerst) erreichen alle 31 Schritte.
+(günstigste zuerst, Tiere zuerst, Pflanzen zuerst und teuerste zuerst) erreichen alle 31 Schritte; sie
+wählen bei der Dinosaurier-Entscheidung ausdrücklich den Kometen (siehe unten). Einzige gewollte
+Ausnahme: Nach dem Kometen kehren Dinosaurier nie zurück.
 
 ## Sauerstoff seit 16. 10. 2026
 
 Erste Mikroben erzeugen noch keinen Sauerstoff. Cyanobakterien bleiben die fünfte Unterart der „Ersten Zellen“. Sobald sie auftreten und entdeckt werden, produziert ihre lebende Biomasse Sauerstoff, der zunächst ins Meer und über den Gasaustausch später auch in die Luft gelangt. Komplexe Zellen und wasseratmende Meerestiere brauchen gelösten Sauerstoff; Wale bleiben Luftatmer. Die Mindestwerte sind Spielbalance. Die Entstehung von Eukaryoten besitzt keine gesicherte universelle Sauerstoffschwelle. Die Einheiten und Vereinfachungen stehen im [Ökosystem-Bericht](../oekosystem-2026-10/bericht.md).
+
+## Dinosaurier-Ära und Komet (seit 19. 10. 2026)
+
+Eine **Spielregel**, kein Naturgesetz (`src/dinoera.ts`, `src/comet.ts`): Bis ein Komet die Zeit der
+Dinosaurier beendet hat, entwickeln sich Säugetiere höchstens bis zur vierten Unterart, den
+**Beuteltieren**; spätere Unterarten und ihre Spezialformen sowie die Schritte **Wale** und
+**Huftiere & Weidetiere** bleiben gesperrt. Das gilt auch, wenn noch keine Dinosaurier entwickelt
+sind, und für jeden Weg: Kauf im Baum, Entwicklung von selbst und „Leben ansiedeln“ (alle Wege laufen
+über `LifeSystem.seed`). Der Baum nennt den Grund als eigene Bedingung („Spielregel: …“).
+
+- **Vögel** entstehen nur bei einer **lebenden** Population der letzten Dinosaurier-Unterart, der
+  **Vogelvorläufer** (Vorbild *Anchiornis*, ~160 Mio. J.). Eine Lexikon-Entdeckung allein genügt nicht.
+  Gegründet wird neben dieser Population; die Dinosaurier leben weiter.
+- **Die Entscheidung:** Sobald die ersten Vögel entstanden sind, hält das Spiel an (unabhängig von
+  „Pause bei Meilensteinen“). Nach dem Vogelfilm fragt ein Dialog „Das Schicksal der Dinosaurier“ –
+  ohne Vorauswahl, Zeitlimit, Escape oder Klick daneben. Danach läuft das Spiel im vorherigen Tempo
+  weiter; ein pausiertes Spiel bleibt pausiert.
+  - **„Dinos überleben“:** kein Komet, die Sperren bleiben für immer, keine spätere Frage.
+    Dinosaurier können wie gewohnt neu angesiedelt werden.
+  - **„Dinos sterben aus“:** ein Komet ohne EP- oder Ω-Kosten. Die Einschlagstelle ist ein 2 × 2-Block
+    Land fern der Pole, bevorzugt im Inland und bei Dinosauriern, deterministisch je Planet. Alle
+    Populationen von `Dinosaurier` sterben; die übrigen Gruppen verlieren 75 % ihres Bestands (± 10 %
+    je Feld, nahe dem Krater bis 98 %). Jede Unterart jeder übrigen Tiergruppe behält eine **geschützte
+    Population** auf dem Feld mit der meisten Nahrung außerhalb von 14 Feldern um den Krater: Sie fällt
+    nicht unter die Dichte 0,1 – mindestens 60 Ticks lang, danach bis ihr Feld ihr wieder Raum zum
+    Wachsen lässt, höchstens 600 Ticks (Schutz, keine Unsterblichkeit). Ohne Schutz gingen auf
+    Probe-Planeten einzelne Gruppen noch Hunderte Ticks nach dem Einschlag verloren. Keine Gruppe
+    entsteht neu. Danach entwickeln sich Säugetiere
+    regulär weiter; Wale und Weidetiere werden erreichbar, entstehen aber nicht von selbst sofort.
+    Dinosaurier können nie wieder entstehen oder angesiedelt werden; Lexikon und Chronik zeigen sie als
+    „für immer ausgestorben“. Mit ihnen enden wie auf der Erde **Flugsaurier** (Reptilien, Unterart 5),
+    **Ammoniten** und **Belemniten** (Weichtiere, 5 und 6) und **Zahnvögel** (Vögel, 3) für immer
+    (`cometLost`): Ihre Populationen sterben, ihre Gruppen leben weiter und überspringen diese Stufen
+    beim Aufstieg (Schildkröten → Krokodile). Lebte eine Gruppe nur auf solchen Stufen, fallen ihre
+    Populationen eine Stufe zurück, statt zu sterben. Ein vorher gespeicherter Planet nach dem
+    Einschlag verliert sie beim Laden. Eine Zivilisation intelligenter Dinosaurier zerfällt zu Ruinen, der
+    Planet kehrt ins Zeitalter der Evolution zurück.
+  - **Impaktwinter** (`src/cometwinter.ts`, seit 19. 10. 2026): Eis wächst in 10 Ticks von beiden Polen
+    auf zwei Drittel der Oberfläche, bleibt 25 Ticks und zieht sich in 60 Ticks zurück. Der Eisrand
+    folgt den Breitengraden mit Rauschen, Hochland friert zuerst. An Land legt die Sukzession Eis auf,
+    auf dem Meer zeichnet die Karte Packeis. Bewusst übertrieben, damit man den Schaden sieht; die Erde
+    fror damals nicht zu. Im Eisgebiet stirbt vom Einschlag bis zum Ende des Winters keine
+    Pflanzengruppe ab; unter dem Eis hält sie sich mit der Deckung 0,02 und wächst nach dem Rückzug
+    wieder. Der Boden bleibt erhalten (kein Abschliff wie unter dauerhaftem Eis). Geschützte
+    Populationen liegen möglichst außerhalb des Eisgebiets; ihr Schutz endet frühestens mit dem Winter.
+    Das Eis hebt die Albedo, die mittlere Temperatur sinkt dadurch von selbst.
+  - **Infotafel** nach dem Einschlag („Der Einschlag und seine Folgen“): was er auf dem Planeten
+    angerichtet hat, daneben die Folgen von Chicxulub auf der Erde (Prüfpunkt 21 im Quellenbericht).
+    Sie ersetzt die Meilensteinkarten zu Einschlag und Aussterben, die in der Chronik bleiben.
+- Ein gewöhnliches Aussterben der Dinosaurier öffnet keine Sperre.
+- **Spielstände** (Format 9, `migrateV8`): Der Zustand der Entscheidung und das Ziel eines
+  ausstehenden Kometen werden gespeichert; ein offener Dialog erscheint nach dem Laden erneut, ein
+  ausstehender Einschlag läuft weiter und wirkt genau einmal; geschützte Populationen bleiben geschützt.
+  **Bestandsschutz:** Ältere Planeten, auf
+  denen Säugetiere schon über die Beuteltiere hinaus waren (lebend oder im Lexikon) oder Wale bzw.
+  Weidetiere entwickelt sind, behalten ihre bisherige Freiheit; alle anderen folgen der neuen Regel,
+  mit schon entstandenen Vögeln stellt sich die Frage sofort.
+
+Gemessen mit `tools/comet-probe.js` (gieriges Spiel, Vögel nach rund 4.600–5.000 Ticks): Auf den Seeds
+12345, 777 und 99 verlieren alle Gruppen beim Einschlag 75–78 % ihres Bestands. Mit dem Impaktwinter
+(19. 10. 2026) liegen 63–68 % des Landes unter Eis; die mittlere Temperatur fällt von 14,7–15,6 °C auf
+1,9–3,6 °C und ist nach 400 Ticks wieder bei 13,8–14,1 °C. Das Landeis (vorher 18–20 %) sinkt nach
+800 Ticks auf 17–26 %, ein Schneeball-Planet entsteht nicht. In 400–800 Ticks geht keine Tier- oder
+Pflanzengruppe verloren (Amphibien auf Seed 777 zwischenzeitlich auf 65 Feldern, danach wieder über
+2.000), Säugetiere erreichen Unterart 8. Im Überlebens-Zweig (Seed 31337) bleiben sie bei Unterart 4.
+
+Werkzeuge: `node tools/comet-probe.js [ticks] [seed …] [--survive]` spielt bis zur Frage, beantwortet
+sie und verfolgt die Erholung; `tools/headless.js` und `tools/civ-probe.js` beantworten sie mit
+`--dino=comet|survive`, die Vorschau mit `_preview.html?dino=comet|survive|show`. Die Simulation selbst
+entscheidet nie.
 
 ## Vom Wasser zur lebendigen Landschaft
 
@@ -70,7 +159,9 @@ Technisch: Jedes Feld trägt eine Bitmaske der dort wachsenden Pflanzengruppen u
 Bedeckungswert. Die Eignung einer Gruppe für ein Feld ist Temperatur × relative Feuchte ×
 Wasserzugang × Höhenlage. Gruppen breiten sich in geeignete Nachbarfelder aus, selten auch weiter
 (Sporen, Samen, später durch Vögel), und sterben dort ab, wo das Klima nicht mehr passt. Frühere
-Gruppen werden nicht ersetzt – ein Feld kann viele Gruppen tragen, die Moose bleiben in Tundra und Moor.
+Gruppen werden meist nicht ersetzt – ein Feld kann viele Gruppen tragen, die Moose bleiben in Tundra und
+Moor. Ausnahmen sind die Schuppenbäume, die Frühen Gefäßpflanzen und die Urbäume (siehe „Für immer
+ausgestorben“ oben).
 
 Seit 14. 10. 2026 trägt jedes Landfeld eine **Landschaft** (`src/landscape.ts`, `src/succession.ts`,
 Spezifikation `docs/biomes-spec.md` Abschnitt 3): eine von 19 Sukzessionsstufen wie Fels, Flechten & Moos,
@@ -146,9 +237,9 @@ Besondere Wechselwirkungen mit echter Spielwirkung:
 | Reptilien | Tier | Amphibien (Amnioten · Sauropsiden) | Auch trockenes Land und Wüsten; O₂ ≥ 13 % | Nahrung: Insekten / Landgliederfüßer / Samenpflanzen | 85 |
 | Säugetiere | Tier | Amphibien (Amnioten · Synapsiden) | Vielfältig – auch kalte Regionen; O₂ ≥ 15 % | Nahrung: Insekten / Landgliederfüßer / Samenpflanzen / Blütenpflanzen | 110 |
 | Dinosaurier | Tier | Reptilien (Archosaurier) | Offenes Land und Wälder; O₂ ≥ 14 % | Nahrung: Farne & Schachtelhalme / Bärlapppflanzen / Samenpflanzen / Nadelbäume | 110 |
-| Vögel | Tier | Dinosaurier (Theropoden) | Fast überall – auch Inseln; O₂ ≥ 15 % | Nahrung: Insekten / Bienen & Bestäuber / Samenpflanzen / Blütenpflanzen | 120 |
-| Wale | Tier | Säugetiere (zurück ins Meer) | Hochsee nahe der Küsten mit Säugetieren; O₂ ≥ 13,5 % | Nahrung: Fische / Gliederfüßer des Meeres | 130 |
-| Huftiere & Weidetiere | Tier | Säugetiere | Grasland und offene Ebenen; O₂ ≥ 15 % | Nahrung: Gräser | 130 |
+| Vögel | Tier | Dinosaurier (lebende Vogelvorläufer, Unterart 8) | Fast überall – auch Inseln; O₂ ≥ 15 % | Nahrung: Insekten / Bienen & Bestäuber / Samenpflanzen / Blütenpflanzen | 120 |
+| Wale | Tier | Säugetiere (zurück ins Meer) | Hochsee nahe der Küsten mit Säugetieren; O₂ ≥ 13,5 % | Nahrung: Fische / Gliederfüßer des Meeres; Spielregel: erst nach dem Kometen | 130 |
+| Huftiere & Weidetiere | Tier | Säugetiere | Grasland und offene Ebenen; O₂ ≥ 15 % | Nahrung: Gräser; Spielregel: erst nach dem Kometen | 130 |
 
 Sauerstoffangaben sind Volumenprozent der Atmosphäre (wie in der Statusleiste). Die Schwelle eines
 Tieres liegt einen Punkt über dem Wert, ab dem es überhaupt Tragfähigkeit hat.

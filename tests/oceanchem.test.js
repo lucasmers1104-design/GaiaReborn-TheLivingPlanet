@@ -166,7 +166,7 @@ test('a version-5 save gets eight-rung sub-species and a sea read off its air', 
   assert.deepEqual(ox.map((e) => e.key), ['oxygen:iron', 'oxygen:sea', 'oxygen:air']);
   for (const e of ox) assert.ok(w.evo.reported.has(e.key));
   // The older history is padded with the sea it implies, not dropped.
-  assert.equal(b.history.series.length, 11);
+  assert.equal(b.history.series.length, 17);
   assert.ok(b.history.years.length > 0);
   for (const s of b.history.series) assert.equal(s.data.length, b.history.years.length);
   assert.ok(b.history.series[9].data.every((v) => v >= 0 && v <= 1));

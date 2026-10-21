@@ -38,6 +38,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 | `mask` | reserviert für Randmasken |
 | `waterWarm` | Lagunen-Türkis über Riffen |
 | `reefUnder` | Korallen und Riffsand unter Wasser, vorgemischt ins Lagunen-Türkis |
+| `coral` | Riff-Schatten und weitere Korallentöne unter Wasser |
 
 ## Licht und Perspektive
 
@@ -122,7 +123,8 @@ Bei Zweifeln gilt `docs/ueberarbeitung-2026-10/quellenpruefung.md`.
 
 - **Kakteen** sind Blütenpflanzen, aber keine eigene Gruppe: Sie sind deren Form auf Wüsten- und Halbwüstenfeldern und erscheinen erst 95 Mio. Jahre nach ihnen (`src/cacti.ts`). Vorher zeigen diese Felder keine Blütenpflanzen-Objekte, die Halbwüste also Samenpflanzen-Büsche und Gräser.
 - **Palmen** sind ebenso keine eigene Gruppe: Die Kokospalme ist die Form der Blütenpflanzen am Strand (`src/reefs.ts`).
-- **Korallen** sind Unterwasser-Objekte (Art `reef`, höchstens 12 × 10): Flecken in den `reefUnder`-Farben, der äußere Ring zu 50 % geordnet gedithert. Runzelkorallen ocker und braun, Steinkorallen rosa, orange, violett und gelb, Riffsand hell. Die Rippel des Wassers zeichnet der Renderer darüber.
+- **Korallen** sind Unterwasser-Objekte (Art `reef`, höchstens 12 × 10), die Varianten von klein nach groß sortiert. Jede ist eine Kolonie mit eigener Silhouette, von oben links beleuchtet, mit 1 px türkisem Schlagschatten. Sie liegen unter Wasser: Farben eng um die Helligkeit der Lagune, Schattenseiten türkisgrau statt dunkel, und wo die Kolonie mindestens 2 px dick ist, weicht jedes zweite Umrisspixel ins Wasser (oben links) bzw. ins Schatten-Türkis (unten rechts). Runzelkorallen-Zeit: Hornkorallen-Becher, Waben- und Kettenkorallen, Stromatoporen, Seelilien (ocker, braun, grau, blass). Steinkorallen: Knollen, Hirn-, Geweih- und Tischkorallen, Plattenrosetten (braun, oliv, ocker, Akzente violett, rosa, gelb). Riffsand als hell türkise Lichtung. Ein Fleck wird ein Grüppchen aus 2–4 Köpfen, zur offenen See dichter und größer, zum Land hin kleiner und sandiger; kein Raster. Die Rippel des Wassers zeichnet der Renderer darüber.
+- **Sandinseln** (Art `cay`, höchstens 14 × 10) liegen über dem Wasser: heller Sand, unten rechts nass, ein gebrochener weißer Brandungsring. Wellen und Brandung zeichnen nicht darauf, Palmen stehen darauf.
 - **Savannenbäume** sind ebenso keine eigene Gruppe: Sie sind die Form der Blütenpflanzen auf Savannenfeldern, sobald es Laubbäume gibt (`src/savannatrees.ts`), meist ein Schirmbaum, etwa jeder achte ein Affenbrotbaum.
 - **Schilf** ist ein Gras, **Sumpfzypresse** ein Nadelbaum, **Schirmbaum** und Tropenriese sind Laubbäume (Bedecktsamer).
 - **Offenland vor den Gräsern** ist Farnflur, keine Wiese.

@@ -14,6 +14,8 @@
  *     --evolve   most ticks of greedy evolution before sentience is forced
  *                with a first city, as the Monolith would (default 6000)
  *     --every    ticks per report line (default 100)
+ *     --dino     comet|survive: answer the first birds' question that way
+ *                (src/comet.ts); without it the question stays open
  *
  * Standard set (each reaches sentience by itself, tree of 15. 10. 2026):
  *   node tools/civ-probe.js 1700 12345 2024 99
@@ -36,6 +38,7 @@ const seeds = args.length > 1 ? args.slice(1).map(Number) : [12345];
 const epoch = opt('epoch', 'random');
 const evolveMax = Number(opt('evolve', 6000));
 const every = Number(opt('every', 100));
+const dinoFate = opt('dino', '');
 
 /** App.advanceTimeScale, which lives in app.ts and so is not in the bundle's systems. */
 function advanceScale(SE, w) {
@@ -135,6 +138,7 @@ function probe(seed) {
   // Developed exactly as tools/headless.js --life does, so both probes play the same planet.
   s.evo.develop(w, params, 'cells');
   for (; t < evolveMax && w.sentientClass === SE.Life.None; t++) {
+    if (dinoFate && w.dinoEra.fate === 'deciding') s.resolveDinoFate(dinoFate);
     s.tick();
     advanceScale(SE, w);
     if (w.ticks % 5 === 0) {

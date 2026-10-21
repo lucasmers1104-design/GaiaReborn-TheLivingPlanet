@@ -7,20 +7,20 @@
  * first say — and then grows with every tick the conditions keep holding.
  *
  * With the evolution-rate slider at its default, the cumulative chance after
- * the grace period is about 5 % after 500 ticks, half after 2,000 and 94 %
- * after 4,000 — at medium speed that is roughly three, thirteen and
- * twenty-seven minutes of a step standing ready.
+ * the grace period is about 18 % after 100 ticks, half after 220 and 94 %
+ * after 500 — at medium speed (400 ms per tick) a step standing ready arises
+ * after about two and a half minutes on average, nearly always within four.
  * ========================================================================== */
 
 namespace SE {
   /** Ticks a step must stand ready before it can arise on its own. */
-  export const SPONTANEOUS_GRACE = 240;
+  export const SPONTANEOUS_GRACE = 120;
   /** Per-tick chance right after the grace period. */
-  const HAZARD_BASE = 2e-5;
+  const HAZARD_BASE = 1e-3;
   /** Growth of the per-tick chance with each further tick of readiness. */
-  const HAZARD_RAMP = 3.5e-7;
+  const HAZARD_RAMP = 2e-5;
   /** Ceiling of the per-tick chance, however long the step has waited. */
-  const HAZARD_MAX = 0.004;
+  const HAZARD_MAX = 0.008;
   /** Ticks between checks; the chance per check covers them all. */
   export const SPONTANEOUS_EVERY = 6;
 

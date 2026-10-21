@@ -87,6 +87,7 @@ function assemble(art) {
           rect: { x: it.x, y: it.y, w: it.tex.w, h: it.tex.h },
           ax: Math.floor(it.tex.w / 2), ay: it.tex.h - 1, size: it.v.size || '',
           bx0, bx1, spans: spans(it.tex),
+          ...(it.tex.smoke && it.tex.smoke.length ? { smoke: [...it.tex.smoke] } : {}),
         };
       }),
     }])),
@@ -114,6 +115,8 @@ namespace SE {
     readonly bx0: number; readonly bx1: number;
     /** Opaque columns per row of rect, [left, right, …]; left > right for an empty row. */
     readonly spans: readonly number[];
+    /** Chimney openings of the sprite, x, y pairs in rect pixels: smoke rises one row above each. */
+    readonly smoke?: readonly number[];
   }
   export interface CivBlock {
     readonly name: string; readonly era: string | null; readonly role: string;

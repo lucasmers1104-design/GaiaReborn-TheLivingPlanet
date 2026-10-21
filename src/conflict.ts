@@ -6,9 +6,10 @@
  * planet, then peace between the same two peoples for a while and a rest
  * for both against everyone, so no people wages war after war on its
  * neighbours in turn. The loser loses people and may be taken over or
- * destroyed. Two peoples in the atomic age may use the bomb instead. Peace
- * lives in memory only, like every civilization record, and rests after a
- * load.
+ * destroyed. A people in the atomic age ends a war against one not there
+ * yet with the bomb, and two atomic peoples may use it without one; after
+ * the first bomb every people swears it off for good. Peace lives in memory
+ * only, like every civilization record, and rests after a load.
  * ========================================================================== */
 
 namespace SE {
@@ -194,14 +195,67 @@ namespace SE {
     return end;
   }
 
+  function atomicPower(world: WorldState, tribe: number): boolean {
+    return world.civ.cities.some((c) => c.tribe === tribe && world.tech[c.tile] >= Tech.Atomic);
+  }
+
+  /** The bomb on `target` through `civEventSink`; peace and rest follow as after a war, and every people swears it off. */
+  function dropBomb(world: WorldState, target: City, by: Tribe, on: Tribe): void {
+    const civ = world.civ;
+    makePeace(world, by.id, on.id);
+    civ.atomBan = true;
+    SE.civEventSink?.(EventKind.AtomicBomb, target.tile % GRID_W, Math.floor(target.tile / GRID_W));
+    civ.news.push({
+      text: `Nach dem Atomschlag auf ${target.name} schwören alle Völker, nie wieder Atomwaffen einzusetzen.`,
+      tone: 'info', at: target.tile,
+      chronicle: {
+        key: `civ:atom-ban:${world.ticks}`, title: 'Alle Völker ächten die Atombombe',
+        change: `Die ${by.name}, die ${on.name} und alle anderen Völker setzen nie wieder Atomwaffen ein.`, major: true,
+      },
+    });
+  }
+
   /**
-   * One tick: a conflict whose time is up ends; with none under way, past
+   * A war whose time is up between a people in the Atomic age and one not
+   * there yet ends with the bomb on the other's city, unless the peoples
+   * have sworn it off (`CivState.atomBan`). Null when it ends as usual.
+   */
+  export function atomicEnd(world: WorldState, k: Conflict): AtomicStrike | null {
+    const civ = world.civ;
+    if (civ.atomBan) return null;
+    const a = civ.city(k.a);
+    const b = civ.city(k.b);
+    if (!a || !b || a.tribe === b.tribe) return null;
+    const pa = atomicPower(world, a.tribe);
+    if (pa === atomicPower(world, b.tribe)) return null;
+    const [from, target] = pa ? [a, b] : [b, a];
+    const by = civ.tribe(from.tribe);
+    const on = civ.tribe(target.tribe);
+    if (!by || !on) return null;
+    const at = civ.conflicts.indexOf(k);
+    if (at >= 0) civ.conflicts.splice(at, 1);
+    civ.news.push({
+      text: `Atombombe auf ${target.name}! Die ${by.name} beenden den Krieg gegen die ${on.name}.`, tone: 'warn', at: target.tile,
+      chronicle: {
+        key: `civ:war:${k.started}:${k.a}:${k.b}`, title: `Atombombe auf ${target.name}`,
+        change: `Die ${by.name} beenden den Krieg mit einer Atombombe. ${target.name} und das Leben ringsum sind zerstört.`,
+        major: true,
+      },
+    });
+    dropBomb(world, target, by, on);
+    return { target, by, on };
+  }
+
+  /**
+   * One tick: a conflict whose time is up ends (`atomicEnd`, else `settleConflict`); with none under way, past
    * `calmUntil` and between land peoples, a pair that may fight goes to war
    * with CONFLICT_CHANCE times the aggression factor.
    */
   export function stepConflicts(world: WorldState, params: ModelParams): void {
     const civ = world.civ;
-    for (const k of civ.conflicts.slice()) if (world.ticks >= k.until) settleConflict(world, k, world.rng.next());
+    for (const k of civ.conflicts.slice()) {
+      if (world.ticks >= k.until && !atomicEnd(world, k)) settleConflict(world, k, world.rng.next());
+    }
     if (civ.conflicts.length > 0 || world.ticks < civ.calmUntil || !isLandLife(world.sentientClass)) return;
     const pairs = conflictPairs(world);
     if (pairs.length === 0 || !world.rng.chance(CONFLICT_CHANCE * conflictFactor(params))) return;
@@ -212,14 +266,14 @@ namespace SE {
   /**
    * The bomb (spec §2.8): two peoples with cities at the Atomic level or
    * higher, ATOMIC_WAR_CITIES of those in all, and a budget more warlike
-   * than `CivSystem.PEACEFUL`. Never during a conflict, before `calmUntil`
-   * or from or at a resting people. A random atomic city fires at a random
-   * city of another atomic people, through `civEventSink`; peace and rest
-   * follow as after a war.
+   * than `CivSystem.PEACEFUL`. Never during a conflict, before `calmUntil`,
+   * from or at a resting people or once the peoples have sworn it off. A
+   * random atomic city fires at a random city of another atomic people
+   * (`dropBomb`).
    */
   export function atomicWar(world: WorldState, params: ModelParams): AtomicStrike | null {
     const civ = world.civ;
-    if (civ.conflicts.length > 0 || world.ticks < civ.calmUntil) return null;
+    if (civ.atomBan || civ.conflicts.length > 0 || world.ticks < civ.calmUntil) return null;
     const atomic = civ.cities.filter((c) => world.tech[c.tile] >= Tech.Atomic && civ.tribe(c.tribe));
     if (atomic.length < ATOMIC_WAR_CITIES) return null;
     const powers = new Set(atomic.map((c) => c.tribe));
@@ -235,8 +289,7 @@ namespace SE {
     const by = civ.tribe(from.tribe);
     const on = civ.tribe(target.tribe);
     if (!by || !on) return null;
-    makePeace(world, by.id, on.id);
-    SE.civEventSink?.(EventKind.AtomicBomb, target.tile % GRID_W, Math.floor(target.tile / GRID_W));
+    dropBomb(world, target, by, on);
     return { target, by, on };
   }
 }

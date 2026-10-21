@@ -6,6 +6,8 @@
  *   cities  village, town and metropolis from src/citylayout.ts (loaded from
  *           the built bundle, SE_BUNDLE or simulation.js) on 3 × 3 tiles of
  *           ground, with and without a river through the city tile
+ *   compare  camp, village, town and metropolis of every era on the same
+ *           site (tools/civ/compare.js)
  * Pixels are scaled nearest-neighbour, as the map shows them at 16·k px.
  * ========================================================================== */
 'use strict';
@@ -18,6 +20,7 @@ const C = require('./catalog');
 const P = require('../terrain/palette');
 const { Sheet } = require('../terrain/sheet');
 const { build: buildTerrain } = require('../terrain/build');
+const { partCompare } = require('./compare');
 
 const BG = [28, 34, 32, 255];
 const DIM = [140, 150, 144, 255];
@@ -117,13 +120,13 @@ const ERA_NAMES = {
 
 /** Ground and bridges cast no shadow: the yard is ground itself, a bridge stands over water. */
 function casts(b) {
-  return b.role !== 'ground' && b.role !== 'bridge';
+  return b.role !== 'ground' && b.role !== 'bridge' && b.role !== 'flame' && b.role !== 'smoke';
 }
 
 /** Every block variant by era: 4× on meadow, and 1× on meadow, steppe and forest below it. */
 function partBlocks(art, terrain) {
-  const W = 16;
-  const H = 20;
+  const W = C.BOX.w;
+  const H = C.BOX.h;
   const WIDTH = 1240;
   const cells = [];
   const groups = [...C.ERAS.map((e) => [ERA_NAMES[e], C.BLOCKS.filter((b) => b.era === e)]), ['Wimpel', C.BLOCKS.filter((b) => b.era === null)]];
@@ -134,7 +137,7 @@ function partBlocks(art, terrain) {
     for (const { b, v, n } of vars) {
       const tex = v.tex;
       const [bx0, bx1] = baseOf(tex, b.depth);
-      const block = { tex, left: Math.floor((W - tex.w) / 2), top: 17 - (tex.h - 1), bx0, bx1, shadow: casts(b) };
+      const block = { tex, left: Math.floor((W - tex.w) / 2), top: H - 3 - (tex.h - 1), bx0, bx1, shadow: casts(b) };
       const pic = (g) => compose(W, H, (x, y) => groundTex(terrain, g).get(x + 3, y + 5), [block]);
       cells.push({
         w: W * 4, h: 10 + H * 4 + 4 + H,
@@ -226,7 +229,7 @@ function partCities() {
       const ground = groundTex(terrain, cs.g);
       const rgba = compose(W, H, (x, y) => (cs.river && riverDistance(cs.river, x, y) <= 0 ? P.c('water4') : ground.get(x, y)), []);
       // The city picture over the ground: its pixel (PAD, PAD + 4) is the tile's top left.
-      const px0 = 16 - SE.CITY_PAD;
+      const px0 = 16 - SE.CITY_PAD - (SE.CIV_MANIFEST.box.w - 16) / 2;
       const py0 = 16 - SE.CITY_PAD - (SE.CIV_MANIFEST.box.h - 16);
       for (let y = 0; y < PH; y++) {
         for (let x = 0; x < PW; x++) {
@@ -251,6 +254,7 @@ function partCities() {
 const PARTS = {
   blocks: (art) => partBlocks(art, buildTerrain()),
   cities: () => partCities(),
+  compare: (art) => partCompare(art, { loadSE, put, flow, groundTex, ERA_NAMES, INK, DIM }),
 };
 
 module.exports = { PARTS, compose, shadowPixels, baseOf, GROUNDS };

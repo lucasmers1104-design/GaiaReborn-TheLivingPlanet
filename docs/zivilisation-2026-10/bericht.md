@@ -55,6 +55,8 @@ Zeitalter.
   - Beginn und Ende kommen als Meldung und Chronik-Eintrag mit beiden Völkern und Städten. Auf der Karte steht ein
     Kampfsymbol.
   - Der Atomkrieg braucht zwei Völker mit Atom-Städten.
+  - Kämpft ein Volk im Atomzeitalter gegen eines ohne, beendet eine Atombombe den Krieg. Danach ächten alle Völker
+    die Bombe für immer (20. 10. 2026).
 - **Klima:** Energie und Atmung der Städte sind gewichtet, weil eine Stadt für ihr Umland steht. Die Industrie hebt
   das CO₂ spürbar.
 - **Speichern:** Die Formatnummer ist unverändert. Ein optionales Feld `civ` hält Namen und Völker.
@@ -135,3 +137,57 @@ gibt es dann in Eisenzeit und Industrie etwa 40 Seuchen je 1000 Ticks, und das C
   die Geschichte jedes Planeten bis dahin genau wie vor dem Umbau.
 - **Laden ohne Feld:** Bei Spielständen ohne das Feld `civ` können gedriftete Städte und die Völker andere Namen
   bekommen.
+
+## Nachtrag 20. 10. 2026: Beginn der Zivilisation und Epochen-Optik
+
+**Vorher:** Mit der Intelligenz stand sofort eine Stadt auf der Karte. Alle Zeitalter bauten nach demselben Plan
+einen dichten Klumpen in die Feldmitte; Dorf, Stadt und Großstadt unterschieden sich kaum (`vergleich-vorher.png`).
+
+**Nachher:**
+- **Wandergruppen** (`src/bands.ts`, Spezifikation 2.13): Mit der Intelligenz (von selbst oder durch den Monolithen)
+  erscheinen 3 Gruppen ohne Stadt. Sie lagern 12–20 Ticks (2–4 Unterstände um ein Feuer, einzeln auf- und abgebaut),
+  ziehen 4–8 Felder über Land weiter und werden nach frühestens 90 Ticks an einem Ort mit Nahrung und Wasser
+  sesshaft. Später sinken die Ansprüche (ab 160 Ticks ohne Wasser, ab 240 jeder erlaubte Ort), damit nie etwas
+  dauerhaft hängt. Das Städte-Werkzeug gründet weiter sofort.
+- **Meldungen:** „“ und „“ („“) sind getrennte Chronik-Einträge. Andere Arten heißen mit ihrem Klassennamen.
+- **Speichern:** Die Gruppen stehen im Feld `civ` (`bands`) und laden exakt. Fehlen sie oder sind sie ungültig,
+  ziehen vor der ersten Sesshaftigkeit neue Gruppen los.
+- **Epochen:** eigene Baupläne mit freien Flächen (`src/cityplans.ts`) und überarbeitete Bausteine aller Zeitalter.
+  Der Stadtrahmen ist 20 × 24 px; Türme und Schlote ragen in die Nachbarfelder (`vergleich-nachher.png`).
+- **Animation:** Lager- und Dorffeuer flackern, Fabrikschlote rauchen. Beides zeichnet `src/cityfire.ts` jedes Bild
+  über die zwischengespeicherten Stadtbilder; bei „“ steht Bild 0 still.
+- **Figuren:** Menschen ziehen als Zweiergruppe. Andere Arten erscheinen als ihre eigene Tierfigur mit Fackel
+  (Wandergruppe) oder mit Bündel und Volkswimpel (Siedler); der neutrale Platzhalter entfällt. Tier-Icons halten
+  ein Feld Abstand zu Lagern wie zu Städten.
+
+| Bild | Inhalt |
+|---|---|
+| `vergleich-vorher.png`, `vergleich-nachher.png` | Lager, Dorf, Stadt, Großstadt, Großstadt am Fluss je Zeitalter am selben Ort, 3× sowie 1× und 2× |
+| `spiel-lager-32px.png` | Lager zweier Gruppen an der Küste, gespielter Planet (Seed 12345, Komet), 32 px |
+| `spiel-wandergruppe-32px.png` | eine Gruppe unterwegs zum nächsten Lager |
+| `spiel-erstes-dorf-32px.png` | das erste Dorf mit Feuerplatz, 98 Ticks nach der Intelligenz |
+| `spiel-industrie-rauch-32px.png` | derselbe Ort als Industrie-Großstadt mit Rauch über dem Schlot |
+
+**Messung** (Spielstände bei der Intelligenz, dann weitergespielt):
+
+| Seed | Dörfer aus den Gruppen (Ticks nach der Intelligenz) | Lager je Gruppe |
+|---|---|---|
+| 12345 | +98, +104, +110 | 5 |
+| 2024 | +94, +102, +139 | 5–6 |
+| 99 | +103, +147, +173 | 5–8 |
+
+Bei „“ (400 ms je Tick) dauert die Wanderphase also gut eine Minute. `tools/civ-probe.js 2500 12345|2024
+--dino=comet` besteht danach dieselben Prüfungen wie vorher; die Stadtzahl am Ende der Eisenzeit streut vorher wie
+nachher über die Grenze.
+
+**Werkzeuge:** `node tools/civ-atlas.js --sheet <dir> --part compare` erzeugt die Vergleichstafel aus dem im Speicher
+gebauten Atlas; `CIV_ATLAS_MEMORY=1 node --test tests/civart.test.js` prüft Rezepte vor dem Schreiben des Atlas.
+
+**Einschränkungen:**
+- Nur in headless Chrome geprüft, nur die Menschen im echten Spielablauf; andere Arten auf Kontaktbögen und mit
+  eingesetzten Gruppen.
+- Wandergruppen gleiten nur bei der Systemeinstellung „“ nicht; „“ hält nur
+  Flamme und Rauch an.
+- Die Großstadt des Informationszeitalters bleibt eng, weil alle Grundflächen auf der eigenen Kachel stehen. Eine
+  Steinzeit-Großstadt mit Fluss durch die Feldmitte hat keinen Palisadenring und wirkt dünn.
+- Der Monolith schreibt wie zuvor keinen Chronik-Eintrag „“, nur eine Meldung.

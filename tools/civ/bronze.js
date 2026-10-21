@@ -1,25 +1,34 @@
 /* =============================================================================
  * SimEarth 2.0 — Bronze Age city blocks
  * -----------------------------------------------------------------------------
- * Pale mud-brick houses with flat roofs and beam ends under the parapet, a
- * granary of beehive silos, a step temple of fired brick, a well and jars, a
- * mud wall with rounded merlons and a timber bridge, on a yard of packed red
- * clay. Style: docs/landschaft-2026-10/stil.md · contract: tools/civ/catalog.js.
+ * Low, boxy, pale mud-brick: flat-roofed houses with beam ends under the
+ * parapet, the large one a courtyard house (a ring of roofs round an open
+ * clay court), beehive silos and a granary of them, a stepped temple of
+ * fired brick rising over the town, a well and jars, a mud wall with
+ * rounded merlons and a timber bridge, on packed clay with a court in it.
+ * Style: docs/landschaft-2026-10/stil.md · contract: tools/civ/catalog.js.
  * ========================================================================== */
 'use strict';
 
+const k = require('../terrain/kit');
 const S = require('./shapes');
 const { yard } = require('./yard');
 
-/** Mud brick: a light roof, the wall a step darker, beam ends of wood. */
+/** Mud brick: a light roof, the front wall two steps darker (so roofs and walls read as boxes), beam ends of wood. */
 const MUD = {
-  R: 'sand4', T: 'sand4', L: 'sand4', S: 'sand2', O: 'sand0',
-  w: 'sand3', v: 'sand2', u: 'sand1', d: 'soil0', n: 'soil1', b: 'bark1',
+  R: 'sand4', T: 'sand4', S: 'sand3', O: 'sand0',
+  w: 'sand2', v: 'sand1', u: 'sand0', d: 'soil0', n: 'soil1', b: 'bark1',
 };
-/** Fired brick of the temple, its stair of pale mud brick. */
+/** The town wall of darker, unplastered mud brick, so the ring frames the pale houses. */
+const RAMPART = { R: 'sand3', T: 'sand3', O: 'sand0', w: 'sand1', v: 'sand0', u: 'soil1' };
+/** The courtyard house: the court's clay floor, its shaded edge; windows dark like the door. */
+const COURT = { ...MUD, n: 'soil0', k: 'laterite2', K: 'laterite1' };
+/** Silo domes of red clay shaded from their lit left to a dark right, so they read as round among the pale roofs. */
+const GRAIN = { R: 'sand4', L: 'laterite3', T: 'laterite2', S: 'laterite1', O: 'laterite0', w: 'sand2', v: 'sand1', u: 'sand0', d: 'soil0' };
+/** Fired brick of the temple, its stair and shrine of pale mud brick. */
 const BRICK = {
   R: 'laterite3', T: 'laterite3', S: 'laterite1', O: 'laterite0',
-  w: 'laterite2', v: 'laterite1', u: 'laterite0', L: 'sand3', d: 'soil0',
+  w: 'laterite2', v: 'laterite1', u: 'laterite0', L: 'sand3', A: 'sand4', B: 'sand2', d: 'soil0',
 };
 const WELL = { R: 'rock4', T: 'rock3', O: 'rock1', q: 'rock2', Q: 'rock0', x: 'water3', y: 'water5', a: 'laterite3', A: 'laterite2', z: 'laterite0' };
 const WOOD = { B: 'bark0', b: 'bark1', c: 'bark2', t: 'soil3' };
@@ -30,38 +39,70 @@ function beams(g, row) {
   return g;
 }
 
+/** Small and medium: a flat-roofed box; large: a courtyard house, its rooms round an open court. */
 function mudbrick(size) {
+  // A medium house stays 6 px wide: it must fit the 5–6 px bank beside a river through the tile.
   if (size === 's') return beams(S.flat(5, 2, 3, { door: 1 }), 2);
-  if (size === 'm') return beams(S.flat(6, 3, 5, { door: 1, windows: [[1], 3, 9] }), 3);
-  // Two storeys: an upper block stands on the roof terrace of the lower one.
-  const g = S.canvas(9, 10);
-  S.stamp(g, beams(S.flat(9, 3, 5, { door: 2, windows: [[1, 3], 5, 2] }), 3), 0, 2);
-  S.stamp(g, beams(S.flat(5, 2, 3, { windows: [[1], 2, 9] }), 2), 1, 0);
-  return g;
+  if (size === 'm') return beams(S.flat(6, 3, 3, { door: 1, windows: [[1], 3, 9] }), 3);
+  return [
+    'RRRRRRRO',
+    'RTwwwvSO',
+    'RTKkkkSO',
+    'RTKkkkSO',
+    'RTTTTTSO',
+    'SSSSSSSO',
+    'wbwdwbvu',
+    'wnwdwnvu',
+  ];
 }
 
-/** Three beehive silos, the middle one tallest, a hatch in its foot. */
-function granary() {
-  const g = S.canvas(11, 7);
-  S.stamp(g, S.dome(4, 4, 2), 0, 1);
-  S.stamp(g, S.dome(4, 4, 2), 7, 1);
-  S.stamp(g, S.dome(5, 5, 2), 3, 0);
-  g[6][5] = 'd';
-  g[5][5] = 'd';
-  return g;
-}
+/** A row of beehive silos, each lit on its left, behind the low wall of the granary yard with its gate. */
+const GRANARY = [
+  '.LT...LT..',
+  'LLTS.LLTS.',
+  'LTTSOLTTSO',
+  'LTTSOLTTSO',
+  'RRRRRRRRRO',
+  'wwwwddwwvu',
+  'wwwwddwwvu',
+];
 
+/** A silo on its own, and two small ones. */
+const SILOS = [
+  [
+    '.LT.',
+    'LTTS',
+    'LTTS',
+    'LTSO',
+    'wwvu',
+    'wdvu',
+  ],
+  [
+    '.LT....',
+    'LTTS.L.',
+    'LTTSLTS',
+    'LTSOLSO',
+    'wwvuwvu',
+    'wdvuwdu',
+  ],
+];
+
+/** Three tiers round a central stair, a whitewashed shrine on top. */
 const ZIGGURAT = [
-  '....RTO....',
-  '....wdu....',
-  '...RTLTO...',
-  '...wvLvu...',
-  '..RTTLTTO..',
-  '..wwvLvwu..',
-  'RTTTTLTTTTO',
-  'wwwwvLvwwvu',
-  'wwwwvLvwwvu',
-  'uuuuuLuuuuu',
+  '....AB....',
+  '...AAAB...',
+  '...AdAB...',
+  '..RTLLTO..',
+  '..wwLLvu..',
+  '..wwLLvu..',
+  '.RTTLLTTO.',
+  '.wwwLLwvu.',
+  '.wwwLLwvu.',
+  'RTTTLLTTTO',
+  'wwwwLLwwvu',
+  'wwwwLLwwvu',
+  'wwwwLLwwvu',
+  'uuuuLLuuuu',
 ];
 
 const WELLS = [
@@ -97,10 +138,10 @@ const MUDWALL = [
     'wu',
   ],
   [
-    'R.R.R.R.',
-    'TTTTTTTO',
-    'wwwwwwvu',
-    'wwwwwwvu',
+    'R.R.R.R',
+    'TTTTTTO',
+    'wwwwwvu',
+    'wwwwwvu',
   ],
 ];
 
@@ -127,14 +168,40 @@ const BRIDGE = [
   ],
 ];
 
+/**
+ * Courts of smooth clay in the packed-clay yard, per size stage, as tile
+ * rectangles [x0, y0, x1, y1] (symmetric about the tile's middle, like the
+ * plans' kept courts in src/cityplans.ts, which are mirrored).
+ */
+const COURTS = [
+  [[6, 10, 9, 13]],
+  [],
+  [],
+];
+
+/** The packed-clay yard 16 px wide (so it sits square on the tile), its courts smooth and lighter. */
+function clayYard(stage) {
+  const base = yard(stage, 'earth', ['laterite1', 'laterite2', 'laterite3'], 21);
+  const t = new k.Tex(16, base.h);
+  t.stamp(base, (16 - base.w) >> 1, 0);
+  const top = 13 - (t.h - 1);
+  for (const [x0, y0, x1, y1] of COURTS[stage]) {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) t.set(x, y - top, k.c(y === y0 || x === x0 ? 'laterite2' : 'laterite3'));
+    }
+  }
+  return t;
+}
+
 const blocks = {
-  mudbrick: (v) => S.sprite(mudbrick(v.size), MUD),
-  granary: () => S.sprite(granary(), { ...MUD, d: 'soil0' }),
+  mudbrick: (v) => S.sprite(mudbrick(v.size), COURT),
+  granary: () => S.sprite(GRANARY, GRAIN),
   ziggurat: () => S.sprite(ZIGGURAT, BRICK),
+  silo: (v) => S.sprite(SILOS[v.index], GRAIN),
   well: (v) => S.sprite(WELLS[v.index], WELL),
-  mudwall: (v) => S.sprite(MUDWALL[v.index], MUD),
+  mudwall: (v) => S.sprite(MUDWALL[v.index], RAMPART),
   bridge_wood: (v) => S.sprite(BRIDGE[v.index], WOOD),
-  yard_bronze: (v) => yard(v.index, 'earth', ['laterite1', 'laterite2', 'laterite3'], 21),
+  yard_bronze: (v) => clayYard(v.index),
 };
 
 module.exports = { blocks };

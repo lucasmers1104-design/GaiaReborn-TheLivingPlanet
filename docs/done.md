@@ -13,3 +13,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-18 v0.9.1 feat(world): dolphin pods, oxygen bubbles, coastal tidal waves, river ice
 - 2026-10-19 v0.9.2 feat(world): reefs, coastal scenery, storms and UI improvements
 - 2026-10-19 v0.9.3 feat(ui): Gaia sleeps until first life, rumble bass for altitude brush
+- 2026-10-21 v0.10.0 feat(game): space project, dinosaur comet, extinction, bands, living planet

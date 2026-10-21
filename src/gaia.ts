@@ -5,7 +5,7 @@
  * the biosphere and her eyes follow the pointer. Her body is the player's own
  * planet, the pixel globe of the title screen turning slowly; on it a face
  * pixelled by hand, one for each of her six moods, and around it what weighs
- * on her: sweat when she is hot, snow when cold, smog when the air is foul.
+ * on her: sweat when she is hot, snow when cold, smog and a cough when the air is foul.
  * She sleeps until the first life stirs on her. Awake, she talks about each
  * of her troubles in turn, worst first, cheers or gasps when her mood changes,
  * dozes off while the game is paused, and she can be poked — up to a point.
@@ -65,6 +65,8 @@ namespace SE {
   const RETEXTURE_MS = 8000;
   /** Her turn, in radians per ms: once round in about 90 s. */
   const SPIN = 0.00007;
+  /** In foul air she coughs this often, twice as often when it is very foul. */
+  const COUGH_MS = 6000;
 
   /** Sprite colours from the game's palettes: ink, eye white, mouth, pink, white, water, red, gold, orange, smog dark and light. */
   const COLOURS: Readonly<Record<string, string>> = {
@@ -125,6 +127,8 @@ namespace SE {
   const DROP: Sprite = ['..k..', '.kbk.', '.kbk.', 'kbbbk', 'kbtbk', 'kbbbk', '.kkk.'];
   const FLAKE: Sprite = ['.t.', 'ttt', '.t.'];
   const PUFF: Sprite = ['..gGg...', '.gGGGgg.', 'gGGGGGGg', '.gggggg.'];
+  /** Coughed out onto her face, so it needs the ink outline the puffs beside her do without. */
+  const COUGH_PUFF: Sprite = ['.kkk.kk.', 'kGGGkGGk', 'kGGGGGGk', '.kgggggk', '..kkkkk.'];
   const BANG: Sprite = ['rr', 'rr', 'rr', 'rr', '', 'rr'];
   const ANGER: Sprite = ['rr.....rr', 'rrr...rrr', '.rr...rr.', '', '.rr...rr.', 'rrr...rrr', 'rr.....rr'];
 
@@ -132,6 +136,8 @@ namespace SE {
   const HOP = [0, -1, -2, -3, -3, -2, -1, 0];
   /** Where an uneasy Gaia looks, in turns. */
   const DART = [0, -2, -2, 0, 2, 2, 0, 0];
+  /** A cough, "hust hust": how far each frame jolts her down. */
+  const COUGH = [1, 1, 0, 0, 1, 1, 0, 0];
 
   function blit(ctx: CanvasRenderingContext2D, s: Sprite, x: number, y: number, mirror = false): void {
     for (let j = 0; j < s.length; j++) {
@@ -360,6 +366,9 @@ namespace SE {
       const gasp = react >= 0 && !this.reactUp;
       const cold = f.climate < 0.6 && !hot;
       const sweltering = f.climate < 0.6 && hot;
+      // Foul air makes her cough now and then: eyes pinched, mouth open, a jolt and a puff of smog, twice.
+      const coughAt = Math.floor((now % (f.clean < 0.25 ? COUGH_MS / 2 : COUGH_MS)) / FRAME_MS);
+      const cough = f.clean < 0.5 && !asleep && !annoyed && poke < 0 && react < 0 && coughAt < COUGH.length ? coughAt : -1;
 
       // An even number of globe pixels, so she sits on whole pixels.
       const g = 2 * Math.round(Math.min(Math.min(w, h) * BODY, BODY_MAX) / GLOBE_DISC / 2);
@@ -378,6 +387,7 @@ namespace SE {
         if (level === 0 || gasp) { dx = (frame % 3) - 1; dy = ((frame >> 1) % 3) - 1; }
         else if (level === 1 || annoyed) dx = frame % 4 < 2 ? 0 : 1;
         else if (cold) dx = frame % 2;
+        if (cough >= 0) dy += COUGH[cough];
       }
       const cx = (w >> 1) + dx;
       const cy = (h >> 1) + 2 + bob + dy;
@@ -402,6 +412,7 @@ namespace SE {
       if (poke >= 0) eye = EYE_SQUEEZE;
       else if (asleep) eye = EYE_SHUT;
       else if (annoyed) eye = EYE_HALF;
+      else if (cough >= 0) eye = EYE_SQUEEZE;
       else if (blink && level >= 1 && level <= 4) eye = blink;
       const [lift, worry, skew] = annoyed ? [0, -3, 0] : asleep ? [0, 0, 0] : BROWS[level];
       const gx = level === 2 ? DART[Math.floor(now / 600) % DART.length] : Math.round(clamp((this.pointer.x - 0.5) * 2, -1, 1) * 2);
@@ -430,8 +441,11 @@ namespace SE {
       else if (asleep) mouth = SNORE;
       else if (annoyed) mouth = FROWN;
       else if (react >= 0 && react < 9) mouth = cheer ? GRIN : OOH;
+      else if (cough >= 0 && COUGH[cough]) mouth = OOH;
       else if (cold && level >= 1 && level <= 3) mouth = CHATTER;
-      blit(ctx, mouth, cx - (mouth[0].length >> 1) + (mouth === CHATTER ? frame % 2 : 0), cy + Math.round(r * 0.27));
+      const my = cy + Math.round(r * 0.27);
+      blit(ctx, mouth, cx - (mouth[0].length >> 1) + (mouth === CHATTER ? frame % 2 : 0), my);
+      if (cough >= 0) blit(ctx, COUGH_PUFF, cx + 4 + (cough % 4) * 3, my - 2 - (cough % 4));
 
       // Around her; sleep and anger put an end to hearts, sparkles and whistling.
       const glad = !asleep && !annoyed;

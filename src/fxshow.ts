@@ -44,8 +44,13 @@ namespace SE {
     readonly p: number;
   }
 
-  /** A hazard whose main animation is playing. */
-  export interface FxStarted { readonly id: number; readonly kind: EventKind; readonly x: number; readonly y: number; readonly born: number }
+  /** A hazard whose main animation is playing; `strength` above 1 is the comet's meteor (comet.ts). */
+  export interface FxStarted { readonly id: number; readonly kind: EventKind; readonly x: number; readonly y: number; readonly born: number; readonly strength?: number }
+
+  /** How long a started hazard's main animation runs: the comet's impact longer than a meteor's. */
+  function mainMs(st: FxStarted): number {
+    return st.kind === EventKind.Meteor && (st.strength ?? 1) > 1 ? COMET_MAIN_MS : HAZARD_MAIN_MS[st.kind];
+  }
 
   /** A sprite that lives on by itself: it drifts, animates and dissolves (ash clouds, steam, puffs). */
   export interface FxTimed {
@@ -63,8 +68,8 @@ namespace SE {
 
   /** What a disaster looks like; each fx*.ts registers one by EventKind. */
   export interface FxScript {
-    /** The omen at tile (x, y), `t` ms after the hazard was asked for. */
-    omen(s: FxScene, x: number, y: number, t: number): void;
+    /** The omen at tile (x, y), `t` ms after the hazard was asked for; `strength` as staged (the comet's). */
+    omen(s: FxScene, x: number, y: number, t: number, strength?: number): void;
     /** The main animation, `t` ms after the hazard started. */
     main(s: FxScene, st: FxStarted, t: number, world: WorldState): void;
     /** What the world shows every frame from the state hazards leave behind (lava steam, vents). */
@@ -93,6 +98,8 @@ namespace SE {
     reduce = false;
     /** Device pixels per art pixel. */
     pixel = 1;
+    /** CSS pixels per tile: the zoom. */
+    tilePx = 16;
     /** Below 16 CSS px a tile the map is zoomed out past the art, whatever the screen's pixel ratio. */
     zoomedOut = false;
     /** Tiles in view, with a margin for tall sprites. */
@@ -156,6 +163,9 @@ namespace SE {
     readonly commit: () => Hazard | null;
     /** How long the omen plays before commit: HAZARD_OMEN_MS, or longer while a lead-in sound runs. */
     readonly omen: number;
+    /** The span the script's omen fills, at the end of `omen`. */
+    readonly scripted: number;
+    readonly strength?: number;
   }
 
   /** Tiles of margin around the view for tall sprites and drifting clouds. */
@@ -179,9 +189,10 @@ namespace SE {
     /**
      * Play the omen of `kind` at (x, y), then call `commit`, which starts the
      * hazard in the simulation. Off screen, or for a hazard without an omen,
-     * it starts at once.
+     * it starts at once. `opts` stages a stronger one (the comet) with an
+     * omen of its own length.
      */
-    stage(world: WorldState, kind: EventKind, x: number, y: number, commit: () => Hazard | null): void {
+    stage(world: WorldState, kind: EventKind, x: number, y: number, commit: () => Hazard | null, opts?: { omen: number; strength: number }): void {
       const v = this.view;
       const dx = ((x - v.x0) % GRID_W + GRID_W) % GRID_W;
       const visible = y >= v.y0 && y <= v.y1 && dx <= v.x1 - v.x0;
@@ -192,7 +203,11 @@ namespace SE {
       }
       // The bomb waits out its siren, so it goes off with the bang in the sound.
       const lead = kind === EventKind.AtomicBomb && playSfx('siren-and-nuke') ? NUKE_BOOM_MS : 0;
-      this.staged.push({ kind, x, y, born: performance.now(), generation: world.hazards.generation, commit, omen: Math.max(lead, HAZARD_OMEN_MS[kind]) });
+      const scripted = opts?.omen ?? HAZARD_OMEN_MS[kind];
+      this.staged.push({
+        kind, x, y, born: performance.now(), generation: world.hazards.generation, commit,
+        omen: Math.max(lead, scripted), scripted, strength: opts?.strength,
+      });
     }
 
     /** Start every staged hazard of this planet at once: with the effect layer off, nothing shows their omens. */
@@ -202,7 +217,7 @@ namespace SE {
 
     begin(h: Hazard, now: number): void {
       this.known.add(h.id);
-      if (FX_SCRIPTS[h.kind]) this.started.push({ id: h.id, kind: h.kind, x: h.x, y: h.y, born: now });
+      if (FX_SCRIPTS[h.kind]) this.started.push({ id: h.id, kind: h.kind, x: h.x, y: h.y, born: now, strength: h.strength });
     }
 
     once(key: string): boolean {
@@ -242,6 +257,7 @@ namespace SE {
       s.phase = phase ?? this.guessPhase(world, now);
       s.reduce = this.reduce;
       s.pixel = (cam.tilePx * cam.dpr) / 16;
+      s.tilePx = cam.tilePx;
       s.zoomedOut = cam.tilePx < 16;
       s.x0 = Math.floor(cam.scrollX) - VIEW_MARGIN;
       s.x1 = Math.ceil(cam.scrollX + cols) + VIEW_MARGIN;
@@ -260,7 +276,7 @@ namespace SE {
           continue;
         }
         // A long lead-in holds the omen's opening, then plays the rest up to commit.
-        if (s.sees(st.x, st.y)) FX_SCRIPTS[st.kind]?.omen(s, st.x, st.y, Math.max(0, t - (st.omen - HAZARD_OMEN_MS[st.kind])));
+        if (s.sees(st.x, st.y)) FX_SCRIPTS[st.kind]?.omen(s, st.x, st.y, Math.max(0, t - (st.omen - st.scripted)), st.strength);
       }
       // A hazard that started without the show (nature, a load) plays its main animation if it is fresh and in view.
       for (const h of world.hazards.list) {
@@ -271,7 +287,7 @@ namespace SE {
       for (let k = this.started.length - 1; k >= 0; k--) {
         const st = this.started[k];
         const t = now - st.born;
-        if (t > HAZARD_MAIN_MS[st.kind]) { this.started.splice(k, 1); continue; }
+        if (t > mainMs(st)) { this.started.splice(k, 1); continue; }
         if (s.sees(st.x, st.y)) FX_SCRIPTS[st.kind]?.main(s, st, t, world);
       }
       for (const script of FX_SCRIPTS) script?.live?.(s, world);

@@ -48,11 +48,13 @@ Bilder:
 - `riffe-4-meer-zwei-klassen-zoom16.png`
 - `riffe-5-ozeane-aus-tiefe-zoom16.png`
 - `riffe-6-golf-vorher-zoom48.png` / `riffe-7-golf-nachher-zoom48.png`: echter Spielstand, mit Tieren
+- `riffe-8-clownfisch-ablauf-zoom32.png`: ein Clownfisch-Ausflug bei 32 px, 4× vergrößert (aus der Koralle, Runde, zurück)
+- `riffe-9-clownfisch-ansicht-zoom32.png`: dieselbe Stelle mit Umgebung, 3× vergrößert
 
 ## Abgestimmte Werte
 
 - **Lagune:** Türkis-Rampe wie vorgeschlagen (`#1f9fb0 … #7fe0d6`), Grundton `waterWarm1`. Die Stufen werden pixelweise per Bayer eingemischt. Ein 2×2-Block-Dither wirkte am Bildschirm wie ein Raster und ist verworfen.
-- **Korallenfarben:** Eine Mischung zu 50 % in RGB machte aus Ocker Salbeigrün, aus Violett Blau und aus Gelb Limette. Jetzt sind sie in OKLCH gemischt: Helligkeit 55 % zum Lagunen-Türkis, Sättigung auf 55 %, Farbton nur 12 %. Damit bleiben Braun und Ocker (Farbton 31–46°), Rosa (321°), Orange (32°), Violett (271°) und Gelb (59°) gedämpft erkennbar. „50–60 % ins Türkis“ gilt also für Helligkeit und Sättigung, nicht für den Farbton.
+- **Korallenfarben:** Eine Mischung zu 50 % in RGB machte aus Ocker Salbeigrün, aus Violett Blau und aus Gelb Limette. Sie sind deshalb in OKLCH gemischt, der Farbton nur zu 12 %. Damit bleiben Braun und Ocker (Farbton 31–46°), Rosa (321°), Orange (32°), Violett (271°) und Gelb (59°) gedämpft erkennbar. Seit 20. 10. stärker ins Wasser gezogen (siehe unten).
 - **Quantisierung:** Die Dichten werden in Stufen von 0,2 gelesen. Riffgröße, Fleckenzahl und Sand ändern sich daher nur beim Stufenwechsel; besiedelte Korallen und Fische liegen mit etwa 0,5 mitten in einer Stufe.
   - Die Schwellen selbst (20 °C, Mindestdichte) haben keine Hysterese. Eine echte Hysterese bräuchte gespeicherten Zustand, und den schließt die Grundregel aus.
   - Eine Temperaturstufe von 2 °C hätte nichts entschieden und ist entfallen.
@@ -72,6 +74,30 @@ Bilder:
 - **Höhenschwelle:** `UPLAND_ELEVATION` gemeinsam für Strand und Höhenstufe.
 - **Mündungstest:** prüft jetzt eine Stelle, an der ohne Fluss Riff und Strand lägen.
 - **Bekannt und dokumentiert:** Während eines Pinselstrichs behalten Riffe, Lagunen und Strände ihren letzten Stand, wie die Flüsse. Am Ende des Strichs liest die Karte alles neu.
+
+## Unter Wasser: Tönung, Dünung, Clownfische (20. 10. 2026)
+
+Die Korallen wirkten wie auf die Wasseroberfläche geklebt. Drei Änderungen, alle nur im Bild:
+
+- **Tönung** (`tools/terrain/palette.js`, `coast.js`): Rampen `reefUnder` und `coral` neu, Länge und Indizes gleich. Alle drei Atlanten sind neu erzeugt, weil sie die Palette tragen.
+  - Körper und Lichter: Helligkeit 0,61–0,75 (OKLCH) um das Lagunen-Türkis (0,716), Lichter höchstens 0,75 und damit unter der Rippel-Stufe `waterWarm2`; Sättigung höchstens 0,094; Farbton weiter nur 12 %. Ein türkiser Schleier in OKLab machte Braun und Ocker oliv und ist verworfen.
+  - Schattenseiten: die Körperfarbe zu 42 % ins Lücken-Türkis, Helligkeit 0,585. Sie lesen sich als Türkisgrau statt als dunkler Umriss. Lücken-Türkis `coral0` von `#187d8e` auf `#3b9099`.
+  - Ränder: Wo eine Kolonie mindestens 2 px dick ist, weicht jedes zweite Umrisspixel; oben links zeigt es das Wasser, unten rechts das Schatten-Türkis.
+- **Dünung** (`src/reefswell.ts`): Ab und zu läuft ein heller Kamm von der offenen See über das Riff zum Land und verebbt über der Lagune.
+  - Das Feld dahinter: Abstand jeder Kachelmitte zur offenen See (bis 3 Felder) plus ein langsamer Zeitversatz, dazwischen bilinear. Die Fronten laufen deshalb ohne Naht über Kacheln und Chunks.
+  - Takt: alle 6 s eine Welle, bis 1,8 s verspätet, 11 px/s. Die Stärke schwankt entlang der Küste, eine Stelle sieht etwa alle 6–14 s einen Kamm.
+  - Farben: Wasser eine Stufe heller auf seiner Rampe; Korallen die nächste hellere Palettenfarbe zu 25 % Richtung `waterWarm3` (OKLab, Farbton gewichtet), so bleibt ihr Ton erhalten.
+  - Ab 16 px pro Feld, mit der Ebene „Ozeane“; nicht bei „Effekte reduzieren“.
+  - Kosten in Chrome: 0,3 ms je Bild bei 48 px, 0,7–1,0 ms bei 16 px mit 178 Rifffeldern.
+- **Clownfische** (`src/clownfishlayer.ts`, Sprite `clownfish` aus `tools/fx/reeffish.js`): 1 Fisch oder ein Paar (60 %) gleitet aus einem der drei größten Korallenköpfe, schwimmt eine Schleife von 6–14 px, verharrt kurz und gleitet in denselben oder einen Nachbarkopf zurück, 4–7 s.
+  - Wo: auf jedem Riff, sobald es entstanden ist, ob Stein- oder Runzelkorallen, mit oder ohne Weidefische; über Lagune und Riff, nie über offenem Blau, Sandinseln, Palmen, Land oder Städten.
+  - Seit wann: ohne Datumsgrenze, bewusst vereinfacht (Entscheidung des Entwicklers, 20. 10. 2026). Echte Clownfische gibt es erst seit etwa 13 Mio. J. (Radiation auf Seeanemonen; Litsios et al. 2012, *BMC Evol. Biol.*); eine Grenze dort machte sie in den meisten Partien unsichtbar.
+  - Wie selten: Jedes Feld hat eine Runde von 25–45 s und macht in 35 % davon einen Ausflug. Im Bild hält jeder Start die anderen 3–10 s zurück, höchstens 3 laufen zugleich. Probe am Great Barrier Reef: in einer Ansicht von 13 × 8 Feldern 6 Ausflüge je Minute, 44 % der Zeit keiner, fast nie zwei.
+  - Ab 24 Bildschirmpixeln pro Feld (CSS-Pixel × Skalierung), also bei 150 % Windows-Skalierung schon ab 16 px Zoom. Anfangs lag die Schwelle bei 32 CSS-Pixeln, im obersten Drittel des Zooms (10–48); im Spiel fand man so keine Fische. Nicht bei „Effekte reduzieren“ oder reduzierter Bewegung.
+  - Das Untersuchen-Fenster sagt auf jedem Riff „Clownfische leben in Seeanemonen dazwischen“. Gezeichnet über der Dünung, weil ein Kamm die Meeresfarbe malt und sonst Löcher in den Fisch schnitte.
+- **Untersuchen:** Wer mit der Lupe auf ein Feld klickt, auf dem oder neben dem gerade Clownfische unterwegs sind (bis 2 s nach dem Zurückschlüpfen), sieht die Karte „Clownfische im Riff“. Beim ersten Mal kommt „Clownfische entdeckt“ in die Chronik (`sight:clownfish`, wie die Lachswanderung in `src/migrations.ts`). Das ist die Bedingung für das Achievement „Nemo gefunden“ (Nr. 51).
+- **Tests:** `tests/reefswell.test.js` (2), `tests/clownfish.test.js` (8); dazu Riff-, Terrain-, Effekt- und Stadt-Atlas-Tests grün (48), `test:quick` grün.
+- **Geprüft** in headless Chrome am angelegten Riff (Erde „Heute“, Great Barrier Reef) bei 16, 32 und 48 px pro Feld. Bekannt: Die großen Tier-Symbole der Ebene „Leben“ liegen über den Fischen; ein Fisch kann darunter hervorschwimmen.
 
 ## Offene Entscheidungen
 

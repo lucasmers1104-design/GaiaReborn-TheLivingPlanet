@@ -337,6 +337,11 @@ namespace SE {
         // for the landscape filters below as well.
         SuccessionSystem.applyPending(world, target, SuccessionSystem.bridges(world, target, true, landList, landCount), false, true);
         if (unbridged > 0) SuccessionSystem.applyPending(world, target, SuccessionSystem.bridges(world, target, false, landList, landCount), false, true);
+        // The comet's winter (cometwinter.ts) lays its ice over whatever the climate would grow.
+        const iceShare = cometIceShare(world);
+        if (iceShare > 0) {
+          for (let k = 0; k < landCount; k++) if (cometIceAt(world, landList[k], iceShare)) target[landList[k]] = Landscape.Ice;
+        }
       }
 
       SuccessionSystem.settle(world, run, full);
@@ -608,7 +613,8 @@ namespace SE {
       const grown = rooted ? 1 : (p & CRUST_FLORA) ? SOIL_CRUST_MAX : 0;
       const ice = landscape[i] === Landscape.Ice;
       if (ice) {
-        if (byte === SOIL_REGOLITH_U8) return byte;
+        // The comet's short winter keeps the soil its plants hold on to; only lasting ice scours it.
+        if (byte === SOIL_REGOLITH_U8 || cometIceAt(world, i)) return byte;
         const s = byte / 255;
         const till = s > SOIL_REGOLITH ? Math.max(SOIL_REGOLITH, s - SOIL_ICE_SCOUR * timeF)
           : Math.min(SOIL_REGOLITH, s + SOIL_ICE_SCOUR * timeF);

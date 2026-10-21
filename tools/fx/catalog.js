@@ -26,7 +26,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna'];
+const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna', 'ice', 'offshore', 'oilfield', 'spaceport', 'reeffish', 'termites'];
 
 const SPRITES = [
   { id: 'smoke_puff', name: 'Rauchwölkchen', family: 'smoke', w: 8, h: 8, frames: 4, fps: 8, anchor: 'center', layer: 'top' },
@@ -59,6 +59,7 @@ const SPRITES = [
   { id: 'mushroom', name: 'Pilzwolke', family: 'impact', w: 32, h: 48, frames: 8, fps: 6, anchor: 'foot', layer: 'object' },
   { id: 'water_fountain', name: 'Wasserfontäne', family: 'impact', w: 16, h: 32, frames: 6, fps: 10, anchor: 'foot', layer: 'object' },
   { id: 'crater_rim', name: 'Kraterrand (frisch, verwittert)', family: 'impact', w: 24, h: 16, frames: 2, fps: 0, anchor: 'foot', layer: 'object' },
+  { id: 'crater_rim_large', name: 'Kraterrand des Kometen über 2 × 2 Feldern (frisch, verwittert)', family: 'impact', w: 48, h: 32, frames: 2, fps: 0, anchor: 'foot', layer: 'object' },
   { id: 'stump', name: 'Versengter Stumpf', family: 'impact', w: 8, h: 8, frames: 3, fps: 0, anchor: 'foot', layer: 'object' },
 
   // Water and wind (Flutwelle, Wirbelsturm).
@@ -109,6 +110,60 @@ const SPRITES = [
   // map: east 0–15, west 16–31, played once per leap. The whole arc is in the box; `mouth` is where the body
   // leaves the water, on the waterline, in the east frames (west: w − 1 − x).
   { id: 'dolphin_leap', name: 'Delfinsprung: 2 Richtungen × 16 Frames', family: 'fauna', w: 32, h: 24, frames: 32, fps: 12, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [6, 18] },
+  // A salmon leaping upstream out of a river (src/salmonlayer.ts), from the side: east 0–9, west 10–19, played once
+  // per leap. A short steep arc, so it fits a river running any way: waterline row 12, `mouth` is where the fish
+  // leaves the water (east frames), it dives back in 6 px further on (x 10).
+  { id: 'salmon_leap', name: 'Lachssprung flussaufwärts: 2 Richtungen × 10 Frames', family: 'fauna', w: 16, h: 16, frames: 20, fps: 12, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [4, 12] },
+  // A migrating stork seen from above like the map (src/storklayer.ts): south 0–7 (flying down the screen, beak
+  // down, legs trailing up), north 8–15 (beak up, legs trailing down); each set looped by the runtime: 0–3 one slow
+  // wing beat (raised, level, lowered, level), 4–7 gliding on outstretched wings. Body centred in the box.
+  { id: 'stork_glide', name: 'Ziehender Storch: Süden, Norden × 8 Frames', family: 'fauna', w: 24, h: 24, frames: 16, fps: 8, anchor: 'center', layer: 'top', directions: 2 },
+  // A clownfish under the lagoon's water, seen from above like the map and the corals (src/clownfishlayer.ts): 8
+  // directions in HAZARD_NX/NY order (NW, N, NE, W, E, SW, S, SE), 6 frames each: 0–1 slipping out of a coral
+  // (deep and dim, then half its colour), 2–5 one swim cycle (tail beat), looped by the runtime, which plays 1, 0
+  // when the fish slips back in. Body (5–6 px nose to tail) centred in the box.
+  { id: 'clownfish', name: 'Clownfisch unter Wasser: 8 Richtungen × 6 Frames', family: 'reeffish', w: 8, h: 8, frames: 48, fps: 10, anchor: 'center', layer: 'object', directions: 8 },
+
+  // A termite mound on the savanna (src/termitelayer.ts), raised once ants (insect sub-species 8) live there and fixed
+  // while its tile stays savanna. A cathedral mound of red-orange savanna clay in the map's 3/4 relief (a heightfield
+  // seen from the south at 45°, like the volcano cones), 24 px wide and 20 high: rows 0–3 stay clear, its foot spreads
+  // 4 px onto the tiles left and right, its towers reach 4 px into the tile above. Frames 0–7 one quiet loop: a few
+  // termites (2 px: pale sand4 body, laterite0 head) go in and out of an opening at the south foot; the mound itself
+  // never changes. Frame 0 alone is the still picture. The trails to the neighbouring tiles are drawn by the runtime.
+  { id: 'termite_mound', name: 'Termitenhügel in der Savanne: 8 Frames krabbelnde Termiten', family: 'termites', w: 24, h: 24, frames: 8, fps: 4, anchor: 'foot', layer: 'object' },
+
+  // Sea ice calving off the pack edge (src/icecalving.ts); the runtime picks every frame. Crack and slab come wide
+  // (0–3, open water north or south) and tall (4–7, east or west), never rotated. The crack is drawn over the
+  // edge tile's own ice, the slab on the water's half of it; splash, berg and melt sit on the water.
+  { id: 'ice_crack', name: 'Riss durch eine Randscholle: waagrecht (0–3), senkrecht (4–7)', family: 'ice', w: 16, h: 16, frames: 8, fps: 0, anchor: 'center', layer: 'object' },
+  { id: 'ice_calve', name: 'Abbrechende Scholle kippt ins Meer: breit (0–3), hoch (4–7)', family: 'ice', w: 16, h: 16, frames: 8, fps: 0, anchor: 'center', layer: 'object' },
+  { id: 'ice_splash', name: 'Gischt mit Wasserring', family: 'ice', w: 16, h: 16, frames: 6, fps: 10, anchor: 'center', layer: 'object' },
+  { id: 'iceberg_drift', name: 'Treibender Eisberg, wippend (0, 1, 0, 2)', family: 'ice', w: 16, h: 16, frames: 3, fps: 0, anchor: 'center', layer: 'object' },
+  { id: 'iceberg_melt', name: 'Schmelzender Eisberg', family: 'ice', w: 16, h: 16, frames: 5, fps: 0, anchor: 'center', layer: 'object' },
+
+  // Oil (src/oillayer.ts): placed once when the first city reaches the Industrial age, then fixed. Both stand on
+  // their tile's last row like a tree and reach up to 16 px into the tile above and 8 px into the tiles beside it.
+  // Frames 0–7 one working cycle, looped; frame 8 the same rig shut down, shown once the planet's oil is gone.
+  // oil_platform: a steel platform on legs in the sea off the coast, its waterline on the bottom rows; the working
+  // cycle flickers the gas flare and laps the water at the legs. oil_derrick: a lattice drilling tower on desert
+  // ground with a pumpjack beside it; the working cycle is one full stroke of the pumpjack (the beam nods, the horse
+  // head sinks and rises over the well, the crank and counterweight turn once).
+  { id: 'oil_platform', name: 'Bohrinsel vor der Küste: 8 Frames Betrieb, 1 stillgelegt', family: 'offshore', w: 32, h: 32, frames: 9, loop: 8, fps: 8, anchor: 'foot', layer: 'object' },
+  { id: 'oil_derrick', name: 'Förderturm mit Pferdekopfpumpe in der Wüste: 8 Frames Betrieb, 1 stillgelegt', family: 'oilfield', w: 32, h: 32, frames: 9, loop: 8, fps: 6, anchor: 'foot', layer: 'object' },
+
+  // The space project (src/spaceport.ts, src/spaceportlayer.ts): one launch site in a desert, built in four phases and
+  // drawn by the sprite of the phase it is in, in the map's 3/4 isometric view (slab, cylinder and lattice with their
+  // top and side faces). Every phase stands on the same concrete pad on desert sand: it covers its
+  // tile's last row and reaches 16 px into the tiles left and right and up to 48 px into the three tiles above. The
+  // phases must read apart at a glance at 10–16 px per tile (silhouette and height first, detail second): a flat pad
+  // with a crane, a squat lower stage in scaffolding, the full rocket at its tower, the rocket alone on the finished
+  // ramp. Frames are a short working loop (crane, welding sparks, lights, venting), frame 0 the still picture for
+  // "Effekte reduzieren". spaceport_launched: the empty pad after the launch, for good.
+  { id: 'spaceport_pad', name: 'Raumhafen, Phase 1: Fundament und Startplatz im Bau', family: 'spaceport', w: 48, h: 64, frames: 4, fps: 6, anchor: 'foot', layer: 'object' },
+  { id: 'spaceport_stage', name: 'Raumhafen, Phase 2: untere Raketenstufe im Baugerüst', family: 'spaceport', w: 48, h: 64, frames: 4, fps: 6, anchor: 'foot', layer: 'object' },
+  { id: 'spaceport_rocket', name: 'Raumhafen, Phase 3: vollständige Rakete am Startturm', family: 'spaceport', w: 48, h: 64, frames: 4, fps: 6, anchor: 'foot', layer: 'object' },
+  { id: 'spaceport_ready', name: 'Raumhafen, Phase 4: startbereite Rakete auf der fertigen Rampe, Abdampf und Positionslichter', family: 'spaceport', w: 48, h: 64, frames: 8, fps: 8, anchor: 'foot', layer: 'object' },
+  { id: 'spaceport_launched', name: 'Raumhafen nach dem Start: leere Rampe, versengter Beton', family: 'spaceport', w: 48, h: 64, frames: 1, fps: 0, anchor: 'foot', layer: 'object' },
 ];
 
 /**

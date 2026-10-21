@@ -201,6 +201,8 @@ namespace SE {
     readonly reef = new Uint8Array(TILE_COUNT);
     readonly corals = new Uint8Array(TILE_COUNT);
     readonly sands = new Uint8Array(TILE_COUNT);
+    /** 1 where a sand cay sits on the reef tile (reefs.ts); its palms are in `palm`. */
+    readonly cay = new Uint8Array(TILE_COUNT);
     /** BeachKind of a land tile, drawn along its shore (landshore.ts). */
     readonly beach = new Uint8Array(TILE_COUNT);
     /** Ramp shift of the ground from relief and macro variation. */
@@ -230,7 +232,7 @@ namespace SE {
     readonly cactus = new Uint8Array(TILE_COUNT);
     /** 1 where the flowering plants show as a savanna tree (savannatrees.ts). */
     readonly savannaTree = new Uint8Array(TILE_COUNT);
-    /** Coconut palms on a beach tile, 0..2 (reefs.ts). */
+    /** Coconut palms on a beach tile or a sand cay, 0..2 (reefs.ts). */
     readonly palm = new Uint8Array(TILE_COUNT);
     private readonly reach = new SavannaReach();
     readonly sig = new Uint32Array(TILE_COUNT);
@@ -247,7 +249,7 @@ namespace SE {
      *   the landscape); on water only biome, temperature (pack ice) and
      *   vegetation (kelp density), on bare rock only upliftKind, soil and
      *   landscapeZone, both as `partIn`;
-     *   derived: reefMap's coral, lagoon, beach, corals, sands and
+     *   derived: reefMap's coral, lagoon, beach, corals, sands, cay, palms and
      *   SavannaReach's toDry, toForest.
      * Planet-wide, any change reads everything again (`planet`): seed, plate
      * drift (driftShifts), mapFloraMask, cactiArrived, savannaTreesArrived,
@@ -314,9 +316,10 @@ namespace SE {
     private inputs(world: WorldState): TileArray[] {
       const { elevation: e, temperature, vegetation: v, biome, landscape, upliftKind: kind, soil, landscapeZone: zone } = world;
       const part = this.partIn;
+      const iceShare = cometIceShare(world);
       for (let i = 0; i < TILE_COUNT; i++) {
         if (e[i] < 0) {
-          part[i] = biome[i] | (packIce(temperature[i], i) ? 256 : 0) | (v[i] < 0.3 ? 0 : v[i] < 0.6 ? 512 : 1024);
+          part[i] = biome[i] | (packIce(temperature[i], i) || cometIceAt(world, i, iceShare) ? 256 : 0) | (v[i] < 0.3 ? 0 : v[i] < 0.6 ? 512 : 1024);
         } else if (landscape[i] === Landscape.Rock) {
           part[i] = (kind[i] === UpliftKind.Hotspot || kind[i] === UpliftKind.IslandArc) && soil[i] < FRESH_ROCK_SOIL ? 1
             : zone[i] !== ZONE_NONE && (zone[i] & ZONE_ROCKBELT) !== 0 ? 2 : 0;
@@ -327,7 +330,7 @@ namespace SE {
       const reefs = reefMap(world);
       return [e, world.landscape, world.landscapeDensity, world.substrate, world.flora, world.floraTop, world.riverLevel,
         world.tech, world.hazards.scar, part, reefs.coral, reefs.lagoon, reefs.beach, reefs.corals, reefs.sands,
-        this.reach.toDry, this.reach.toForest];
+        reefs.cay, reefs.palms, this.reach.toDry, this.reach.toForest];
     }
 
     /**
@@ -473,8 +476,8 @@ namespace SE {
       const flowering = floraBit(Flora.Flowering);
       const cacti = cactiArrived(world);
       const trees = savannaTreesArrived(world);
-      const palms = palmsArrived(world);
       const reefs = reefMap(world);
+      const iceShare = cometIceShare(world);
       return (i: number): void => {
         const h = e[i];
         let key = 0;
@@ -492,9 +495,11 @@ namespace SE {
         let rugged = 0;
         let river = 0;
         if (h < 0) {
-          if (packIce(world.temperature[i], i)) key = T.seaIceKey;
-          else if (reefs.coral[i] !== CoralKind.None) reef = reefs.coral[i];
-          else if (biome[i] === Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
+          if (packIce(world.temperature[i], i) || cometIceAt(world, i, iceShare)) key = T.seaIceKey;
+          else if (reefs.coral[i] !== CoralKind.None) {
+            reef = reefs.coral[i];
+            palm = reefs.palms[i];
+          } else if (biome[i] === Biome.Coast && h > KELP_DEPTH && (flora[i] & kelp) !== 0) {
             scene = LAND_SCENE_SEA;
             groups = kelp;
             density = vegetation[i] < 0.3 ? 0 : vegetation[i] < 0.6 ? 1 : 2;
@@ -530,7 +535,7 @@ namespace SE {
             }
             if (trees && ls === Landscape.Savanna && (flora[i] & flowering) !== 0 &&
               landHash(i % GRID_W, (i / GRID_W) | 0, 830) < savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i])) tree = 1;
-            if (beach !== BeachKind.None && palms) palm = beachPalms(i);
+            palm = reefs.palms[i];
           }
           // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
           const scar = scars[i];
@@ -567,6 +572,7 @@ namespace SE {
         this.reef[i] = reef;
         this.corals[i] = reef ? reefs.corals[i] : 0;
         this.sands[i] = reef ? reefs.sands[i] : 0;
+        this.cay[i] = reef ? reefs.cay[i] : 0;
         this.beach[i] = beach;
       };
     }
@@ -581,7 +587,7 @@ namespace SE {
       const ridges = this.ridges.sig;
       let s = Math.imul(this.key[i] ^ (this.river[i] << 8) ^ (this.edge[i] << 16) ^ (this.density[i] << 20) ^ (this.algae[i] << 23) ^ (this.scene[i] << 24), 0x9e3779b1);
       s ^= Math.imul(this.groups[i] ^ (this.top[i] << 16) ^ (this.cactus[i] << 21) ^ (this.savannaTree[i] << 22), 0x85ebca77) ^ Math.imul(lines[i], 0x27d4eb2d);
-      const shore = this.sea[i] | (this.lagoon[i] << 1) | (this.reef[i] << 3) | (this.corals[i] << 5) | (this.sands[i] << 8) | (this.beach[i] << 10) | (this.palm[i] << 12);
+      const shore = this.sea[i] | (this.lagoon[i] << 1) | (this.reef[i] << 3) | (this.corals[i] << 5) | (this.sands[i] << 8) | (this.beach[i] << 10) | (this.palm[i] << 12) | (this.cay[i] << 14);
       s ^= Math.imul(shore ^ (((this.shade[i] + LAND_SHIFT_MAX) * QUANT) << 16), 0xc2b2ae3d);
       s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
       this.sig[i] = (s ^ (s >>> 15)) >>> 0;

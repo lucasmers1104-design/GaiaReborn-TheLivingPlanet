@@ -38,6 +38,7 @@ function makeSim(seed = 12345, epoch = 'random') {
     history: new SE.HistoryRecorder(),
   };
   s.evo = new SE.EvolutionSystem(s.life, s.flora);
+  s.hazards = new SE.HazardSystem();
   SE.civEventSink = (k, x, y) => s.events.trigger(s.world, k, x, y);
   s.world.reset(seed, SE.OCEAN_FRACTION, epoch);
   SE.applyEpochParams(s.params, epoch);
@@ -52,11 +53,13 @@ function makeSim(seed = 12345, epoch = 'random') {
     s.flora.step(w, p);
     SE.BiomeSystem.step(w);
     SE.CoalSystem.step(w);
+    SE.OilSystem.step(w);
     s.life.stepLife(w, p, s.atmo);
+    SE.placeTermiteMound(w);
     s.evo.step(w, p);
     s.civ.step(w, p, s.atmo);
     s.atmo.step(w, p);
-    w.omega = Math.min(SE.OMEGA_MAX, w.omega + SE.OMEGA_REGEN);
+    SE.regenOmega(w);
     w.ticks++;
     w.absoluteYears += w.yearsPerTick;
     w.scaleYears += w.yearsPerTick;
@@ -64,12 +67,28 @@ function makeSim(seed = 12345, epoch = 'random') {
   };
 
   /**
-   * Play like a greedy player: every few ticks develop one available node,
-   * chosen by `pick` (default: the cheapest). Returns the development order.
+   * Answer the dinosaurs' question for the player (src/comet.ts): 'survive'
+   * or 'comet', which also lets the comet strike at once. The simulation
+   * never answers it by itself. Returns whether a question stood.
    */
-  s.play = (maxTicks, pick) => {
+  s.resolveDinoFate = (choice) => {
+    const w = s.world;
+    if (!SE.chooseDinoFate(w, s.evo, choice)) return false;
+    if (choice === 'comet') SE.applyComet(w, s.params, s.life, s.hazards, s.evo);
+    return true;
+  };
+
+  /**
+   * Play like a greedy player: every few ticks develop one available node,
+   * chosen by `pick` (default: the cheapest). With `dinoFate`, the question
+   * the first birds put is answered that way as soon as it stands; without,
+   * it stays open and the era's bars hold. Returns the development order.
+   */
+  s.play = (maxTicks, pick, dinoFate) => {
     const order = [];
     for (let t = 0; t < maxTicks; t++) {
+      // Answered before time runs on, as the app holds the world until it is.
+      if (dinoFate && s.world.dinoEra.fate === 'deciding') s.resolveDinoFate(dinoFate);
       s.tick();
       if (t % 5 !== 0) continue;
       s.evo.refresh(s.world, s.params, true);

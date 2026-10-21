@@ -146,16 +146,16 @@ test('the giants end for good once conifer and broadleaf forests lead a tenth of
     for (let i = 0; i < SE.TILE_COUNT; i++) w.floraTop[i] = i < n ? (i % 2 ? F.Conifers : F.Broadleaf) : F.Clubmosses;
   };
   lead(0.5);
-  SE.updateLycopsidEra(w, 1 << F.Clubmosses);
+  SE.updateFloraEras(w, 1 << F.Clubmosses);
   assert.equal(w.lycopsidsGone, false, 'no rivals on the planet, no end');
   lead(0.09);
-  SE.updateLycopsidEra(w, rivals);
+  SE.updateFloraEras(w, rivals);
   assert.equal(w.lycopsidsGone, false, '9 % of the land is not enough');
   lead(0.11);
-  SE.updateLycopsidEra(w, rivals);
+  SE.updateFloraEras(w, rivals);
   assert.equal(w.lycopsidsGone, true);
   lead(0);
-  SE.updateLycopsidEra(w, rivals);
+  SE.updateFloraEras(w, rivals);
   assert.equal(w.lycopsidsGone, true, 'they do not come back when the forests do not');
 
   const notes = SE.lycopsidMilestones(w);

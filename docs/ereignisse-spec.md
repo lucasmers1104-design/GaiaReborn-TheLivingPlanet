@@ -204,7 +204,7 @@ Die ausführliche Fassung entsteht in Stufe 1 als `docs/ereignisse-2026-10/stil.
 |---|---|---|---|---|---|
 | Vulkanausbruch | Land oder Schelf | 6 | Lavastrom bergab, ≤ 12 Kacheln | Basalt, Schlot mit Krater | 20 Ticks nackt; Schlot bleibt |
 | Meteorit | überall | 2 (Bild 4) | keine; Staubwolke nur Bild | Krater, versengter Ring | 8 / 30 Ticks |
-| Flächenbrand | Land mit Pflanzendecke | 10, ≤ 90 Kacheln | Zellautomat | verbrannte Erde, Stämme | 8 Ticks bis Gras |
+| Flächenbrand | Land mit Pflanzendecke | ≤ 10, ≤ 90 Kacheln, ≤ 6 Ticks | Zellautomat | verbrannte Erde, Stämme | 8 Ticks bis Gras |
 | Wirbelsturm | überall | Bahn ≤ 40, Streifen 5 breit | Zugbahn 1 Kachel/Tick | Windwurf, nass, Schlamm | 10 Ticks |
 | Flutwelle | Meer | 32 übers Wasser (schwächere Wellen weniger), 6 landeinwärts | Wellenfront, Auflaufen | Schlamm, Treibgut | 10 Ticks |
 | Erdbeben | überall | 4 | Erdrutsche 1–3 Ticks | Riss, Schutt, Ruinen | 30 / 10 Ticks |
@@ -297,6 +297,30 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
 | versengt (Material, 2 Dichten) + Stumpf (Objekt) | 64 / 8×12 | 3 Varianten | Gelände | 1 |
 | Wasserfontäne | 16×32 | 6 | Objekt | 2 |
 
+#### 3.2a Der Komet am Ende der Dinosaurier-Ära (seit 19. 10. 2026)
+
+Kein Werkzeug-Ereignis: Er schlägt nur ein, wenn der Spieler im Dialog „Das Schicksal der Dinosaurier“
+„Dinos sterben aus“ wählt (`src/comet.ts`, Regeln der Ära in `src/dinoera.ts`, Evolutionsbericht).
+
+- **Simulation:** ein Meteorit der Stärke `COMET_STRENGTH` = 2 über die Regel aus 3.2. Der Krater ist ein
+  2 × 2-Block (vierfache Fläche, doppelter Durchmesser) mit doppelter Tiefe; Ring 1 und 2 haben den doppelten
+  Radius um die Blockmitte (`meteorRing`), die Brandkette sucht in Ring 4–6. Staub und CO₂ wie bei einem
+  Meteoriten: Mehr Staub fror die Probe-Planeten bis −6 °C ein und löschte danach ganze Gruppen aus.
+  Den Impaktwinter zeigt stattdessen Eis über zwei Drittel des Planeten für 95 Ticks
+  (`src/cometwinter.ts`, Evolutionsbericht). Normale Meteoriten (Stärke 1) sind unverändert.
+- **Weltwirkung genau einmal:** `applyComet` setzt den Zustand zuerst auf „ausgestorben“ und wirkt nur aus
+  „Einschlag ausstehend“. Ziel und Zustand stehen im Spielstand; nach dem Laden fliegt die Kamera erneut hin.
+  Alte Animationsrückrufe prüfen die Generation des Planeten. Mit ausgeschalteter Effektebene schlägt er
+  sofort ein.
+- **Inszenierung (Echtzeit, läuft auch pausiert):** Die Kamera fliegt zur Blockmitte. Vorzeichen 3,2 s: Ein
+  Licht steht 10 Kacheln oben links, wird heller und zieht einen Schweif; der gerasterte Schatten wächst auf
+  doppelte Größe; in den letzten 1,1 s fliegen zwei Feuerschweife mit Glutspur ein. Einschlag 4,5 s: Blitz,
+  langer Feuerball, zwei Druckwellenringe bis 8 Kacheln, Staubring am Boden, zwei Trümmerschübe, ein Kranz
+  aus acht Staubwolken, die mit dem Wind ziehen (9 s). Dann erklärt die Infotafel „Der Einschlag und seine
+  Folgen“ die Wirkung; nach „Weiter“ läuft das Spiel im vorherigen Tempo weiter.
+- **Narbe:** Kraterboden auf allen vier Feldern und **ein** großer Kraterrand `crater_rim_large` (48×32,
+  dasselbe Rezept wie `crater_rim` in doppelter Größe), gezeichnet vom linken oberen Feld des Blocks.
+
 ### 3.3 Flächenbrand
 
 - **Auslösefeld:** Land mit Pflanzendecke ≥ 0,12 (`BARE_COVER`), sonst Ablehnung mit „Hier gibt es nichts, was
@@ -305,12 +329,19 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
 - **Hauptereignis (2 s):** Die Flamme wächst von klein zu groß, Funkenregen.
 - **Ausbreitung (Zellautomat, ein Schritt je Tick):**
   - Brennstoff b = Pflanzendecke × 1,0 mit Gehölz bzw. × 0,6 ohne. Eine Kachel brennt 2–4 Ticks, je nach b.
-  - Zündchance auf jeden der 8 Nachbarn: p = 0,55 · b · Trockenheit · Wind, diagonal × 0,7.
+  - Zündchance auf jeden der 8 Nachbarn: p = 0,55 · b · Trockenheit · Wind · Sauerstoff, diagonal × 0,7.
     - Trockenheit = clamp(1,2 − 1,4 · Feuchte, 0, 1); über 25 °C × 1,2, unter 0 °C × 0,5.
     - Wind aus `airCurrent`: mit dem Wind × 1,8, quer × 1, gegen den Wind × 0,3.
+    - Sauerstoff (Feuerfenster, `fireOxygen` in `src/hazardlightning.ts`): 1 bis 21 % O₂ in der Luft, darüber je
+      6 Prozentpunkte +1 (27 %: × 2, 33 %: × 3). Darunter ändert sich nichts.
   - Das Feuer stoppt an Wasser, Flusskacheln, Fels, Eis, Schnee, Wüste, Rohboden, Pflanzendecke < 0,12 und schon
     verbrannten Kacheln. Stadtkacheln brennen nicht, verlieren aber 20 %.
-  - Grenzen: höchstens 10 Kacheln vom Ursprung, 90 Kacheln und 40 Ticks.
+  - Grenzen: höchstens 10 Kacheln vom Ursprung, 90 Kacheln und 6 Ticks (`FIRE_MAX_TICKS`): so lange, wie
+    `forest-fire.mp3` (15,2 s) läuft, bei 2,5 s je Tick. Solange ein Feuer brennt, läuft das Spiel immer auf „Sehr
+    langsam“, egal welches Tempo gewählt ist (`SLOWEST_TICK_MS`, `App.frame`).
+  - **Ton:** Eine Stimme je Feuer, ab dem ersten Bild, auf dem es im Bild brennt (`src/firesound.ts`). Rausgezoomt
+    unhörbar, beim Hineinzoomen langsam lauter (Zoom², Pegel 0,5 bei größter Stufe). Ist das Feuer aus, blendet der
+    Ton aus und stoppt.
   - Ist eine Kachel ausgebrannt: Wirkung wie heute (`scorch` + `SuccessionSystem.burn`), Leben −0,7,
     CO₂ += Pflanzendecke · 0,8, Bodenzustand „verbrannt“.
 - **Nachwirkung:** verbrannte Erde (Asche, Kohle). Wo Gehölz stand, liegen verkohlte Stämme.
@@ -318,6 +349,18 @@ In den Sprite-Tabellen bedeutet **Ebene** den Pass aus 2.3 und **Stufe** die Ums
   - Dann kommt Offenland (Gras) mit vereinzelten Stämmen.
   - Mit dem Gebüsch verschwinden die Stämme, dann folgt Wald. Das ist die bestehende Sekundärsukzession.
 - **Simulation:** CO₂ aus der tatsächlich verbrannten Biomasse; Staub +0,0003 je Kachel, höchstens +0,02.
+  - **Sauerstoff:** Jede brennende Kachel verbraucht je Tick 0,006 · b · Sauerstoff Prozentpunkte O₂ (`FIRE_O2`). Je
+    größer und länger der Brand, desto mehr: eine Kachel ≈ 0,02, ein trockener Wald (≈ 70–90 Kacheln) ≈ 0,5 bei 21 %,
+    ≈ 2,5 bei 35 % (größer und heißer).
+- **Blitzbrände (natürlich, `src/hazardlightning.ts`, gewürfelt in `EventSystem.step`):** Je Tick schlägt mit
+  0,0004 · Sauerstoff³ ein Blitz in trockene Vegetation ein. Er sucht 24 zufällige Kacheln ab und zündet die mit dem
+  meisten trockenen Brennstoff (Zündschwellen wie in §3.9). Bei 21 % O₂ ist das etwa alle 2500 Ticks, bei 25,7 %
+  (dort pendelt sich ein gieriger Planet ohne Brände ein) alle 440, bei 30 % alle 160, bei 35 % alle 70. Weil jeder
+  Brand O₂ verbraucht, brennt sich eine zu sauerstoffreiche Luft selbst herunter.
+  - Gewürfelt wird mit `hazardRoll` aus Seed und Tick, nicht mit `world.rng`. Im Headless-Lauf ohne `hazardSink`
+    gibt es keine Blitzbrände (wie Vulkane und Meteoriten).
+  - Im Bild: Der Blitz schlägt dort ein, wo die Flamme wächst, mit Donner (`fxLightningBolt`). Meldung
+    „Blitzeinschlag: Flächenbrand!“.
 
 | Sprite | Größe | Frames | Ebene | Stufe |
 |---|---|---|---|---|
@@ -548,8 +591,8 @@ Die Seuche kommt schleichend, ohne Vorzeichen und ohne Hauptanimation.
 ### 3.9 Kettenreaktionen (Stufe 2; Stufe 1 legt nur den Platz an)
 
 - Erdbeben im Meer → Flutwelle am Epizentrum.
-- Lava eines Vulkans oder Ring 2 eines Meteoriten neben trockener Vegetation (Pflanzendecke ≥ 0,35, Feuchte < 0,4)
-  → Flächenbrand.
+- Lava eines Vulkans oder Ring 2 eines Meteoriten neben trockener Vegetation (Pflanzendecke ≥ 0,35, Feuchte
+  < 0,4 · Sauerstoff aus §3.3, also bei viel O₂ auch feuchtere) → Flächenbrand (`fireCanCatch`).
 - Vorschlag K4: Meteorit ins Meer → Flutwelle statt Brand.
 - Blitz eines Wirbelsturms auf trockene Vegetation (dieselben Schwellen, nicht nass) → Flächenbrand mit 50 % Chance
   je Treffer (§3.4).

@@ -1,11 +1,14 @@
 /* =============================================================================
  * SimEarth 2.0 — civilization
  * -----------------------------------------------------------------------------
- * Any of the land classes able to think can wake up, so a planet may just as
- * easily end up run by intelligent dinosaurs, insects or birds as by mammals.
- * This is the tick of the civilization: cities (cities.ts), peoples
- * (tribes.ts), settlers (migration.ts), hunger and epidemics (epidemic.ts),
- * conflicts and atomic war (conflict.ts).
+ * A rule of this game: on their own only the hominids wake up, once the comet
+ * has ended the dinosaurs, or the dinosaurs if they lived on. Insects, birds
+ * and the other land classes able to think need the Monolith (app.ts).
+ * This is the tick of the civilization: wandering bands before the first
+ * villages (bands.ts), cities (cities.ts), peoples (tribes.ts), settlers
+ * (migration.ts), hunger and epidemics (epidemic.ts),
+ * conflicts and atomic war (conflict.ts), and from the Nanotech age the
+ * space project (spaceport.ts).
  * Cities burn energy drawn from the four sources on the Civilization Model
  * Control Panel, and a fossil-heavy mix warms the planet that hosts it.
  * ========================================================================== */
@@ -54,6 +57,7 @@ namespace SE {
       // seeds tuned and tested elsewhere still mean the same planet.
       if (asleep) for (let n = 0; n < CivSystem.LEGACY_DRAWS; n++) world.rng.next();
       const drifted = reconcileCities(world, params);
+      stepBands(world, params);
       if (civ.cities.length === 0 && civ.settlers.length === 0) {
         // Peoples whose last city just fell go now, or a new city finds every colour taken.
         updateTribes(world);
@@ -62,6 +66,8 @@ namespace SE {
 
       if (!drifted && world.ticks % CITY_CAPACITY_EVERY === 0) refreshCapacities(world, params);
       growCities(world, params);
+      // Before the tech step: a city that reaches Nanotech now opens the project next tick, after its age's news.
+      stepSpaceport(world);
       this.announceTech(world, advanceCityTech(world, params));
       updateTribes(world);
       splitTribes(world);
@@ -71,6 +77,8 @@ namespace SE {
       stepConflicts(world, params);
       this.consumeEnergy(world, params, atmo);
       mineCoal(world, coalDemand(world, params));
+      pumpOil(world, oilDemand(world, params));
+      placeOilRigs(world);
       this.warfare(world, params);
     }
 
@@ -90,7 +98,8 @@ namespace SE {
 
     /**
      * Look for a class that is both widespread and locally dense, then let it
-     * cross the threshold into tool use and found its first settlement.
+     * cross the threshold into tool use: its first bands set out around the
+     * best site (bands.ts).
      */
     private emergeSentience(world: WorldState, params: ModelParams): void {
       if (world.sentientClass !== Life.None) return;
@@ -109,22 +118,28 @@ namespace SE {
       if (buildSite < 0) return; // nowhere worth settling yet — try again later
 
       world.sentientClass = best;
-      world.tech[buildSite] = Tech.Stone;
-      world.cityPop[buildSite] = 0.2;
-      this.lastNotice = `${LIFE[best].name} entwickeln Intelligenz und gründen eine erste Siedlung.`;
+      spawnBands(world, buildSite);
+      this.lastNotice = `${mindName(world)} entwickeln Intelligenz. Kleine Gruppen ziehen umher und schlagen Lager auf.`;
       this.lastKind = 'sentience';
     }
 
+    /** Lowest sub-species of class `c` that may wake up on its own now, or -1 (see the file header). */
+    static naturalMindStage(world: WorldState, c: Life): number {
+      if (c === Life.Mammal) return dinoEraHolds(world) ? -1 : HOMINID_STAGE;
+      if (c === Life.Dinosaur) return world.dinoEra.fate === 'kept' ? 0 : -1;
+      return -1;
+    }
+
     /**
-     * The land class able to think that holds the most of the planet, or
-     * Life.None. Sea classes build no civilization (spec §2.12).
+     * The class allowed to wake up on its own that holds the most of the
+     * planet, or Life.None. Sea classes build no civilization (spec §2.12).
      */
     static sentienceCandidate(world: WorldState): Life {
       let best: Life = Life.None;
       let bestBiomass = 0;
       for (let c = 1; c < LIFE_COUNT; c++) {
         const cls = c as Life;
-        if (!LIFE[cls].sentient || !isLandLife(cls)) continue;
+        if (CivSystem.naturalMindStage(world, cls) < 0) continue;
         if (world.coverage(cls) < CivSystem.SENTIENCE_COVERAGE) continue;
         if (world.lifeBiomass[cls] > bestBiomass) {
           bestBiomass = world.lifeBiomass[cls];
@@ -134,13 +149,15 @@ namespace SE {
       return best;
     }
 
-    /** The best site where the species leads its tiles and a first city could feed itself. */
+    /** The best site where the species leads its tiles, has reached its thinking form and a first city could feed itself. */
     private bestCitySite(world: WorldState, params: ModelParams, species: Life): number {
+      const minStage = CivSystem.naturalMindStage(world, species);
       let best = -1;
       let bestScore = -Infinity;
       for (let i = 0; i < TILE_COUNT; i++) {
         // It has to be the tile's leading species, not merely present on it.
         if (world.dominantLife[i] !== species) continue;
+        if (world.stage(i, species) < minStage) continue;
         if (world.density(i, species) < CivSystem.SENTIENCE_DENSITY) continue;
         if (!cityGroundFits(world, i, species)) continue;
         if (cityCapacity(world, i, Tech.Stone, params) < SENTIENCE_SITE_CAPACITY) continue;

@@ -7,3 +7,5 @@ canvas.pixel-art { display: block; image-rendering: pixelated; }
 .fauna-pic canvas.is-icon { transform: scale(0.84); }
 .fauna-pic.is-unknown canvas { opacity: 0.5; }
 .fauna-pic.is-extinct canvas, .fauna-tile.is-extinct .fauna-pic canvas { filter: grayscale(0.85); opacity: 0.75; }
+/* Gone for good: as faded as the tree's cards, under the R.I.P. band (styles.css). */
+.fauna-pic.is-gone canvas, .fauna-tile .fauna-pic.is-gone canvas { filter: grayscale(1); opacity: 0.35; }

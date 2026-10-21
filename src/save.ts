@@ -1,7 +1,7 @@
 /* =============================================================================
  * SimEarth 2.0 — save files
  * -----------------------------------------------------------------------------
- * Format 7. Every per-tile field is quantised into a typed array and base64
+ * Format 10. Every per-tile field is quantised into a typed array and base64
  * encoded, the whole document is gzipped where the browser can, and classes,
  * plant groups and evolution steps are named by their stable string ids — so
  * the numeric order of an enum can change without breaking a save.
@@ -15,8 +15,13 @@
  * migrated, never discarded: see `migrateV4`, which also explains every
  * reinterpretation it makes. Versions 4 and 5 then pass through `migrateV5`
  * (eight sub-species instead of three, the sea's own oxygen and iron), and
- * every version before 7 through `migrateV6` (landscapes and soil), and every
- * version before 8 through `migrateV7` (the mountain type of the crust).
+ * every version before 7 through `migrateV6` (landscapes and soil), every
+ * version before 8 through `migrateV7` (the mountain type of the crust), and
+ * every version before 9 through `migrateV8` (the dinosaurs' era and its new
+ * sub-species). Format 10 adds the space project (`space`, spaceport.ts):
+ * a planet from before it starts without one, and a civilization that has
+ * already reached the Nanotech age unlocks it on its first tick, with the
+ * usual news, as if it had just got there.
  * ========================================================================== */
 
 namespace SE {
@@ -25,7 +30,7 @@ namespace SE {
   /** A file that is damaged or fails validation. */
   export class SaveCorrupt extends Error {}
 
-  export const SAVE_FORMAT = 8;
+  export const SAVE_FORMAT = 10;
   /** Where every earlier version wrote its single save. Read, never deleted. */
   export const LEGACY_SAVE_KEY = 'simearth2.save.v2';
   export const SLOT_COUNT = 3;
@@ -64,6 +69,15 @@ namespace SE {
   const V4_CARNIFERN = 15;
   /** Highest sub-species stage of formats 4 and 5, which had three per class. */
   const OLD_STAGE_MAX = 2;
+  /**
+   * Dinosaur stages of formats 6 to 8 on this version's ladder: Urdinosaurier,
+   * Plateosaurier and Sauropoden keep their place, the Stegosaurier move to 6.
+   * Ankylosaurier, Entenschnabel-, Horn- and Tyrannosaurier are biome
+   * specialists of the last stage now, so their populations stand at 7.
+   */
+  const V8_DINO_STAGE: readonly number[] = [0, 1, 2, 6, 7, 7, 7, 7];
+  /** The same for the lexicon, where only the same animal keeps its entry: the four that are no sub-species any more lose theirs. */
+  const V8_DINO_ENTRY: readonly (number | null)[] = [0, 1, 2, 6, null, null, null, null];
 
   /* ------------------------------------------------------------- base64 -- */
 
@@ -264,9 +278,17 @@ namespace SE {
         history: ctx.history ? ctx.history.toJSON() : null,
         fauna: ctx.fauna ? ctx.fauna.toJSON() : undefined,
         civ: civToJSON(w),
+        dinoEra: {
+          fate: w.dinoEra.fate, target: w.dinoEra.target, struck: w.dinoEra.struck,
+          refuges: w.dinoEra.refuges.map((r) => ({ i: r.tile, c: LIFE[r.c].id, s: r.stage, t: r.since })),
+        },
         coal: coalToJSON(w),
+        oil: oilToJSON(w),
+        termites: w.termiteMound,
         terraformed: terraformedToJSON(w),
+        fates: fatesToJSON(w),
         paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
+        space: spaceToJSON(w),
       };
     }
 
@@ -334,7 +356,7 @@ namespace SE {
       life: LifeSystem, flora: FloraSystem,
     ): { notes: string[] } {
       const version = raw.version;
-      if (version !== SAVE_FORMAT && version !== 7 && version !== 6 && version !== 5 && version !== 4) {
+      if (version !== SAVE_FORMAT && version !== 9 && version !== 8 && version !== 7 && version !== 6 && version !== 5 && version !== 4) {
         throw new SaveIncompatible(version === 2 || version === 3
           ? 'Der Spielstand stammt von der alten 128 × 64-Karte und kann nicht übernommen werden.'
           : 'Unbekanntes Spielstandformat.');
@@ -353,6 +375,13 @@ namespace SE {
       } else {
         offsets = SaveSystem.readV5(raw, stage, stageParams);
       }
+      // Required from format 10 on; before it there was no project (see the header).
+      if ((version as number) >= 10 && !readSpace(raw.space, stage.ticks, stage.space)) throw new SaveCorrupt('Feld „Raumfahrt“ ist ungültig');
+
+      // Older planets keep their old freedom through the migrations below, so
+      // the version-4 founders are not barred; migrateV8 then settles the era.
+      if ((version as number) < 9) stage.dinoEra.fate = 'exempt';
+      let fauna = raw.fauna;
 
       // Everything below derives from validated data and cannot fail on input.
       RiverSystem.rebuild(stage);
@@ -360,6 +389,7 @@ namespace SE {
       const redate = version === 4 || version === 5 ? SaveSystem.migrateV5(stage) : null;
       if ((version as number) < 7) SaveSystem.migrateV6(stage);
       if ((version as number) < 8) SaveSystem.migrateV7(stage);
+      if ((version as number) < 9) fauna = SaveSystem.migrateV8(stage, fauna, notes);
 
       // --- commit ---
       ctx.world.copyFrom(stage);
@@ -376,6 +406,10 @@ namespace SE {
       // (coalsave.ts). Before the landscapes are derived, which ask whether
       // the clubmosses still count as woody.
       restoreCoal(ctx.world, raw.coal);
+      restoreOil(ctx.world, raw.oil);
+      restoreTermites(ctx.world, raw.termites);
+      // What died out for good (optional field, stagefates.ts); without it the first tick finds out.
+      restoreFates(ctx.world, raw.fates);
       // Land the brush raised (optional field, terraform.ts): its summits keep their snow.
       restoreTerraformed(ctx.world, raw.terraformed);
       RiverSystem.rebuild(ctx.world);
@@ -384,7 +418,7 @@ namespace SE {
       // The lexicon is an optional field, so the format number stays: a save
       // without one (older, or damaged there) adopts what lives, silently.
       if (ctx.fauna) {
-        const dex = FaunaDex.fromJSON(raw.fauna);
+        const dex = FaunaDex.fromJSON(fauna);
         if (dex) ctx.fauna.copyFrom(dex);
         else {
           ctx.fauna.reset();
@@ -513,6 +547,7 @@ namespace SE {
 
       SaveSystem.readEvolution(raw.evolution, w);
       SaveSystem.readParams(raw.params, params);
+      if ((raw.version as number) >= 9) SaveSystem.readDinoEra(raw.dinoEra, w);
 
       const geo = (raw.geo ?? {}) as Record<string, unknown>;
       const offsets = Array.isArray(geo.offsets) ? (geo.offsets as unknown[]) : [];
@@ -520,6 +555,45 @@ namespace SE {
         const v = offsets[p];
         return typeof v === 'number' && Number.isFinite(v) ? clamp(v, -1, 1) : 0;
       });
+    }
+
+    /**
+     * The era's fate and the comet's target. Every fate but 'open' and
+     * 'exempt' follows the first birds, so any other pairing is a damaged file.
+     */
+    private static readDinoEra(raw: unknown, w: WorldState): void {
+      const src = (raw ?? {}) as Record<string, unknown>;
+      const fate = DINO_FATES.find((f) => f === src.fate);
+      if (!fate) throw new SaveCorrupt('Dinosaurier-Ära ist ungültig');
+      const target = int(src.target, -1, TILE_COUNT - 1, 'Einschlagstelle');
+      const birds = w.evo.isDeveloped('birds');
+      if (fate !== 'exempt' && (fate === 'open') === birds) throw new SaveCorrupt('Dinosaurier-Ära ist widersprüchlich');
+      w.dinoEra.fate = fate;
+      w.dinoEra.target = target;
+      // The strike's tick, which its winter runs from; files from before the winter have none.
+      const struck = src.struck === undefined ? -1 : int(src.struck, -1, Number.MAX_SAFE_INTEGER, 'Kometeneinschlag');
+      w.dinoEra.struck = fate === 'extinct' ? struck : -1;
+      // The populations the comet left sheltered; only a struck planet has them.
+      if (Array.isArray(src.refuges) && fate === 'extinct') {
+        for (const e of src.refuges.slice(0, LIFE_COUNT * SUBSPECIES_PER_CLASS)) {
+          const r = (e ?? {}) as Record<string, unknown>;
+          const c = LIFE_BY_ID.get(str(r.c));
+          if (c === undefined || c === Life.Dinosaur) throw new SaveCorrupt('Rückzugsbestand ist ungültig');
+          w.dinoEra.refuges.push({
+            tile: int(r.i, 0, TILE_COUNT - 1, 'Rückzugsbestand'), c,
+            stage: int(r.s, 0, SUBSPECIES_PER_CLASS - 1, 'Rückzugsbestand'),
+            since: int(r.t, 0, Number.MAX_SAFE_INTEGER, 'Rückzugsbestand'),
+          });
+        }
+      }
+      // Nothing the comet ended outlives it, whatever the file says (a planet struck before the
+      // other lost sub-species joined the rule loses them now); nor is it sheltered.
+      if (fate === 'extinct') {
+        endCometLost(w);
+        const kept = w.dinoEra.refuges.filter((r) => !cometLost(w, r.c, r.stage));
+        w.dinoEra.refuges.length = 0;
+        w.dinoEra.refuges.push(...kept);
+      }
     }
 
     private static readEvolution(raw: unknown, w: WorldState): void {
@@ -573,6 +647,8 @@ namespace SE {
             major: r.major === true,
             spontaneous: r.spontaneous === true || undefined,
             at: typeof r.at === 'number' && Number.isInteger(r.at) && r.at >= 0 && r.at < TILE_COUNT ? r.at : undefined,
+            rip: r.rip === true || undefined,
+            stage: typeof r.stage === 'number' && Number.isInteger(r.stage) && r.stage >= 0 && r.stage < SUBSPECIES_PER_CLASS ? r.stage : undefined,
           });
         }
       }
@@ -585,10 +661,11 @@ namespace SE {
         }
       }
       // Older saves lack the list: every lineage with an extinction entry
-      // counts as extinct; one alive again is cleared by the next check.
+      // counts as extinct; one alive again is cleared by the next check. An
+      // entry about one sub-species (`stage`) leaves its group alive.
       const extinct = Array.isArray(src.extinct)
         ? src.extinct
-        : evo.chronicle.filter((e) => e.kind === 'extinction').map((e) => e.nodeId);
+        : evo.chronicle.filter((e) => e.kind === 'extinction' && e.stage === undefined).map((e) => e.nodeId);
       for (const id of extinct) if (typeof id === 'string' && evo.isDeveloped(id)) evo.extinct.add(id);
     }
 
@@ -837,6 +914,69 @@ namespace SE {
     private static migrateV7(w: WorldState): void {
       classifyBelts(w);
       seedRegolith(w);
+    }
+
+    /* ------------------------------------------------------- version 8 -- */
+
+    /**
+     * Bring a planet from before format 9 into the dinosaurs' era. The
+     * dinosaur ladder was rebuilt (V8_DINO_STAGE, V8_DINO_ENTRY): populations
+     * move to their new stage; the lexicon keeps only entries of the same
+     * animal, the rest are dropped rather than renamed. A planet whose
+     * mammals already went past the marsupials, or that has whales or
+     * grazers, keeps the freedom it had (exempt); every other one follows the
+     * new rule, and one that already has birds is asked about the comet.
+     * Returns the lexicon field to load.
+     */
+    private static migrateV8(w: WorldState, fauna: unknown, notes: string[]): unknown {
+      const L = LIFE_COUNT;
+      let lateMammals = false;
+      for (let i = 0; i < TILE_COUNT; i++) {
+        const k = i * L + Life.Dinosaur;
+        w.lifeStage[k] = V8_DINO_STAGE[w.lifeStage[k]] ?? 0;
+        const m = i * L + Life.Mammal;
+        if (w.lifeDensity[m] > 0 && w.lifeStage[m] > MAMMAL_STAGE_BEFORE_COMET) lateMammals = true;
+      }
+
+      let out = fauna;
+      if (fauna && typeof fauna === 'object' && !Array.isArray(fauna)) {
+        const f = fauna as Record<string, unknown>;
+        const entries = f.entries && typeof f.entries === 'object' ? { ...(f.entries as Record<string, unknown>) } : null;
+        if (entries) {
+          const mammals = entries[LIFE[Life.Mammal].id];
+          if (Array.isArray(mammals) && mammals.slice(MAMMAL_STAGE_BEFORE_COMET + 1).some((e) => e)) lateMammals = true;
+          const dinos = entries[LIFE[Life.Dinosaur].id];
+          if (Array.isArray(dinos)) {
+            const row: unknown[] = new Array(SUBSPECIES_PER_CLASS).fill(null);
+            let dropped = 0;
+            dinos.slice(0, SUBSPECIES_PER_CLASS).forEach((e, s) => {
+              if (!e) return;
+              const to = V8_DINO_ENTRY[s];
+              if (to === null) dropped++;
+              else row[to] = e;
+            });
+            while (row.length > 0 && row[row.length - 1] === null) row.pop();
+            entries[LIFE[Life.Dinosaur].id] = row;
+            if (dropped > 0) {
+              notes.push('Die Dinosaurier-Reihe endet jetzt mit den Vogelvorläufern. Ankylosaurier, Entenschnabel-, Horn- und Tyrannosaurier sind keine eigenen Unterarten mehr, sondern erscheinen auf der Karte in passenden Lebensräumen; ihre Lexikoneinträge entfallen.');
+            }
+          }
+          out = { ...f, entries };
+        }
+      }
+
+      const evo = w.evo;
+      if (lateMammals || evo.isDeveloped('whales') || evo.isDeveloped('grazers')) {
+        w.dinoEra.fate = 'exempt';
+        notes.push('Auf diesem Planeten hatten sich Säugetiere schon über die Beuteltiere hinaus entwickelt: Die Regel zur Dinosaurier-Ära gilt hier nicht.');
+      } else if (evo.isDeveloped('birds')) {
+        w.dinoEra.fate = 'deciding';
+        notes.push('Die ersten Vögel sind schon entstanden: Entscheide über das Schicksal der Dinosaurier.');
+      } else {
+        w.dinoEra.fate = 'open';
+      }
+      w.dinoEra.target = -1;
+      return out;
     }
   }
 }

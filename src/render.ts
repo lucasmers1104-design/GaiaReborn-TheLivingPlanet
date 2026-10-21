@@ -226,8 +226,7 @@ namespace SE {
         return sampleRamp(RAIN_RAMP, world.moisture[i]);
 
       case MapMode.AirCurrents: {
-        const c = ClimateSystem.airCurrent(Math.floor(i / GRID_W));
-        return c.dx > 0 ? [200, 200, 120] : [110, 130, 180];
+        return windMapColor(world, i);
       }
 
       case MapMode.Biomes:
@@ -326,12 +325,25 @@ namespace SE {
     private readonly regions = new BiomeRegions();
     private readonly ambient = new AmbientLayer();
     private readonly waterMotion = new WaterMotion();
+    private readonly reefSwell = new ReefSwell();
+    private readonly clownfish = new ClownfishLayer();
     private readonly herds = new HerdLayer();
     private readonly whales = new WhaleLayer();
     private readonly dolphins = new DolphinLayer();
+    /** The oil platform and the desert derrick of the Industrial age (oillayer.ts). */
+    private readonly oilRigs = new OilRigLayer();
+    private readonly spaceport = new SpaceportLayer();
+    /** The termite mound on the savanna, once ants live there (termitelayer.ts). */
+    private readonly termites = new TermiteLayer();
+    private readonly salmon = new SalmonLayer();
+    private readonly storks = new StorkLayer();
     private readonly bubbles = new OxygenBubbles();
     private readonly cities = new CityLayer();
     private readonly settlers = new SettlerLayer();
+    /** Wandering groups on the move (bandlayer.ts); their camps are part of `cities`. */
+    private readonly bands = new BandLayer();
+    /** Flames over the fire places and smoke over the chimneys, every frame (cityfire.ts). */
+    private readonly cityFires = new CityFireLayer();
     /** Disasters: omens, eruptions, lava, smoke (docs/ereignisse-spec.md). */
     readonly fx = new EffectLayer();
     /** How far the game is between two ticks, 0..1 (app.ts); kept while paused. */
@@ -356,6 +368,8 @@ namespace SE {
     private readonly swap: HTMLCanvasElement;
     private readonly swapCtx: CanvasRenderingContext2D;
     private readonly land = PixelTerrain.shared();
+    /** Sea ice calving off the pack edge now and then (icecalving.ts). */
+    private readonly calving = new IceCalving(this.land);
 
     constructor(canvas: HTMLCanvasElement) {
       this.canvas = canvas;
@@ -372,6 +386,7 @@ namespace SE {
       this.swapCtx = sctx;
       if (TERRAIN_STYLE === 'pixel') this.land.whenReady(() => this.markDirty());
       this.cities.whenReady(() => this.markDirty());
+      this.calving.occupied = (i) => this.layers.life && this.herds.markerOn(i) !== null;
     }
 
     /** "Effekte reduzieren": disasters without shaking or flashes, and still water. */
@@ -382,9 +397,18 @@ namespace SE {
     set reduceEffects(on: boolean) {
       this.fx.reduce = on;
       this.waterMotion.still = on;
+      this.reefSwell.still = on;
+      this.clownfish.still = on;
       this.whales.still = on;
       this.dolphins.still = on;
+      this.oilRigs.still = on;
+      this.spaceport.still = on;
+      this.termites.still = on;
+      this.salmon.still = on;
+      this.storks.still = on;
       this.bubbles.still = on;
+      this.calving.still = on;
+      this.cityFires.still = on;
     }
 
     /** Make sure a creature of sub-species (c, stage) stands on the map; its tile, -1 if none lives. */
@@ -403,6 +427,15 @@ namespace SE {
       const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[stage]?.art;
       if (!art) return null;
       return { key: `${m.c}:${stage}:${special}:${+m.flip}`, draw: () => rasterArt(art, 32, CREATURE_LOOK, m.flip, true) };
+    }
+
+    /** The salmon run, clownfish or stork flight in sight on or by tile i, for the Examine tool. */
+    migrationOn(world: WorldState, i: number): Migration | null {
+      if (!this.layers.life) return null;
+      const now = performance.now();
+      if (this.salmon.activeOn(world, this.land, i, now)) return 'salmon';
+      if (this.clownfish.activeOn(world, i, now)) return 'clownfish';
+      return this.storks.activeNear(i, now) >= 0 ? 'storks' : null;
     }
 
     /** Force a full redraw on the next frame (after a tool changed the world). */
@@ -592,6 +625,15 @@ namespace SE {
       };
       if (this.pixelTerrain && !previewing) {
         this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, now);
+        this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, now);
+        // Over the swell: a crest paints the composed sea's colour and would cut holes into a fish.
+        if (this.layers.life) this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, now);
+        // Under the creatures, so an animal near a calving stays on top.
+        if (this.layers.oceans) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          this.calving.draw(ctx, cam, now);
+        }
+        if (this.layers.life) this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, now);
       }
       if (!fx) this.fx.show.flush(world);
       // Only a finished base counts: while the terrain is still composing it shows older ground.
@@ -602,10 +644,19 @@ namespace SE {
         if (!previewing) fx.drawShake(ctx, this.base, cam, now);
         fx.drawGround(ctx, world, cam, this.land, now, cities);
       }
+      // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
+      if (this.layers.cities) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.cities.drawCamps(ctx, cam, world, this.land.field, this.cols, this.rows);
+        this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, now);
+        this.oilRigs.draw(ctx, cam, world, now);
+        this.spaceport.draw(ctx, cam, world, now);
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (this.layers.life) {
         this.herds.update(world, now);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.termites.draw(ctx, cam, world, now);
         this.bubbles.draw(ctx, cam, this.cols, this.rows, world, now);
         this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
         this.dolphins.draw(ctx, cam, this.herds.markers, world, now);
@@ -613,10 +664,18 @@ namespace SE {
         this.herds.draw(ctx, this, world, now, this.tiles, this.regions,
           (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
       }
-      if (this.layers.cities) this.settlers.draw(ctx, this, world, now, dpr);
+      if (this.layers.cities) {
+        this.settlers.draw(ctx, this, world, now, dpr);
+        this.bands.draw(ctx, this, world, now, dpr);
+      }
       if (fx) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         fx.drawObjects(ctx, world, cam, this.land, cities);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      if (this.layers.life) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.storks.draw(ctx, cam, this.cols, this.rows, world, now);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       if (this.layers.cities) drawCityNames(ctx, this, world);
@@ -1011,6 +1070,8 @@ namespace SE {
       i: number, wx: number, wy: number, px: number, py: number, size: number,
     ): void {
       if (this.overlay === Overlay.Winds || this.overlay === Overlay.SeaFlow) {
+        const stride = Math.max(1, Math.ceil(22 / size));
+        if (wx % stride !== Math.floor(stride / 2) || wy % stride !== Math.floor(stride / 2)) return;
         if (this.overlay === Overlay.SeaFlow && !world.isWater(i)) return;
         const c = this.overlay === Overlay.Winds ? ClimateSystem.airCurrent(wy) : ClimateSystem.oceanCurrent(wx, wy);
         this.drawArrow(ctx, px, py, size, c.dx, c.dy);
@@ -1035,17 +1096,15 @@ namespace SE {
     ): void {
       const cx = px + size / 2;
       const cy = py + size / 2;
-      const len = size * 0.32;
+      const len = size * 0.32 / Math.hypot(dx, dy);
+      ctx.beginPath();
+      traceFlowArrow(ctx, cx - dx * len, cy - dy * len, cx + dx * len, cy + dy * len, size * 0.22);
+      ctx.strokeStyle = 'rgba(5,15,24,0.85)';
+      ctx.lineWidth = Math.max(3, size / 14 + 2);
+      ctx.stroke();
       ctx.strokeStyle = 'rgba(255,255,255,0.85)';
       ctx.lineWidth = Math.max(1, size / 14);
-      ctx.beginPath();
-      ctx.moveTo(cx - dx * len, cy - dy * len);
-      ctx.lineTo(cx + dx * len, cy + dy * len);
       ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(cx + dx * len, cy + dy * len, Math.max(1, size / 9), 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.fill();
     }
 
     /** The hovered tile, and the full footprint the armed tool will touch. */
@@ -1117,6 +1176,7 @@ namespace SE {
     private readonly buffer: HTMLCanvasElement;
     private readonly bufferCtx: CanvasRenderingContext2D;
     private readonly image: ImageData;
+    private readonly winds = new WindMapLayer();
 
     constructor(canvas: HTMLCanvasElement) {
       this.canvas = canvas;
@@ -1198,6 +1258,7 @@ namespace SE {
         this.renderGlobe(ctx, w, h);
       } else {
         ctx.drawImage(this.buffer, 0, 0, GRID_W, GRID_H, 0, 0, w, h);
+        if (this.mode === MapMode.AirCurrents) this.winds.drawFlat(ctx, w, h, this.pixelScale * (window.devicePixelRatio || 1));
         this.drawEditRect(ctx, w, h);
       }
     }
@@ -1221,6 +1282,7 @@ namespace SE {
       if (ctx) {
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(this.buffer, 0, 0, out.width, out.height);
+        if (this.mode === MapMode.AirCurrents) this.winds.drawFlat(ctx, out.width, out.height, scale / 2);
       }
       return out;
     }
@@ -1270,6 +1332,7 @@ namespace SE {
       }
       ctx.putImageData(out, 0, 0);
       this.decorateGlobe(ctx, w, h, radius, cx, cy);
+      if (this.mode === MapMode.AirCurrents) this.winds.drawGlobe(ctx, radius, cx, cy, this.spin, this.tilt);
       this.drawGlobeRect(ctx, radius, cx, cy);
     }
 

@@ -138,7 +138,7 @@ namespace SE {
             continue;
           }
           if (slot.gapSince < 0) slot.gapSince = world.ticks;
-          if (!slot.extinct && (groupGone || world.ticks - slot.gapSince >= FAUNA_EXTINCT_GRACE)) {
+          if (!slot.extinct && (groupGone || stageGone(world, c as Life, s) || world.ticks - slot.gapSince >= FAUNA_EXTINCT_GRACE)) {
             slot.extinct = true;
             changed = true;
           }

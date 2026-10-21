@@ -91,6 +91,15 @@ namespace SE {
   /** The real rule that produced (`known`) or will produce this sub-species. */
   export function faunaOriginRule(world: WorldState, params: ModelParams, dex: FaunaDex, c: Life, stage: number, known: boolean): string {
     const group = LIFE[c].name;
+    if (c === Life.Dinosaur && world.dinoEra.fate === 'extinct') {
+      return `${known ? 'Diese Unterart lebte auf deinem Planeten, bis der Komet einschlug.' : 'Diese Unterart ist auf deinem Planeten nie entstanden.'} Seit dem Einschlag sind alle Dinosaurier außer den Vögeln für immer ausgestorben.`;
+    }
+    if (cometLost(world, c, stage)) {
+      return `${known ? 'Diese Unterart lebte auf deinem Planeten, bis der Komet einschlug.' : 'Diese Unterart ist auf deinem Planeten nie entstanden.'} Wie auf der Erde am Ende der Kreidezeit ist sie mit dem Einschlag für immer ausgestorben. Die Gruppe „${group}“ lebt weiter; ihre Populationen überspringen diese Stufe.`;
+    }
+    if (stageEnded(world, c, stage)) {
+      return `Diese Unterart lebte auf deinem Planeten, bis sie durch „${subspeciesName(c, stageSuccessor(c, stage))}“ abgelöst wurde. Seitdem ist sie wie auf der Erde für immer ausgestorben; die Gruppe „${group}“ lebt weiter und überspringt diese Stufe.`;
+    }
     if (stage === 0) {
       if (!known) return `Entsteht, sobald die Gruppe „${group}“ im Evolutionsbaum entwickelt ist: Ihre ersten Populationen gehören zu dieser Unterart.`;
       const rec = world.evo.developed.get(LIFE[c].id);
@@ -102,6 +111,10 @@ namespace SE {
     }
     const prev = dex.isDiscovered(c, stage - 1) ? `„${subspeciesName(c, stage - 1)}“` : `Unterart ${stage}`;
     const mutation = fmt.int(mul(params.bio.mutationRate) * 100);
+    // A rule of this game, not of nature (dinoera.ts): say so before anything else.
+    if (stage > stageCap(world, c)) {
+      return `${mammalCapNote(world)} ${world.dinoEra.fate === 'kept' ? 'Diese Unterart entsteht hier deshalb nicht.' : 'Vorher entsteht diese Unterart nicht.'}`;
+    }
     return (known
       ? `Auf deinem Planeten stieg eine Population von ${prev} zu dieser Unterart auf, als sie ihr Feld fast vollständig besiedelt hatte. `
       : `Eine Population von ${prev} steigt zu dieser Unterart auf, sobald sie ihr Feld fast vollständig besiedelt hat. `) +

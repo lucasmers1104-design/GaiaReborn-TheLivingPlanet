@@ -740,6 +740,12 @@ namespace SE {
 
   /** Largest share of a class that may stand at or above each stage. */
   export const STAGE_MAX_SHARE: readonly number[] = [1.0, 0.8, 0.62, 0.48, 0.36, 0.27, 0.2, 0.14];
+  /** Highest mammal stage (the marsupials) until the comet has ended the dinosaurs' era (dinoera.ts). */
+  export const MAMMAL_STAGE_BEFORE_COMET = 3;
+  /** Tiles a successor and the sub-species after it must hold before the one it succeeds dies out (stagefates.ts); the tree's ECO_MIN_TILES. */
+  export const STAGE_SUCCESSOR_TILES = 24;
+  /** The hominids: the only mammals that wake up to intelligence on their own (civ.ts). */
+  export const HOMINID_STAGE = 7;
 
   /** True for the marine classes. */
   export function isSeaLife(c: Life): boolean {
@@ -792,6 +798,12 @@ namespace SE {
   export const CITY_METRO_POP = 0.7;
   /** A city stands for its surroundings: weight of its people in energy use and breath. */
   export const CITY_WEIGHT = 3;
+  /**
+   * Millions of people a full city (cityPop 1) stands for, per tech level.
+   * With the usual 40–60 cities this lands near Earth's head count of each age:
+   * ~5 Mio. in the Stone Age, ~250 Mio. in the Iron Age, ~8000 Mio. today.
+   */
+  export const CITY_PEOPLE_MIO: readonly number[] = [0, 0.2, 2, 8, 30, 60, 150, 200];
   /** Settler groups under way at once: on the planet, and per tribe. */
   export const SETTLERS_MAX = 5;
   export const SETTLERS_PER_TRIBE = 2;
@@ -873,7 +885,7 @@ namespace SE {
   export const CITY_TEMP_SPAN = 34;
   /** Food factor of a tile with a river. */
   export const CITY_RIVER_YIELD = 1.5;
-  /** Stone-age capacity a site needs for the first city of a newly sentient species. */
+  /** Stone-age capacity a site needs for a species to wake up there, and for its bands to settle before their demands relax. */
   export const SENTIENCE_SITE_CAPACITY = 0.3;
   /** Food of a water tile in the surroundings (fishing), per tech level. */
   export const CITY_FISHING: readonly number[] = [0.15, 0.15, 0.15, 0.3, 0.35, 0.4, 0.4, 0.4];
@@ -961,6 +973,34 @@ namespace SE {
   export const EPIDEMIC_MARK_TTL = 12;
   /** Ticks between two messages of the same kind. */
   export const CIV_NEWS_GAP = 30;
+  /** Wandering bands before the first villages (src/bands.ts): how many set out, within this many steps of the first site. */
+  export const BAND_COUNT = 3;
+  export const BAND_SPAWN_RANGE = 6;
+  /** Fewest tiles between a band and another band's camp or goal. */
+  export const BAND_SPACING = 3;
+  /** People a band carries; the village it founds starts with them. */
+  export const BAND_POP = 0.12;
+  /** Fewest and most ticks a camp stands, and steps over land to the next camp. */
+  export const BAND_CAMP_TICKS: readonly [number, number] = [12, 20];
+  export const BAND_LEG: readonly [number, number] = [4, 8];
+  /** Camps a band remembers; a site near one of them, or near a city, scores this much less. */
+  export const BAND_CAMPS_KEPT = 4;
+  export const BAND_REVISIT = 0.4;
+  export const BAND_CITY_AVOID = 0.5;
+  /** Most random score added to a camp site, so bands roam rather than climb to the one best site. */
+  export const BAND_JITTER = 0.15;
+  /** Score added to a site the band may settle at. */
+  export const BAND_SETTLE_BONUS = 1;
+  /**
+   * Ticks a band wanders before it settles at a site with water and
+   * SENTIENCE_SITE_CAPACITY; from BAND_RELAX_AFTER any allowed site with
+   * BAND_RELAX_CAPACITY will do, from BAND_SETTLE_MAX any allowed site, and
+   * with none in reach it joins the nearest village.
+   */
+  export const BAND_SETTLE_AFTER = 90;
+  export const BAND_RELAX_AFTER = 160;
+  export const BAND_RELAX_CAPACITY = 0.15;
+  export const BAND_SETTLE_MAX = 240;
 
   /* ------------------------------------------- giant clubmosses and coal -- */
   // src/lycopsids.ts and src/coal.ts.
@@ -977,6 +1017,8 @@ namespace SE {
   export const CLUBMOSS_REFUGE_TILES = 60;
   /** Share of the land conifers and broadleaf trees must lead together before the giant clubmosses are gone. */
   export const LYCOPSID_END_FOREST_SHARE = 0.1;
+  /** Share of the land their rivals must lead before the early vascular plants or the first trees die out (lycopsids.ts). */
+  export const FLORA_GONE_SHARE = 0.1;
   /** Stature of the small, herbaceous clubmosses that remain. */
   export const CLUBMOSS_HERB_STATURE = 0.2;
 
@@ -996,6 +1038,48 @@ namespace SE {
   /** Reserve built per year with giant clubmoss swamps, and after them: estimates for saves without a coal field. */
   export const COAL_EST_LYCOPSID_YEAR = 6e-5;
   export const COAL_EST_LATER_YEAR = 3.5e-5;
+
+  /* ------------------------------------------------------------------ oil -- */
+  // src/oil.ts.
+
+  /** Kerogen buried per unit of sea-animal density (summed over tiles) and year, Gt. */
+  export const OIL_RATE = 6.5e-10;
+  /** Years in which half the buried kerogen has turned into oil (the oil window lies kilometres down). */
+  export const OIL_HALF_LIFE = 2e7;
+  /** Share of a city's fossil energy that is oil, per tech level; with COAL_SHARE the rest is gas. */
+  export const OIL_SHARE: readonly number[] = [0, 0, 0, 0, 0.1, 0.45, 0.45, 0.45];
+  /** Oil in Gt one unit of fossil energy demand burns per year: COAL_PER_DEMAND_YEAR × 24/42 MJ/kg. */
+  export const OIL_PER_DEMAND_YEAR = 0.34;
+  /** Reserve built per year since the first sea animals: estimate for saves without an oil field. */
+  export const OIL_EST_YEAR = 3e-6;
+
+  /* -------------------------------------------------------- space project -- */
+  // src/spaceport.ts: once a city reaches the Nanotech age, a launch site in the desert builds a rocket.
+
+  /**
+   * Ticks the rocket takes at speed factor 1. Measured with tools/space-probe.js:
+   * a civilization at full pace needs about 720 ticks, 4.8 minutes at "Mittel" (400 ms per tick);
+   * a lone small Nanotech city up to 1125 ticks, 7.5 minutes (docs/raumfahrt-2026-10/bericht.md).
+   */
+  export const SPACE_BUILD_TICKS = 900;
+  /** Speed factor with the fewest and with the most Nanotech people: capped, so a big civilization is only a little faster. */
+  export const SPACE_RATE_MIN = 0.8;
+  export const SPACE_RATE_MAX = 1.25;
+  /** People of the inhabited Nanotech cities (summed cityPop) at which the speed factor reaches SPACE_RATE_MAX. */
+  export const SPACE_POP_FULL = 2.5;
+  /** Progress at which each phase begins: pad, lower stage, full rocket; at 1 the rocket stands ready. */
+  export const SPACE_PHASE_AT: readonly number[] = [0, 0.3, 0.65, 1];
+  export const SPACE_PHASE_NAMES: readonly string[] = [
+    'Fundament und Startplatz', 'Untere Raketenstufe mit Baugerüst', 'Vollständige Rakete mit Startturm', 'Startbereite Rakete',
+  ];
+  /** Closest any city may stand to the pad, tiles: the pad covers the tiles beside it and the rocket rises three tiles. */
+  export const SPACE_CITY_GAP = 3;
+  /** Tiles above the pad tile the rocket and tower rise into; no city may stand there. */
+  export const SPACE_RISE = 3;
+  /** Steepest elevation step to a neighbour the pad and its apron may be built on. */
+  export const SPACE_SLOPE_MAX = 0.08;
+  /** Ticks until a search that found no site is tried again. */
+  export const SPACE_SITE_RETRY = 20;
 
   /* ---------------------------------------------------------------- cacti -- */
   // src/cacti.ts: the flowering plants' desert form.
@@ -1055,21 +1139,56 @@ namespace SE {
   /** Coral patches per reef tile, and the share of them grazing fish grind to sand at full fish level. */
   export const REEF_PATCHES = 3;
   export const REEF_FISH_SAND = 0.3;
+  /**
+   * Reefs spread from the first one (its chronicle entry): a reef starts up to REEF_SPREAD_YEARS
+   * later, 60 % by its distance from the first, 40 % by chance. Then it takes in a ring of tiles
+   * every REEF_RING_YEARS, and each tile shows one more coral patch every REEF_PATCH_YEARS.
+   * At 125 000 years a tick (Ordovician) the first reefs fill the warm coasts in about 250 ticks.
+   */
+  export const REEF_SPREAD_YEARS = 20e6;
+  export const REEF_RING_YEARS = 3e6;
+  export const REEF_PATCH_YEARS = 1.5e6;
+  /** Share of a reef's outermost ring it takes in: a ragged edge, not a disc. */
+  export const REEF_EDGE_SHARE = 0.65;
   /** Land tiles up to this many tiles from a grazed reef carry its white beach. */
   export const BEACH_REACH = 2;
-  /** Share of that coast with a beach; small islands (≤ BEACH_ISLAND_TILES) get an almost closed ring. */
-  export const BEACH_SHARE = 0.8;
+  /**
+   * Beaches lie in stretches: soft noise with a lattice of BEACH_STRETCH tiles. White beaches take
+   * this share of the coast by the reef's grazing fish level 1..3; small islands (≤ BEACH_ISLAND_TILES)
+   * an almost closed ring.
+   */
+  export const BEACH_STRETCH = 4;
+  export const BEACH_SHARE: readonly number[] = [0, 0.5, 0.7, 0.85];
   export const BEACH_ISLAND_TILES = 6;
   export const BEACH_ISLAND_SHARE = 0.95;
-  /** Shell beaches: share of warm coast tiles beside molluscs (density level ≥ SHELL_MIN_LEVEL). */
-  export const SHELL_BEACH_SHARE = 0.12;
-  export const SHELL_MIN_LEVEL = 1;
+  /**
+   * Shell beaches from molluscs and shelled arthropods in water from SHELL_MIN_TEMP: share by their
+   * level 1..3, counted like grazing fish (from REEF_GRAZER_MIN, then one more per REEF_DENSITY_STEP).
+   */
+  export const SHELL_BEACH_SHARE: readonly number[] = [0, 0.3, 0.45, 0.6];
+  export const SHELL_MIN_TEMP = 12;
+  /**
+   * Palm islands: once broadleaf trees exist, warm islands (land from PALM_ISLAND_TEMP °C, at most
+   * PALM_ISLAND_TILES tiles, e.g. a hotspot chain) get a beach ring on PALM_ISLAND_SHARE of their
+   * coast, with palms on all but PALM_ISLAND_ONE of it.
+   */
+  export const PALM_ISLAND_TILES = 12;
+  export const PALM_ISLAND_TEMP = 20;
+  export const PALM_ISLAND_SHARE = 0.9;
+  export const PALM_ISLAND_ONE = 0.25;
+  /**
+   * Sand cays: the fish's sand piles up into small islets on grown reef tiles at least
+   * CAY_OFFSHORE tiles out, from grazing fish level CAY_FISH, on CAY_SHARE of them.
+   */
+  export const CAY_OFFSHORE = 2;
+  export const CAY_FISH = 2;
+  export const CAY_SHARE = 0.3;
   /**
    * Palms show only from this many years before the present: the oldest palm
    * fossils, Sabalites from the Late Cretaceous, are about 86–84 million years old.
    */
   export const PALM_FIRST_YEARS_AGO = 86e6;
-  /** Palms per beach tile by hash: none below PALM_ONE, one below PALM_PAIR, else a pair (60 / 30 / 10 %). */
+  /** Palms per beach tile by hash: none below PALM_ONE (PALM_ISLAND_ONE on a palm island), one below PALM_PAIR, else a pair (60 / 30 / 10 %). */
   export const PALM_ONE = 0.6;
   export const PALM_PAIR = 0.9;
 
@@ -1236,10 +1355,14 @@ namespace SE {
   /** A tile burns this many ticks, more with more fuel. */
   export const FIRE_BURN_MIN = 2;
   export const FIRE_BURN_MAX = 4;
+  /** Wall-clock ms per tick at "Sehr langsam"; while a fire burns, the game runs this slowly whatever speed is set (app.ts). */
+  export const SLOWEST_TICK_MS = 2500;
+  /** Length of assets/audio/sfx/forest-fire.mp3 in s, measured from its frames: a fire burns no longer than its sound plays. */
+  export const FIRE_SOUND_S = 15.2;
   /** Caps per fire: tiles from the origin (Chebyshev), tiles burnt, ticks. */
   export const FIRE_REACH = 10;
   export const FIRE_MAX_TILES = 90;
-  export const FIRE_MAX_TICKS = 40;
+  export const FIRE_MAX_TICKS = Math.floor((FIRE_SOUND_S * 1000) / SLOWEST_TICK_MS);
   /** A burnt-out tile keeps this share of its plant cover; life on it loses FIRE_LIFE_LOSS. */
   export const FIRE_KEEP = 0.2;
   export const FIRE_LIFE_LOSS = 0.7;
@@ -1249,6 +1372,24 @@ namespace SE {
   export const FIRE_CO2 = 0.8;
   export const FIRE_DUST_TILE = 0.0003;
   export const FIRE_DUST_MAX = 0.02;
+  /** Air O₂ (%) a burning tile uses up per tick and unit of fuel, × fireOxygen: the bigger and longer a fire, the more it costs. */
+  export const FIRE_O2 = 0.006;
+  /**
+   * The fire window (hazardlightning.ts, fireOxygen): above today's air O₂ every
+   * FIRE_O2_SPAN points more make plants catch and fire spread once more as
+   * readily; below it nothing changes.
+   */
+  export const FIRE_O2_SPAN = 6;
+  /**
+   * Chance per tick that lightning finds dry plants somewhere, at today's O₂;
+   * × fireOxygen^FIRE_LIGHTNING_POWER above it. A greedy planet levels off
+   * near 25.7 % O₂ without fires: a lightning fire every ~440 ticks there,
+   * every ~70 at 35 %.
+   */
+  export const FIRE_LIGHTNING_CHANCE = 0.0004;
+  export const FIRE_LIGHTNING_POWER = 3;
+  /** Tiles a strike tries; the one with the most dry fuel burns. */
+  export const FIRE_LIGHTNING_TRIES = 24;
 
   /* Meteor and atomic strike (hazardimpact.ts). */
   /** A blast ring is the rounded distance, wobbled by up to ± half this per tile, so scars come out round and ragged. */
@@ -1270,6 +1411,56 @@ namespace SE {
   /** Global atmosphere per impact, unchanged from the old brush (K6). */
   export const METEOR_DUST = 0.18;
   export const METEOR_CO2 = 40;
+  /**
+   * The comet that ends the dinosaurs' era (comet.ts) strikes as a meteor of
+   * this strength: crater and blast rings twice the diameter, so its crater
+   * covers four tiles where a meteor's covers one.
+   */
+  export const COMET_STRENGTH = 2;
+  /** Share of every other group's stock the comet takes worldwide, ± a hashed COMET_LOSS_JITTER per tile. */
+  export const COMET_LOSS = 0.75;
+  export const COMET_LOSS_JITTER = 0.1;
+  /** Within COMET_NEAR tiles of the crater the loss rises towards COMET_NEAR_LOSS at its rim. */
+  export const COMET_NEAR = 14;
+  export const COMET_NEAR_LOSS = 0.98;
+  /**
+   * Refuges: every animal group but the dinosaurs keeps one sheltered
+   * population per sub-species it had, on the tile beyond COMET_NEAR with the
+   * most to eat after the strike. It cannot fall below COMET_REFUGE_DENSITY
+   * (five times the density below which a population dies) for at least
+   * COMET_REFUGE_MIN_TICKS (the strike's winter), then until the tile leaves
+   * it room to grow again (COMET_REFUGE_ROOM, crowding included), and for
+   * COMET_REFUGE_TICKS at most: a shelter, not immortality.
+   * A plant group that would vanish keeps COMET_REFUGE_COVER on its best tile.
+   */
+  export const COMET_REFUGE_DENSITY = 0.1;
+  export const COMET_REFUGE_ROOM = 0.2;
+  export const COMET_REFUGE_MIN_TICKS = 60;
+  export const COMET_REFUGE_TICKS = 600;
+  export const COMET_REFUGE_COVER = 0.2;
+  /**
+   * The strike's winter (cometwinter.ts): ice spreads from both poles over
+   * COMET_ICE_GROW ticks until it holds COMET_ICE_SHARE of the surface, stays
+   * COMET_ICE_HOLD ticks and draws back over COMET_ICE_MELT. Plants under it
+   * keep their groups at COMET_ICE_COVER and grow again once it is gone. Its
+   * edge follows the parallels, wobbled by up to ±COMET_ICE_WOBBLE of the
+   * pole-to-equator span in cells of COMET_ICE_CELL tiles; highlands freeze
+   * first (COMET_ICE_HEIGHT per unit of elevation). Exaggerated for the eye:
+   * Earth did not freeze over after Chicxulub.
+   */
+  export const COMET_ICE_SHARE = 2 / 3;
+  export const COMET_ICE_GROW = 10;
+  export const COMET_ICE_HOLD = 25;
+  export const COMET_ICE_MELT = 60;
+  export const COMET_ICE_COVER = 0.02;
+  export const COMET_ICE_WOBBLE = 0.1;
+  export const COMET_ICE_CELL = 16;
+  export const COMET_ICE_HEIGHT = 0.3;
+  /** Real-time show: the comet's omen and flight before it strikes, and the impact after (ms). */
+  export const COMET_OMEN_MS = 3200;
+  export const COMET_MAIN_MS = 4500;
+  /** The camera's flight to the comet lasts at most ~0.9 s; taken over by the player, the show starts after this anyway. */
+  export const COMET_FLY_FALLBACK_MS = 1400;
   /** Atomic strike, ring 2: life lost, plant cover kept, ticks its fuel burns (it does not spread). */
   export const ATOMIC_RING2_KILL = 0.6;
   export const ATOMIC_RING2_KEEP = 0.2;
@@ -1539,10 +1730,22 @@ namespace SE {
 
   /* -------------------------------------------------------------- economy -- */
 
-  export const OMEGA_MAX = 5000;
+  /**
+   * Ω income tiers (energy.ts): `regen` per tick, so a paused planet earns nothing, up to `max`.
+   * Reached by developing the `unlock` step, or by the first city ('city').
+   * The first tier is the income the early game was balanced on.
+   */
+  export const OMEGA_STAGES: readonly { readonly name: string; readonly unlock: string; readonly regen: number; readonly max: number }[] = [
+    { name: 'Junger Planet', unlock: '', regen: 1.6, max: 5000 },
+    { name: 'Komplexe Zellen', unlock: 'eukaryotes', regen: 2.2, max: 6500 },
+    { name: 'Leben an Land', unlock: 'landPlants', regen: 3.0, max: 8000 },
+    { name: 'Vierfüßer', unlock: 'amphibians', regen: 4.0, max: 10000 },
+    { name: 'Säugetiere', unlock: 'mammals', regen: 5.0, max: 12000 },
+    { name: 'Zivilisation', unlock: 'city', regen: 6.5, max: 15000 },
+  ];
+  /** The highest tier's cap: no planet ever holds more Ω. */
+  export const OMEGA_MAX = 15000;
   export const OMEGA_START = 1500;
-  /** Ω regenerated per tick, so a paused planet earns nothing. */
-  export const OMEGA_REGEN = 1.6;
 
   /** Evolution points never pile up beyond this. */
   export const EP_MAX = 999;

@@ -18,6 +18,7 @@ Komplexe Zellen können ab **2 % der heutigen Sauerstoffsättigung im Meer** ent
 - Die Darstellung bei etwa 2,7 Milliarden Jahren ist eine grobe Einordnung der frühen Sauerstoffproduktion, kein gesichertes Entstehungsdatum der Cyanobakterien. Kalender und freie Entwicklung auf einem anderen Planeten dürfen voneinander abweichen.
 - Alle 136 Einträge der 17 Gruppen bleiben an ihrem bisherigen Platz. Cyanobakterien behalten Grafik, Porträt und Lexikoneintrag. Die erste Entdeckung fällt mit dem Beginn ihrer Produktion zusammen; die Produktion hängt danach von der lebenden Biomasse ab, nicht von der gespeicherten Entdeckung.
 - Speicherformat und Unterarten-Indizes bleiben unverändert. Alte Spielstände behalten ihre Populationen und Entdeckungen; die neuen Produktionsregeln gelten für die weitere Entwicklung.
+- Nachtrag 19. 10. 2026: Die Dinosaurier-Reihe wurde neu geordnet und endet mit den Vogelvorläufern (Evolutionsbericht, Abschnitt „Dinosaurier-Ära und Komet“). Speicherformat 9 verschiebt ihre Unterarten ausdrücklich: Stegosaurier von Unterart 4 auf 7, die Kreide-Formen (Ankylosaurier, Entenschnabel-, Horn-, Tyrannosaurier) auf Unterart 8, wo sie als Spezialformen erscheinen. Ihre Lexikoneinträge entfallen, statt einer anderen Art zugeordnet zu werden.
 
 ## Wissenschaftlicher Bezug
 

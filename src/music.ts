@@ -194,21 +194,43 @@ namespace SE {
     'cracking-earthquake': 1,
     'tornado': 1,
     'thunder': 0.8,
+    // Its level at full zoom; firesound.ts fades it out with the zoom.
+    'forest-fire': 0.5,
     // Mastered loud (the bang peaks near full scale), so it sits lower.
     'siren-and-nuke': 0.9,
+    // Calving sea ice; its level is ICE_ANIM.soundVolume (landice.ts).
+    'the-sound-of-an-iceberg-cracking': 1,
+    // The R.I.P. stamp (ripstamp.ts): both files peak near full scale; set below the disasters, not yet tuned by ear.
+    'swipe': 0.6,
+    'hit-sfx': 0.8,
   };
 
   /** Where the bang sits in siren-and-nuke.mp3, after the siren: measured from the file's loudness. */
   export const NUKE_BOOM_MS = 12150;
 
-  /** One-shot effect sound, `gain` 0..1 on top of its level; false when it stays silent (sound off, tab hidden). */
-  export function playSfx(name: string, gain = 1): boolean {
-    const volume = (SFX_LEVELS[name] ?? 0.5) * SFX.volume() * gain;
-    if (volume <= 0 || document.hidden) return false;
+  /** The element volume of effect `name` at `gain` 0..1, for sounds that follow the view while they play. */
+  export function sfxVolume(name: string, gain: number): number {
+    return (SFX_LEVELS[name] ?? 0.5) * SFX.volume() * gain;
+  }
+
+  /**
+   * One-shot effect sound, `gain` 0..1 on top of its level, played `rate`
+   * times as fast (pitch along) from `offset` s into the file; null when it
+   * stays silent (sound off, tab hidden).
+   */
+  export function playSfx(name: string, gain = 1, rate = 1, offset = 0): HTMLAudioElement | null {
+    const volume = sfxVolume(name, gain);
+    if (volume <= 0 || document.hidden) return null;
     const audio = new Audio(`assets/audio/sfx/${name}.mp3`);
     audio.volume = Math.min(1, volume);
+    if (rate !== 1) {
+      audio.preservesPitch = false;
+      audio.playbackRate = rate;
+    }
+    // Before the file has loaded this sets where playback starts.
+    if (offset > 0) audio.currentTime = offset;
     audio.play().catch(() => undefined);
-    return true;
+    return audio;
   }
 
   /** The click files are normalized to a 0.7 peak; this trims them against the music. */

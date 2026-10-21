@@ -2,8 +2,8 @@
   <title>Gliederfüßer des Meeres</title>
   <defs>
     <linearGradient id="arthropods-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3d2412"/>
-      <stop offset="1" stop-color="#8a4a1c"/>
+      <stop offset="0" stop-color="#0f3b3f"/>
+      <stop offset="1" stop-color="#1f6f6b"/>
     </linearGradient>
     <clipPath id="arthropods-c">
       <path d="M32 8C41 8 46 13 46 20L48 27.5L43.5 23C43.5 32 41 41 32 46C23 41 20.5 32 20.5 23L16 27.5L18 20C18 13 23 8 32 8Z"/>

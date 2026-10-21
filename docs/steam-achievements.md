@@ -1,6 +1,6 @@
 # Steam-Achievements
 
-Stand: 2026-10-18 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob sie hier ein Achievement verdienen.
+Stand: 2026-10-20 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob sie hier ein Achievement verdienen.
 
 **Steamworks-Hinweise:** Jedes Achievement braucht einen API-Namen (Spalte „API“), Anzeigename, Beschreibung und **zwei Icons** (256 × 256 px, JPG/PNG): freigeschaltet (farbig) und gesperrt (Graustufen-Version desselben Bildes). „Versteckt“ = Beschreibung erst nach dem Freischalten sichtbar.
 
@@ -22,6 +22,7 @@ Stand: 2026-10-18 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 9 | `ACH_EPOCH_TODAY` | Vertrautes Terrain | Eine Partie in der Epoche „Heute“ starten | Die heutigen Kontinente als Pixel-Globus |
 | 10 | `ACH_FILM` | Logenplatz der Evolution | Einen Evolutionsfilm komplett ansehen | Filmrolle mit DNA-Strang |
 | 39 | `ACH_GLOBETROTTER` | Weltreisender | In der Übersichtskarte (Globus-Ansicht) per Klick ans andere Ende der Welt springen | Globus mit gestrichelter Flugbahn und Ortsmarke |
+| 45 | `ACH_GAIA_COUGH` | Dicke Luft | Gaia hustet zum ersten Mal (Luft so verschmutzt, dass Smog um sie kreist: `gaiaFactors().clean < 0.5`, `src/gaia.ts`) | Pixel-Planetengesicht mit zugekniffenen Augen hustet ein graues Smogwölkchen aus |
 
 ## Mittel (mehrere Stunden, ein Ziel verfolgen)
 
@@ -46,6 +47,15 @@ Stand: 2026-10-18 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 27 | `ACH_MONOLITH` *(versteckt)* | Der Monolith | Eine Art durch den Monolithen erwecken | Schwarzer Monolith, Affe davor |
 | 38 | `ACH_DOLPHIN_POD` | Delfinschule | Eine springende Delfinschule im tropischen Meer auf der Karte sehen (Zoom ≥ 16 px) | Drei Delfine im Bogen über türkisem Pixel-Meer |
 | 40 | `ACH_GREAT_OXIDATION` | Der erste Atemzug | Die Große Sauerstoffkatastrophe erreichen | Sauerstoffperlen steigen aus türkisem Küstenwasser in einen hellen Himmel |
+| 41 | `ACH_ICE_CALVING` | Kalbung beobachtet | Eine Eisscholle bricht im Bild von der Packeiskante ab (Zoom ≥ 16 px) | Scholle bricht von weißer Packeiskante und stürzt mit Gischt ins dunkelblaue Meer |
+| 42 | `ACH_SALMON_RUN` | Gegen den Strom | Eine Lachswanderung in einem Fluss mit „Untersuchen“ (Lupe) beobachten (Zoom ≥ 16 px) | Silber-roter Lachs springt im Bogen über eine schäumende Fluss-Stromschnelle, Lupen-Glanz |
+| 43 | `ACH_STORK_MIGRATION` | Zug der Störche | Einen ziehenden Storchenschwarm auf der Karte mit „Untersuchen“ (Lupe) beobachten (Zoom ≥ 16 px) | Weiß-schwarze Störche mit roten Schnäbeln fliegen in V-Formation über grüne Flüsse und Auen |
+| 44 | `ACH_FIRE_WINDOW` | Feuerfenster | Ein Blitz löst einen Flächenbrand aus, während die Luft über 30 % Sauerstoff enthält (Blitzbrand, `cause = 'natural'`, `src/hazardlightning.ts`) | Blitz schlägt in einen Wald ein, Flammen lodern hoch, darüber steigen Sauerstoffperlen auf und verglühen |
+| 47 | `ACH_PALM_ISLES` | Palmeninseln | Die ersten Kokospalmen wachsen auf einer warmen Insel oder einer Sandinsel im Riff (Chronik-Eintrag „Palmeninseln“, Schlüssel `reefs:palms`, `src/reefs.ts`; braucht Laubbäume und Palmen ab 86 Mio. J.) | Kleine weiße Sandinsel mit zwei Kokospalmen, die sich über eine türkise Lagune neigen, Korallen ringsum |
+| 48 | `ACH_OIL_PUMPED` | Schwarzes Gold | Die Zivilisation fördert das erste Öl: Mit dem Industriezeitalter entstehen einmalig eine Bohrinsel vor der Küste und ein Förderturm in der Wüste (`world.oilMined > 0`, `src/oil.ts`) | Pferdekopfpumpe und Bohrturm auf Wüstensand, schwarzer Öltropfen glänzt im Vordergrund |
+| 50 | `ACH_TERMITE_MOUND` | Baumeister der Savanne | Den Termitenhügel in der Savanne mit „Untersuchen“ (Lupe) entdecken (Chronik-Eintrag „Termitenhügel entdeckt“, Schlüssel `sight:termites`, `src/termites.ts`; der Hügel entsteht, sobald Ameisen in einer Savanne leben) | Rot-oranger Lehmhügel mit Schloten in goldener Savanne, Termitenspur am Fuß, Lupen-Glanz |
+| 51 | `ACH_CLOWNFISH` | Nemo gefunden | Clownfische, die aus einer Koralle schwimmen, mit „Untersuchen“ (Lupe) entdecken (Chronik-Eintrag „Clownfische entdeckt“, Schlüssel `sight:clownfish`, `src/migrations.ts`; auf jedem Riff, zu jeder Zeit, Zoom ≥ 24 Bildschirmpixel pro Feld) | Zwei orange-weiß gestreifte Clownfische schlüpfen aus einer violetten Seeanemone zwischen Korallen in türkisem Riffwasser, Lupen-Glanz |
+| 52 | `ACH_NEVER_AGAIN` *(versteckt)* | Nie wieder | Nach dem ersten Atomschlag einer Zivilisation ächten alle Völker die Atombombe (Chronik-Eintrag „Alle Völker ächten die Atombombe“, `world.civ.atomBan`, `src/conflict.ts`; meist beendet die Bombe einen Krieg eines Volkes im Atomzeitalter gegen eines ohne; ein vom Spieler ausgelöster Atomschlag zählt nicht) | Zerbrochene Atombombe in zwei Hälften, durch den Spalt wächst ein Olivenzweig, dahinter verblasst ein Atompilz |
 
 ## Schwer (Langzeitziele, Meisterschaft)
 
@@ -61,6 +71,8 @@ Stand: 2026-10-18 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 35 | `ACH_OCTOPUS` | Tintenfisch-Imperium | Weichtiere werden die intelligente Art | Krake mit Krone |
 | 36 | `ACH_DINO_CIV` | Hätte der Meteor nur… | Dinosaurier gründen eine Zivilisation | Dino mit Steinwerkzeug |
 | 37 | `ACH_PHOENIX` | Phönix | Nach einem Meteoriten, der über die Hälfte des Lebens auslöscht, erholt sich die Biomasse wieder auf den alten Wert | Phönix aus einem Krater |
+| 49 | `ACH_NEW_WORLDS` | Start in neue Welten | Die Rakete des Raumfahrtprojekts mit dem roten Knopf starten (`world.space.launched >= 0`, `src/spaceport.ts`) | Weiße Rakete mit türkisem Ring steigt auf einer gleißenden Abgassäule aus einer Wüstenrampe, darüber Mars und Venus |
+| 46 | `ACH_FULL_POWER` | Volle Kraft | Der Energiespeicher ist einmal randvoll: 15.000 Ω. Das geht nur auf der höchsten Energiestufe „Zivilisation“ (`world.omega >= OMEGA_MAX`, `src/energy.ts`); die Stufe allein reicht nicht | Goldene Energie-Sonne über einem bis zum Rand glühenden Energiebalken aus sechs Segmenten |
 
 ## ChatGPT-Prompts (je 10 Icons pro Prompt)
 
@@ -136,16 +148,35 @@ Shared style for all 7: detailed 16-bit pixel art, bold saturated colors, one ce
 37. A fiery phoenix rising out of a smoking meteor crater, green plants sprouting at the crater's rim.
 ```
 
-### Prompt 5 — Nr. 38– (wird mit neuen Achievements auf 10 aufgefüllt)
+### Prompt 5 — Nr. 38–47
 
 ```
-Create 3 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
+Create 10 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
 Shared style: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
-Border: items 38 and 40 get a thin SILVER ring, item 39 gets a thin BRONZE ring.
+Border: items 38, 40, 41, 42, 43, 44 and 47 get a thin SILVER ring, items 39 and 45 get a thin BRONZE ring, item 46 gets a thicker shining GOLD ring.
 
 38. Three grey dolphins with pale bellies leaping one after another in an arc out of a turquoise tropical sea, seen from the side, white splashes where they leave and enter the water.
 39. A small pixel-art globe with a dashed flight path arcing across it from one side to the far side, ending at a glowing location pin.
 40. Strings of shining oxygen bubbles rising out of turquoise coastal water over green bacterial mats near a rocky shore, popping into a bright, newly blue sky.
+41. A white slab of sea ice breaking off the edge of a snowy pack ice shelf with a dark crack, tipping into a deep blue sea, a white splash and a foam ring where it hits the water.
+42. A silver-red salmon leaping in a high arc over a foaming river rapid, white spray around it, the glint of a magnifying glass lens catching the scene.
+43. A flock of white storks with black wing tips and long red beaks flying in a V formation over green river meadows and winding blue rivers, their small shadows on the ground below.
+44. A bright lightning bolt striking a dark green pine forest, tall orange flames leaping up where it hits, glowing blue oxygen bubbles rising above the fire and burning up into sparks.
+45. A cute pixel-art Earth with a face, eyes squeezed shut like ">" and "<", mouth open in a cough, a small grey smog cloud with a dark outline puffing out of its mouth, more grey smog clouds drifting around the planet.
+46. A radiant golden energy sun with a bright ring at its core, hovering above a horizontal energy bar made of six segments, every segment glowing bright amber and filled to the brim, golden sparks overflowing at the end of the bar.
+47. A tiny white sand island seen from slightly above, two coconut palms leaning out over a bright turquoise lagoon, brown coconuts under their green crowns, small colorful coral heads in the clear shallow water around the island, a thin white surf ring.
+```
+
+### Prompt 6 — Nr. 48–
+
+```
+Create 4 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
+Shared style for all: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, a thin SILVER ring as the border, light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
+
+48. A nodding horsehead pumpjack and a tall steel lattice oil derrick standing on golden desert sand under an orange evening sky, a big glossy black oil drop shining in the foreground.
+50. A tall red-orange clay termite mound with several chimney spires standing in golden savanna grass, a flat-topped acacia tree in the background, a thin trail of tiny pale termites at its foot, the glint of a magnifying glass lens catching the scene.
+51. Two orange clownfish with three bright white bands each slipping out of a violet sea anemone between pastel coral heads, seen slightly from above through clear turquoise reef water with soft light ripples, the glint of a magnifying glass lens catching the scene.
+52. A dark atomic bomb with yellow warning stripes broken cleanly into two halves lying on cracked grey ground, a fresh green olive branch growing up through the gap between the halves, a pale mushroom cloud fading away in the background.
 ```
 
 ## Ideen für später (wenn das Feature kommt)

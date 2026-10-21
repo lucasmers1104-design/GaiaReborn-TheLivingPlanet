@@ -23,34 +23,34 @@ namespace SE {
       hint: 'schwerer Koloss mit sehr langem Hals',
     },
     {
+      name: 'Kammsaurier',
+      about: 'Schlanke Raubdinosaurier von rund sieben Metern Länge mit zwei dünnen, halbrunden Knochenkämmen auf dem Schädel. Sie liefen auf zwei Beinen und packten Beute mit kräftigen, dreifingrigen Händen. Für einen Nackenkragen oder Giftspucken, wie man sie aus dem Kino kennt, gibt es keine Belege.',
+      evolution: 'Dilophosaurus aus Arizona lebte im frühen Jura, vor rund 193 Millionen Jahren. Nach dem Massenaussterben am Ende der Trias wurden Raubdinosaurier größer und zu den Spitzenjägern an Land. Die Kämme waren zu zart zum Kämpfen; vermutlich dienten sie dem Imponieren und dem Erkennen von Artgenossen.',
+      hint: 'Jäger mit zwei Kämmen auf dem Kopf',
+    },
+    {
+      name: 'Panzerdinosaurier',
+      about: 'Etwa vier Meter lange Pflanzenfresser, die meist auf allen vieren gingen. In ihrer Haut saßen Reihen kleiner, gekielter Knochenschilde, die Rücken, Flanken und Schwanz schützten. Scelidosaurus aus den Küstenklippen bei Charmouth in Südengland ist eines der ersten nahezu vollständig bekannten Dinosaurierskelette.',
+      evolution: 'Scelidosaurus lebte vor rund 191 Millionen Jahren und gehört zu den frühen Thyreophoren, den „Schildträgern“. Aus diesem Kreis gingen später die Stegosaurier mit ihren großen Rückenplatten und die schwer gepanzerten Ankylosaurier hervor. Wo Raubdinosaurier jagten, waren gepanzerte Tiere besser geschützt.',
+      hint: 'Pflanzenfresser mit Reihen kleiner Knochenschilde',
+    },
+    {
+      name: 'Megalosaurier',
+      about: 'Große Raubdinosaurier von sechs bis sieben Metern Länge mit langem, flachem Schädel voller gebogener, gezackter Zähne. Anders als die viel späteren Tyrannosaurier hatten sie kräftige Arme mit drei großen Krallen. Megalosaurus aus Mittelengland war 1824 der erste wissenschaftlich benannte Dinosaurier.',
+      evolution: 'Megalosaurus lebte im mittleren Jura, vor rund 167 Millionen Jahren. Seine Verwandten, die Megalosauroiden, gehörten damals zu den größten Jägern an Land und lebten auf mehreren Kontinenten. Wo so große Räuber jagten, waren Beutetiere mit Größe, Panzer oder Herden im Vorteil.',
+      hint: 'großer Jäger mit kräftigen Krallenarmen',
+    },
+    {
       name: 'Stegosaurier',
       about: 'Vierbeinige Pflanzenfresser mit kleinem, tief getragenem Kopf und zwei Reihen großer Knochenplatten auf dem Rücken. Am Schwanzende saßen lange Stacheln, mit denen sie sich wehrten: Ein Wirbel eines Allosaurus zeigt eine Wunde, die genau zu einem solchen Stachel passt. Wozu die Rückenplatten dienten, ist umstritten; vermutlich zum Imponieren und Erkennen von Artgenossen.',
       evolution: 'Frühe Stegosaurier wie Huayangosaurus aus China, vor rund 165 Millionen Jahren, waren kleiner und trugen schmale, spitze Platten. Bei späteren Formen wie Stegosaurus aus Nordamerika wurden die Platten groß und flach. In der Kreidezeit wurden Stegosaurier selten und verschwanden schließlich.',
       hint: 'wehrt sich mit einem stacheligen Schwanz',
     },
     {
-      name: 'Ankylosaurier',
-      about: 'Breite, niedrige Pflanzenfresser, deren Rücken mit Knochenplatten und Stacheln gepanzert war. Bei manchen Arten saßen sogar über den Augen knöcherne Lider. Viele trugen am Ende eines versteiften Schwanzes eine schwere Knochenkeule, mit der sie wohl gegen die Beine von Raubdinosauriern schlugen.',
-      evolution: 'Ankylosaurier sind enge Verwandte der Stegosaurier. Die ältesten Ankylosauriden, vor rund 122 Millionen Jahren, hatten schon einen versteiften Schwanz, aber noch keine große Keule; die kam erst später hinzu. Wo große Räuber jagten, setzten sich immer stärker gepanzerte Tiere durch, und Ankylosaurus selbst lebte bis zum Ende der Kreidezeit.',
-      hint: 'niedrig, breit und schwer gepanzert',
-    },
-    {
-      name: 'Entenschnabelsaurier',
-      about: 'Große Pflanzenfresser mit breitem, flachem Hornschnabel, die mal auf zwei, mal auf vier Beinen gingen. Hinter dem Schnabel saßen Zahnbatterien aus Hunderten dicht gepackter Zähne, die ständig nachwuchsen und Pflanzen zermahlten. Nistkolonien von Maiasaura zeigen, dass manche Arten ihre Jungen im Nest versorgten.',
-      evolution: 'Die ältesten Formen mit Entenschnabel erschienen vor rund 95 Millionen Jahren. Mit ihren Zahnbatterien kauten sie gründlicher als fast alle anderen Reptilien; diese Kauweise war so erfolgreich, dass sie zu den häufigsten großen Pflanzenfressern der späten Kreidezeit wurden. Manche trugen hohle Knochenkämme, mit denen sie vermutlich tönende Rufe erzeugten.',
-      hint: 'weidet in großen Herden an Flussufern',
-    },
-    {
-      name: 'Hornsaurier',
-      about: 'Kräftige Vierbeiner mit papageienartigem Hornschnabel, einem großen Knochenkragen im Nacken und langen Hörnern über den Augen. Mit scherenartigen Zahnreihen zerschnitten sie zähe Pflanzen. Verheilte Verletzungen an Schädeln von Triceratops passen zu Kämpfen, bei denen Artgenossen ihre Hörner ineinander verhakten.',
-      evolution: 'Ihre frühen Verwandten waren kleine, hornlose Pflanzenfresser, die teils noch auf zwei Beinen liefen. Zuniceratops aus Nordamerika, vor rund 91 Millionen Jahren, trägt die ältesten bekannten Hörner über den Augen. Weil Kragen und Hörner bei nah verwandten Arten sehr verschieden aussehen, gelten sie vor allem als Signale an Artgenossen.',
-      hint: 'trägt einen Kragen im Nacken und einen Papageienschnabel',
-    },
-    {
-      name: 'Tyrannosaurier',
-      about: 'Riesige Raubdinosaurier auf zwei mächtigen Hinterbeinen, mit gewaltigem Kopf und winzigen, zweifingrigen Armen. Ihr Biss gilt als der stärkste aller bekannten Landtiere und zertrümmerte Knochen; versteinerter Kot mit Knochensplittern belegt das. Nach vorn gerichtete Augen und ein ausgezeichneter Geruchssinn machten sie zu gefährlichen Jägern.',
-      evolution: 'Frühe Verwandte der Tyrannosaurier waren meist klein, manche nachweislich gefiedert. Die Familie der riesigen Spitzenjäger erschien vor rund 80 Millionen Jahren, nachdem andere große Raubdinosaurier in Nordamerika und Asien verschwunden waren. Tyrannosaurus rex lebte bis zum Asteroideneinschlag, der alle Dinosaurier außer den Vögeln auslöschte.',
-      hint: 'riesiger Jäger mit winzigen Armen',
+      name: 'Vogelvorläufer',
+      about: 'Kleine, etwa krähengroße Raubdinosaurier mit Federn am ganzen Körper, sogar an Armen, Beinen und Füßen, und einem langen gefiederten Schwanz. Bei Anchiornis aus China, vor rund 160 Millionen Jahren, ließ sich die Farbe aus versteinerten Farbkörperchen ablesen: grauer Körper, schwarz-weiße Flügel und ein rotbrauner Federschopf.',
+      evolution: 'Anchiornis gehört zu den gefiederten Paraviern, den engsten Verwandten der Vögel. Ob er selbst ein Vorfahr der Vögel war, ist nicht belegt; er zeigt aber, wie Dinosaurier im Umfeld der Vogelentstehung aussahen. Federn dienten wohl zuerst der Wärme und dem Imponieren, bevor sie das Gleiten und Fliegen ermöglichten.',
+      hint: 'klein, gefiedert, mit Federn auch an den Beinen',
     },
   ];
 }

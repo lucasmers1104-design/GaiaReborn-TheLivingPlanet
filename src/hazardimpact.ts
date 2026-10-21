@@ -6,7 +6,9 @@
  * dust and CO₂ stay global (K6).
  *   meteor   the tile sinks into a crater of fresh rock, ring 1 is scorched,
  *            ring 2 on a hashed half; at sea only a splash that harms sea
- *            life (the tidal wave it may set off is a chain, stage 2)
+ *            life (the tidal wave it may set off is a chain, stage 2); the
+ *            comet that ends the dinosaurs (comet.ts) is a meteor of
+ *            strength 2: a 2 × 2 crater and rings of twice the size
  *   atomic   ash at ground zero (ring 1, at most two of its corners), ring 2
  *            scorched and its fuel burning for two ticks; fallout over
  *            ring 3 and a plume downwind, where life keeps dying for
@@ -40,6 +42,36 @@ namespace SE {
   export function impactRing(world: WorldState, h: Hazard, dx: number, dy: number): number {
     const i = idx(wrapX(h.x + dx), clamp(h.y + dy, 0, GRID_H - 1));
     return Math.round(Math.hypot(dx, dy) + (hazardRoll(world.seed ^ h.id, i, 0x71) - 0.5) * IMPACT_RING_WOBBLE);
+  }
+
+  /** A meteor's size: 1, or more for the comet (COMET_STRENGTH), whose crater is s × s tiles from (h.x, h.y) to the lower right. */
+  export function meteorScale(h: Hazard): number {
+    return Math.max(1, Math.round(h.strength ?? 1));
+  }
+
+  /**
+   * The meteor's ring for tile (h.x + dx, h.y + dy): impactRing at scale 1.
+   * Larger, 0 on its s × s crater and beyond it the wobbled distance from the
+   * crater's centre over s, at least 1 — the same rings at s times the size,
+   * so one crater of s² tiles instead of s² small ones.
+   */
+  export function meteorRing(world: WorldState, h: Hazard, dx: number, dy: number): number {
+    const s = meteorScale(h);
+    if (s === 1) return impactRing(world, h, dx, dy);
+    if (dx >= 0 && dx < s && dy >= 0 && dy < s) return 0;
+    const c = (s - 1) / 2;
+    const i = idx(wrapX(h.x + dx), clamp(h.y + dy, 0, GRID_H - 1));
+    return Math.max(1, Math.round(Math.hypot(dx - c, dy - c) / s + (hazardRoll(world.seed ^ h.id, i, 0x71) - 0.5) * IMPACT_RING_WOBBLE));
+  }
+
+  /** Every tile a meteor of scale s can reach with ring 2: the box 2s round its crater. */
+  function aroundMeteor(h: Hazard, fn: (i: number, dx: number, dy: number) => void): void {
+    const s = meteorScale(h);
+    for (let dy = -2 * s; dy < 3 * s; dy++) {
+      const ty = h.y + dy;
+      if (ty < 0 || ty >= GRID_H) continue;
+      for (let dx = -2 * s; dx < 3 * s; dx++) fn(idx(wrapX(h.x + dx), ty), dx, dy);
+    }
   }
 
   /**
@@ -103,15 +135,16 @@ namespace SE {
         });
         return;
       }
-      around(h.x, h.y, 2, (i, _c, dx, dy) => {
-        const d = impactRing(world, h, dx, dy);
+      const depth = METEOR_CRATER_DEPTH * meteorScale(h);
+      aroundMeteor(h, (i, dx, dy) => {
+        const d = meteorRing(world, h, dx, dy);
         if (d > 2) return;
         if (d === 0) {
           // Nothing of a city is left in the crater, so it leaves no ruins.
           hazardHitCity(world, i, 1, false);
           hazardKillLife(world, i, 1);
           hazardStripPlants(world, i);
-          raiseCrust(world, i, -Math.min(METEOR_CRATER_DEPTH, Math.max(0, world.elevation[i] - METEOR_CRATER_FLOOR)), UpliftKind.None);
+          raiseCrust(world, i, -Math.min(depth, Math.max(0, world.elevation[i] - METEOR_CRATER_FLOOR)), UpliftKind.None);
           SuccessionSystem.scour(world, i);
           setScar(world, i, ScarKind.Crater);
         } else if (d === 1) {

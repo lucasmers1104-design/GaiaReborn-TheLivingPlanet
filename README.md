@@ -7,6 +7,36 @@ Eine Natur- und Evolutions-Sandbox im Browser, als moderner Nachfolger von *SimE
 - **Spielen:** `index.html` im Browser öffnen. Es braucht keinen Server und keine Installation. Läuft am Desktop, mit Maus und Tastatur.
 - **Entwickeln:** `npm run build` baut `simulation.js`, `npm test` führt alle Tests aus. Die Regeln für Mitarbeit stehen in [AGENTS.md](AGENTS.md).
 
+## Neu in Version 0.10.0
+
+### Raumfahrt
+- Mit der ersten Nanotech-Stadt öffnet sich das Raumfahrtprojekt: ein Startplatz in der Wüste wächst in Phasen heran.
+- Im Fenster „Raumfahrt“ startet der rote Knopf die Rakete; ein 12-Sekunden-Pixelfilm zeigt den Flug, danach heißt es „Die Reise geht weiter“.
+
+### Zeitalter der Dinosaurier
+- Am Ende ihres Zeitalters entscheidest du: Schlägt der Komet ein oder überleben die Dinosaurier?
+- Der Einschlag bringt einen Kometenwinter, der zwei Drittel des Planeten vereist; geschützte Rückzugsorte sichern das Weiterleben.
+
+### Aussterben
+- Unterarten verschwinden für immer, sobald sich ihr Nachfolger ausgebreitet hat. Ein R.I.P.-Stempel und Grabmarken im Lexikon erinnern an sie.
+
+### Zivilisation
+- Vor den ersten Dörfern ziehen Wandergruppen übers Land und lassen sich nieder; Lager mit Feuerstellen, Dörfer mit Flammen und Schornsteinrauch.
+- Neue Erdölreserve aus abgestorbenen Meerestieren, mit Ölplattform und Bohrturm auf der Karte.
+
+### Lebendiger Planet
+- Lachse wandern flussaufwärts, Störche ziehen in V-Formation, Clownfische schlüpfen aus den Riffen, Termitenhügel stehen in der Savanne.
+- Eisberge kalben, Meereis friert und taut, Wellen laufen über die Riffe, vor der Großen Sauerstoffkatastrophe perlt Sauerstoff an den Küsten.
+- Animierte Wind- und Strömungskarte.
+
+### Naturkatastrophen
+- Blitze entzünden trockene Pflanzen: natürliche Waldbrände, je mehr Sauerstoff, desto häufiger. Waldbrände sind jetzt auch zu hören.
+
+### Bedienung
+- Ω-Stufen mit Obergrenze und Regeneration; Ω und EP erklären sich per Klick in einem Aufklapper.
+- Ein Hinweis auf dem Spielfeld nennt den nächsten möglichen Schritt.
+- Spielstandformat 10 (alte Spielstände werden weiterhin gelesen).
+
 ## Neu in Version 0.9.3
 
 ### Gaia

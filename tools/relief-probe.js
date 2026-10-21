@@ -67,7 +67,7 @@ function step(SE, p) {
     p.civ.step(world, params, p.atmo);
     p.atmo.step(world, params);
   });
-  world.omega = Math.min(SE.OMEGA_MAX, world.omega + SE.OMEGA_REGEN);
+  SE.regenOmega(world);
   world.ticks++;
   world.absoluteYears += world.yearsPerTick;
   world.scaleYears += world.yearsPerTick;

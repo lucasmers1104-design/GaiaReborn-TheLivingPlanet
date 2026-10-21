@@ -24,6 +24,8 @@ namespace SE {
     readonly docked?: boolean;
     /** Called whenever the window is shown. */
     readonly onShow?: () => void;
+    /** Opens at its default place every time, wherever the player left it. */
+    readonly resetOnOpen?: boolean;
   }
 
   /** Below this stage width windows become full-width sheets. */
@@ -91,6 +93,7 @@ namespace SE {
       this.root.classList.remove('hidden');
       this.manager?.focus(this);
       if (!was) {
+        if (this.opts.resetOnOpen) this.manager?.place(this, true);
         this.manager?.clamp(this);
         this.root.classList.remove('win-enter');
         void this.root.offsetWidth;
@@ -200,15 +203,17 @@ namespace SE {
 
     /**
      * Default geometry. Values up to 1 are fractions of the stage, larger
-     * values pixels; negative x/y count from the right/bottom edge.
+     * values pixels; negative x/y count from the right/bottom edge, negative
+     * width/height leave that many pixels of the stage free.
      */
     place(win: SimWindow, reset: boolean): void {
       const o = win.opts;
       const sw = Math.max(320, this.host.clientWidth || 1280);
       const sh = Math.max(320, this.host.clientHeight || 800);
       const dim = (v: number, total: number): number => (v > 0 && v <= 1 ? v * total : v);
-      const w = Math.min(dim(o.width, sw), sw - 16);
-      const h = Math.min(dim(o.height, sh), sh - 16);
+      const size = (v: number, total: number): number => (v < 0 ? Math.max(320, total + v) : dim(v, total));
+      const w = Math.min(size(o.width, sw), sw - 16);
+      const h = Math.min(size(o.height, sh), sh - 16);
       let x = dim(Math.abs(o.x), sw);
       let y = dim(Math.abs(o.y), sh);
       if (o.x < 0) x = sw - w - x;
