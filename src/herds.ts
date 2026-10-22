@@ -249,6 +249,7 @@ namespace SE {
         // Corals only in warm water: elsewhere the class shows its highest form that builds no reef.
         const stage = reefShownStage(world, m.tile, m.c, m.stage);
         const pic = tiles.life(m.c, stage, animalSpecialist(regions, world, m.tile, m.c, stage), m.flip);
+        if (!pic) continue;
         const py = Math.round(ys[k] * size);
         for (let x = xs[k]; x < cols; x += GRID_W) ctx.drawImage(pic, Math.round(x * size), py, big, big);
       }

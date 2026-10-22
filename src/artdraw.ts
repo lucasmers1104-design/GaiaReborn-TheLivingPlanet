@@ -50,7 +50,8 @@ namespace SE {
   }
 
   function canvasOf(size: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
-    const canvas = document.createElement('canvas');
+    // In the landscape worker (landworker.ts rasters creature pictures) an OffscreenCanvas, which offers all used here.
+    const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : new OffscreenCanvas(size, size) as unknown as HTMLCanvasElement;
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');

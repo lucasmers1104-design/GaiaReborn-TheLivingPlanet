@@ -16,6 +16,16 @@ namespace SE {
   /** Ground tiles marked with this index are perpetual snow, not a biome. */
   export const SNOW_GROUND = BIOME_COUNT;
 
+  /**
+   * Creature pictures asked of the landscape worker per frame, and on their
+   * way at once. Rastering one costs the GPU 3–6 ms (supersampled paths);
+   * on the page each waited for that in a readback, 100–300 ms whenever a
+   * zoom settled on a new size. A few per frame keep the GPU free for the
+   * frames themselves.
+   */
+  const SPRITES_PER_FRAME = 2;
+  const SPRITES_ON_THE_WAY = 4;
+
   const RIPPLE_ALPHA = { coast: 0.2, ocean: 0.12 };
   const SURF_ALPHA = 0.55;
 
@@ -29,6 +39,11 @@ namespace SE {
     return { canvas, ctx };
   }
 
+  /** A picture from the worker (closed when dropped), not a canvas of the page's. */
+  function isBitmap(p: HTMLCanvasElement | ImageBitmap): p is ImageBitmap {
+    return 'close' in p;
+  }
+
   /** Sprite art drawn at an opacity, as one canvas. */
   function faded(rows: SpriteRows, alpha: number): HTMLCanvasElement {
     const { canvas, ctx } = blank(8 * SCALE, 8 * SCALE);
@@ -40,11 +55,19 @@ namespace SE {
   export class TileCache {
     private readonly grounds: HTMLCanvasElement[] = [];
     private readonly seas: HTMLCanvasElement[] = [];
-    /** Vector art rastered per device tile size, keyed by size and picture. */
-    private readonly vectors = new Map<string, HTMLCanvasElement>();
+    /** Vector art rastered per device tile size, keyed by size and picture; creatures from the worker are bitmaps. */
+    private readonly vectors = new Map<string, HTMLCanvasElement | ImageBitmap>();
     /** Device pixels per tile, and the size before it (kept while zooming back). */
     private deviceTile = 32;
     private previousTile = 32;
+    /** The newest raster of each creature picture, whatever its size: it stands in while its new size is made. */
+    private readonly latest = new Map<string, HTMLCanvasElement | ImageBitmap>();
+    /** Creature pictures wanted at this size (key → picture), asked of the worker after the frame (flush). */
+    private readonly wanted = new Map<string, { readonly c: Life; readonly stage: number; readonly specialist: number; readonly flip: boolean; readonly px: number }>();
+    /** Creature pictures on their way from the worker. */
+    private readonly asked = new Set<string>();
+    /** The landscape worker, when it can raster creature pictures (PixelTerrain.sprites); null: they are made here. */
+    remote: (() => LandJobs | null) | null = null;
     private readonly rivers: HTMLCanvasElement[] = [];
     private readonly surfs: HTMLCanvasElement[] = [];
     private readonly events: HTMLCanvasElement[] = [];
@@ -94,13 +117,16 @@ namespace SE {
       if (size === this.deviceTile) return;
       this.previousTile = this.deviceTile;
       this.deviceTile = size;
-      for (const key of [...this.vectors.keys()]) {
+      for (const [key, tile] of [...this.vectors]) {
         const at = Number(key.slice(0, key.indexOf('|')));
-        if (at !== size && at !== this.previousTile) this.vectors.delete(key);
+        if (at === size || at === this.previousTile) continue;
+        this.vectors.delete(key);
+        // A bitmap of the worker's is closed once nothing draws it any more; the newest of a picture stands in.
+        if (isBitmap(tile) && this.latest.get(key.slice(key.indexOf('|') + 1)) !== tile) tile.close();
       }
     }
 
-    private vector(key: string, art: Art | undefined, look: ArtLook, flip = false): HTMLCanvasElement {
+    private vector(key: string, art: Art | undefined, look: ArtLook, flip = false): HTMLCanvasElement | ImageBitmap {
       const k = `${this.deviceTile}|${key}`;
       let tile = this.vectors.get(k);
       if (!tile) {
@@ -113,12 +139,58 @@ namespace SE {
     /**
      * A creature with its shadow; draw it SHADOW_SPAN times the tile size.
      * `specialist` picks one of the class's biome specialists instead of the
-     * stage's own picture; `flip` makes it face left.
+     * stage's own picture; `flip` makes it face left. With the landscape
+     * worker the picture is rastered there: until it arrives, the picture of
+     * another size stands in (null for a creature never drawn before).
      */
-    life(c: Life, stage: number, specialist = -1, flip = false): HTMLCanvasElement {
-      const sp = SPECIES[c];
-      const art = specialist >= 0 ? sp?.specialists[specialist]?.art : sp?.stages[stage]?.art;
-      return this.vector(`l${c}|${stage}|${specialist}|${+flip}`, art, CREATURE_LOOK, flip);
+    life(c: Life, stage: number, specialist = -1, flip = false): HTMLCanvasElement | ImageBitmap | null {
+      const picture = `l${c}|${stage}|${specialist}|${+flip}`;
+      const k = `${this.deviceTile}|${picture}`;
+      const tile = this.vectors.get(k);
+      if (tile) return tile;
+      if (!this.remote?.()) {
+        const sp = SPECIES[c];
+        return this.vector(picture, specialist >= 0 ? sp?.specialists[specialist]?.art : sp?.stages[stage]?.art, CREATURE_LOOK, flip);
+      }
+      if (!this.asked.has(k)) this.wanted.set(k, { c, stage, specialist, flip, px: this.deviceTile });
+      return this.latest.get(picture) ?? null;
+    }
+
+    /** After a frame: a few of the creature pictures it wanted at this size are asked of the worker. */
+    flush(): void {
+      const jobs = this.remote?.();
+      if (!jobs) {
+        this.wanted.clear();
+        // The worker is gone: pictures are made here now, its bitmaps no longer stand in.
+        for (const [picture, tile] of this.latest) {
+          if (isBitmap(tile) && ![...this.vectors.values()].includes(tile)) tile.close();
+          this.latest.delete(picture);
+        }
+        return;
+      }
+      let sent = 0;
+      for (const [k, w] of this.wanted) {
+        if (sent >= SPRITES_PER_FRAME || this.asked.size >= SPRITES_ON_THE_WAY) break;
+        this.wanted.delete(k);
+        // Wanted at a size the zoom has left already: not made.
+        if (w.px !== this.deviceTile) continue;
+        if (!jobs.sprite(w.c, w.stage, w.specialist, w.flip, w.px, (bitmap) => this.arrived(k, bitmap))) break;
+        this.asked.add(k);
+        sent++;
+      }
+    }
+
+    /** A creature picture from the worker; null when the worker failed (then pictures are made here again). */
+    private arrived(k: string, bitmap: ImageBitmap | null): void {
+      this.asked.delete(k);
+      if (!bitmap) return;
+      const at = Number(k.slice(0, k.indexOf('|')));
+      const picture = k.slice(k.indexOf('|') + 1);
+      const old = this.latest.get(picture);
+      this.latest.set(picture, bitmap);
+      if (old && isBitmap(old) && ![...this.vectors.values()].includes(old)) old.close();
+      // A size dropped meanwhile (the zoom moved on) only stands in.
+      if (at === this.deviceTile || at === this.previousTile) this.vectors.set(k, bitmap);
     }
 
     /**
@@ -126,7 +198,7 @@ namespace SE {
      * a shadow (draw them SHADOW_SPAN times the tile size); kelp comes faded
      * by the water above it.
      */
-    plant(g: Flora, dense: number, specialist = -1): HTMLCanvasElement {
+    plant(g: Flora, dense: number, specialist = -1): HTMLCanvasElement | ImageBitmap {
       const fa = FLORA_ART[g];
       const art = specialist >= 0 ? fa?.specialists[specialist]?.art : dense ? fa?.dense : fa?.sparse;
       const look = FLORA[g].woody ? TREE_LOOK : FLORA[g].realm === 'sea' ? KELP_LOOK : PLANT_LOOK;

@@ -18,7 +18,10 @@ bei Überlast ausdrücklich **nicht** reduziert, weil die Grafikqualität späte
   volles Tempo (6,7 Ticks/s bei „Schnell“).
 - Auf der Referenz liegen damit 6 von 7 Szenarien bei ≥ 95 % der Bilder im 60-Hz-Budget, das Pinsel-Szenario bei
   88 %. Eine **60-fps-Abnahme ist das nicht**: gemessen wurde nur Headless-Chrome auf einem schnellen Desktop,
-  nicht auf Mindesthardware und nicht in einem echten Fenster mit GPU (Abschnitt 6).
+  nicht auf Mindesthardware und nicht in einem echten Browserfenster (Abschnitt 6).
+- Zweite Runde (Abschnitt 10): Kamerafahrten mit gleichzeitigem Zoomen und Schwenken. Die großen Ruckler dort kamen
+  nicht von der Landschaft, sondern vom Neurastern der Tierbilder bei jeder neuen Zoomstufe. Sie entstehen jetzt
+  im Landschafts-Worker. Dazu kommen ein Vorlauf für Landschafts-Chunks und ein abschaltbarer Zoomcache.
 
 ## 2. Referenz und Prüflücken
 
@@ -29,9 +32,13 @@ bei Überlast ausdrücklich **nicht** reduziert, weil die Grafikqualität späte
 | Auflösung | 1920 × 1080, DPR 1, Standard-Zoom, „Effekte reduzieren“ aus (volle Qualität) |
 | Tempo | „Schnell“ (150 ms je Tick), Entwicklermodus an (Kosten spielen für die Messung keine Rolle) |
 
+Headless-Chrome rastert die Canvas auf diesem Rechner mit der GPU (`chrome://gpu`: „Canvas: Hardware accelerated“,
+ANGLE über Direct3D 11 auf der RTX 5060 Ti). Die erste Fassung dieses Berichts hatte das fälschlich als Software-Raster
+beschrieben. Software-Raster misst `perf-bench --gpu off`.
+
 Nicht geprüft: echte Mindesthardware (ein schwächerer PC lag nicht vor; die 4-fache CPU-Drosselung in Abschnitt 5
-ist nur ein Hinweis), Chrome mit Fenster und GPU-Raster, Firefox, Safari, Edge, andere DPR (z. B. 1,5 und 2),
-4K-Auflösung, Audio unter Last.
+ist nur ein Hinweis), Chrome in einem echten Fenster, Firefox, Safari, Edge, DPR 2 und 4K-Auflösung in der
+ersten Runde (DPR 1,5 in Abschnitt 10), Audio unter Last.
 
 ## 3. Ausgangslage
 
@@ -207,17 +214,16 @@ flüssige Darstellung. Dann ist das Zeichnen selbst der Engpass (Abschnitt 6).
 ## 6. Grenzen und offene Punkte
 
 **Nicht nachgewiesen**
-- **60 fps auf Mindesthardware:** Es lag kein schwächerer PC vor. Die Referenz ist ein schneller Desktop;
-  Headless-Chrome rastert die Canvas dort ohne GPU. Ein Teil der verbleibenden langen Bildabstände ist
-  Raster- und Compositor-Zeit, keine JavaScript-Zeit. Die 4-fache CPU-Drosselung zeigt: Auf deutlich
-  langsameren Rechnern begrenzt künftig das Zeichnen selbst (Kartenbasis, Effekt-Ebenen, Raster).
+- **60 fps auf Mindesthardware:** Es lag kein schwächerer PC vor. Die Referenz ist ein schneller Desktop mit
+  GPU-Raster der Canvas. Die 4-fache CPU-Drosselung zeigt: Auf deutlich langsameren Rechnern begrenzt künftig
+  das Zeichnen selbst (Kartenbasis, Effekt-Ebenen, Raster).
 - **Andere Browser:** Firefox, Safari und Edge sind ungeprüft, ebenso Chrome mit Fenster, andere DPR und 4K.
   Blob-Worker aus `file://` und `Function.prototype.toString` sind dort standardgemäß vorgesehen, aber nicht getestet.
 - **Audio unter Last** wurde nicht gehört.
 
 **Bekannte Grenzen des Umbaus**
-- **Einzelne lange Bilder bleiben:** etwa ein 188-ms-Task beim Pinsel und eine einzelne Spitze beim Zoomen.
-  Ihre Ursache ist nicht zugeordnet.
+- **Einzelne lange Bilder bleiben:** etwa ein 188-ms-Task beim Pinsel; seine Ursache ist nicht zugeordnet. Die
+  Spitzen beim Zoomen waren das Neurastern der Tierbilder (Abschnitt 10).
 - **Verzögerte Bestätigung:** Spieleraktionen zeigen ihr Ergebnis, sobald der Worker zwischen zwei Ticks dazu
   kommt, also bis zu eine Tick-Dauer später (typisch 30–90 ms, selten mehr). Ausgenommen sind die vorhergesagten:
   Pinsel, Gelesen-Markierungen, Regler, Tempo. Das Untersuchen-Fenster öffnet sofort, die Kosten folgen.
@@ -378,3 +384,300 @@ Bewusst offen (Abschnitt 6):
 - Bis der erste Zustand eintrifft (≈ 0,5 s nach dem Start), zeigt der Titel einen leeren Globus.
 - Ein doppelter Klick auf „Entwickeln“ meldet ein zweites Mal „bereits entwickelt“.
 - Lehnt der Worker das Untersuchen ab (seltener Wettlauf), bleibt das Fenster offen.
+
+## 10. Zweite Runde: Kamerafahrten, Vorlauf, Zoomcache und Tierbilder
+
+Stand: 22. 10. 2026. Auftrag: gleichmäßigere Kamerabewegungen, schneller verfügbare Landschaft und weniger
+wiederholte Skalierungsarbeit bei unveränderter Bildqualität, ausdrücklich auch bei **gleichzeitigem Zoomen und
+Schwenken**. Die aufwendige Vorbereitung sollte im bestehenden Landschafts-Worker stattfinden.
+
+### 10.1 Ergebnis in Kürze
+
+- **Ursache der Zoom-Ruckler:** Sie kamen nicht von der Landschaft. Bei jeder neuen Zoomstufe rasterte die Seite
+  alle sichtbaren Tierbilder neu und las jedes einzeln von der GPU zurück (`getImageData` in `rasterArt`). Das
+  sind etwa 3–4 ms je Bild und 100–300 ms je Zoomschritt. Die Tierbilder entstehen jetzt im Landschafts-Worker,
+  pixelgleich.
+- **Wirkung:** Beim gleichzeitigen Zoomen und Schwenken fallen die längsten Bilder (p99 der Hauptthread-Arbeit)
+  von 260 ms auf 19 ms. Der Anteil der Bilder über 16,7 ms sinkt von 13 % auf 1,3 %, die langen Tasks je 15 s von
+  35 auf 2.
+- **Vorlauf:** Er verdoppelt beim Ziehen den Anteil der Chunks, die beim Sichtbarwerden schon aktuell sind
+  (29–37 % → 56–65 %), ohne messbare Kosten im Hauptthread. Er ist Standard.
+- **Zoomcache:** Bei DPR 1 bringt er nichts Messbares. Bei DPR 1,5 und 2 verkürzt er die längsten Bildabstände
+  deutlich, weil die GPU weniger kopieren muss. Er ist deshalb ab DPR 1,5 Standard. Sein Budget wächst mit der
+  Bildschirmfläche (Abschnitt 10.6).
+- **Signaturen:** Die Chunk-Signaturen werden je Feldstand einmal berechnet statt bei jedem Bild.
+
+### 10.2 Messaufbau
+
+- **Messwerkzeug:** `tools/perf-bench.js` hat neue Kamerafahrten bekommen. Alle starten vom Biosphären-Spielstand
+  bei laufender Welt („Schnell“), 1920 × 1080.
+  - `panzoom`: WASD auch diagonal, dazu Rechts-Ziehen, beides während Mausrad-Zoom ganz hinaus und wieder hinein.
+    Die Rasten kommen teils schneller, teils langsamer als die 140-ms-Ruhezeit des Zooms.
+  - `zoomsteps`: jede Zoomstufe einzeln, eine Raste je 450 ms.
+  - `drag`: Rechts-Ziehen mit 900 px/s, gerade, diagonal und mit Richtungswechsel.
+- **Optionen:**
+  - `--laps 2`: Runde 1 mit kaltem Cache, Runde 2 mit warmem; die Kamera fährt dazwischen an den Start zurück.
+  - `--repeat N`: jeder Lauf in einem frischen Browser.
+  - `--variants`: die vier Varianten über `?land=plain|ahead|zoom|both`, verschränkt gemessen.
+  - `--paused`, `--gpu off` (Software-Raster) und `--dpr`.
+- **Messwerte der Landschaft** (`SE.landStats`):
+  - Chunks, die ins Bild kommen, und wie viele davon schon aktuell sind; Wartezeit bis aktuell
+  - Vorlauf: angefragt, genutzt, ungenutzt, verworfen, hochgestuft
+  - Zoomcache: Treffer, Fehltreffer, gebaut, genutzt, ungenutzt, verspätet, verdrängt, abgelehnt
+  - Kompositions- und Skalierzeit im Worker, Nachrichten
+  - Rechnerischer Speicher der Zoombilder (Seite, unterwegs, Worker) und getrennt davon der vorhandenen
+    1×-Chunks und Verkleinerungen
+- **Schalter für Messungen:**
+  - `?sprites=page` schaltet die Tierbilder auf den alten Weg zurück.
+  - `?zoombudget=N` setzt ein festes Budget in MiB.
+- **Zahlen:** Die Tabellen zeigen „Median/schlechtester“ über die Wiederholungen. Ergebnisse liegen in
+  `tmp/perf/cam-*.json`, `z-*.json` und `default-*.json`.
+
+### 10.3 Ursache der Zoom-Ruckler und verworfene Wege
+
+Messung mit Zeiten je Zeichenebene und je `drawImage`/`getImageData` (Zoomstufen-Fahrt, 15 s):
+
+| | vorher | nachher |
+|---|---|---|
+| schlimmstes Bild | 276 ms, davon `getImageData` in der Herdenebene 232 ms | 33 ms |
+| `getImageData`-Aufrufe | 699 (Σ 2,3 s, im Mittel 3,3 ms) | 7 (Σ 0,02 s) |
+| Landschaft im schlimmsten Bild (`drawBase`) | 5–20 ms | 5–20 ms |
+
+Geprüfte und verworfene Wege:
+
+- **Tierbilder auf CPU-Canvas** (`willReadFrequently`): 4,6-mal schneller, aber 15 % der Pixel weichen ab und
+  etwa 5 Randpixel je Bild kippen. Das ist eine Stiländerung, also verworfen.
+- **Gebündeltes Rücklesen auf der Seite:** pixelgleich, aber jedes Rücklesen kostet rund 10 ms fest, weil Chrome
+  das Gemalte erst beim Lesen abarbeitet. Weder einige Bilder Abstand noch ein Schnappschuss halfen. Die Kosten
+  wären also nur verteilt worden.
+- **Gewählt: Rastern im Landschafts-Worker** (OffscreenCanvas, gleicher `rasterArt`-Code). Geprüft mit 2720 Bildern
+  in 10 Größen gegen die Seite: 0 von 3,2 Mio. Pixeln weichen ab, mit GPU und ohne. Auf dem Rechner kostet ein
+  Bild dort 3–6 ms; im Hauptthread fällt nichts mehr an.
+
+### 10.4 Umsetzung
+
+**Landschafts-Worker** (`landworker.ts`):
+- **Warteschlange:** Er sortiert seine Aufträge nach Priorität: sichtbarer veralteter Chunk, dann Tierbild, dann
+  Chunk im Vorlauf, dann Zoombild eines aktuellen Chunks.
+- **Ein Auftrag je Aufgabe:** Feld-, Verwerf- und Prioritätsnachrichten werden dazwischen bearbeitet.
+- **Verwerfen und Hochstufen:** Nicht gestartete Aufträge lassen sich verwerfen (`drop`) oder dringlicher machen
+  (`prio`). Ein laufender Auftrag wird zu Ende gerechnet.
+- **Plätze auf der Seite:** höchstens 6 sichtbare, 1 Vorlauf- und 2 Zoomaufträge gleichzeitig. Vorlauf- und
+  Zoomaufträge belegen keinen sichtbaren Platz.
+- **Generation:** Ein neuer Planet erhöht sie; Antworten eines alten Planeten werden verworfen und ihre Bitmaps
+  geschlossen.
+
+**Vorlauf** (`landahead.ts`):
+- **Geschwindigkeit:** wird aus der tatsächlichen Kameraänderung je Bild geschätzt, in CSS-px/s, also für jede
+  Zoomstufe gleich.
+  - Gleitender Mittelwert über etwa 90 ms; der kürzeste Weg über die Kartennaht zählt.
+  - Ein Zoom verankert die Schätzung neu, ohne Geschwindigkeit zu erzeugen; sie klingt dabei ab wie in einem Bild
+    ohne Bewegung.
+  - Ein Sprung um mehr als eine halbe Ansicht oder schneller als 30 000 px/s setzt sie zurück, ebenso jedes
+    Zentrieren der Kamera, eine Pause über 200 ms und ein neuer Planet.
+- **Vorausschau:** 250 ms, höchstens eine Chunk-Breite über den Rand. Kandidaten sind nach der Zeit sortiert, zu
+  der sie ins Bild kommen; Diagonalen zählen ebenso wie die Naht. Über den Pol hinaus und bei einer Ansicht über
+  die ganze Planetenbreite gibt es keine.
+- **Ablauf:**
+  - Höchstens ein Vorlauf-Auftrag gleichzeitig, und nur, wenn keine sichtbaren Chunks auf einen Platz warten.
+  - Dreht die Kamera ab, wird er verworfen. Kommt sein Chunk ins Bild, wird er hochgestuft.
+  - Im Stillstand gibt es keinen Vorlauf.
+
+**Zoomcache** (`landzoom.ts`, `landview.ts`):
+- **Vorbereitung:** Der Worker vergrößert einen frisch zusammengesetzten Chunk k-fach nach dem
+  Nächster-Nachbar-Verfahren auf einem OffscreenCanvas und gibt ihn als `ImageBitmap` ab. Die Pixel des Chunks
+  gehen zuerst an die Seite, das Zoombild folgt in einer eigenen Nachricht; ein sichtbarer Chunk wartet also nie
+  auf sein Zoombild.
+- **Zeichnen:** Die Seite zeichnet daraus den zweiten Schritt wie bisher, geglättet auf T Gerätepixel je Kachel.
+  Ganzzahlige Stufen werden 1:1 kopiert. Ein Bild deckt alle Zoomstufen zwischen 16 (k − 1) und 16 k ab.
+- **Schlüssel:** Planet (Generation), Chunk, Bildsignatur und k. Die Darstellung mit flachem Meer steckt in der
+  Signatur. Ein Tick ohne Änderung am Chunk lässt sein Bild gültig.
+- **Besitz:** Der Worker gibt die Bitmap mit der Nachricht ab; `transferToImageBitmap` leert dabei sein Canvas.
+  Die Seite besitzt sie danach und schließt sie, wenn sie ersetzt, verdrängt, verspätet oder ungültig wird, beim
+  Planetenwechsel, beim Ausfall des Workers und wenn die DPR-Schwelle wegfällt. Geschlossene Bitmaps werden nie
+  gezeichnet.
+- **Wann der alte Weg gilt:** bei einem Fehltreffer sofort, während einer Überblendung (Pinsel, Meereis), unter
+  16 px je Kachel (dort bleibt der vorhandene Verkleinerungscache), ohne OffscreenCanvas im Worker und nach einem
+  Worker-Ausfall.
+- **Budget:** Es zählt Bytes, nicht Bilder: die Bilder auf der Seite, die unterwegs sind, und die Canvas des
+  Workers. Verdrängt wird das am längsten nicht gezeichnete Bild. Was im aktuellen oder vorigen Bild gezeichnet
+  wurde, bleibt geschützt. Eine wegen des Budgets abgelehnte Anfrage wird erst nach etwa einer Sekunde oder einem k-Wechsel
+  wiederholt; so entsteht kein Kreislauf aus Verdrängen und Neubauen. Zoomaufträge für ein verlassenes k werden
+  verworfen.
+
+**Tierbilder** (`tilecache.ts`, `artdraw.ts`):
+- Neue Größen rastert der Landschafts-Worker. Pro Bild werden höchstens 2 angefragt, höchstens 4 sind unterwegs;
+  das verteilt auch die GPU-Arbeit.
+- Bis die neue Größe da ist, steht das jüngste Bild einer anderen Größe ein. Ein noch nie gezeigtes Tier erscheint
+  wenige Bilder später.
+- Nicht mehr gezeichnete Bitmaps werden geschlossen.
+- Ohne fähigen Worker oder nach seinem Ausfall rastert die Seite wie bisher.
+
+**Signaturen** (`landview.ts`): Jede Chunk-Signatur wird je Feldstand einmal berechnet. Jede Feldänderung und jeder
+Wechsel der Meeresdarstellung erhöht den Stand.
+
+### 10.5 Messergebnisse
+
+Vorher (Bundle vor dieser Runde) gegen nachher, beim Standard für DPR 1 (also mit Vorlauf), GPU, laufende Welt,
+3 Wiederholungen, Runde 1 kalt / Runde 2 warm:
+
+| Fahrt | Runde | Arbeit p99 vorher → nachher (ms) | max vorher → nachher (ms) | Bilder > 16,7 ms | lange Tasks | Abstand p99 (ms) |
+|---|---|---|---|---|---|---|
+| Zoom + Schwenk | kalt | 260 → 19 | 341 → 37 | 13,0 % → 1,3 % | 35 → 2 | 253 → 67 |
+| | warm | 263 → 19 | 381 → 33 | 14,3 % → 1,2 % | 37 → 0 | 267 → 53 |
+| Zoomstufen | kalt | 196 → 18 | 276 → 37 | 12,0 % → 1,2 % | 30 → 0 | 187 → 53 |
+| | warm | 212 → 19 | 297 → 37 | 14,5 % → 1,4 % | 36 → 0 | 213 → 67 |
+| Ziehen | kalt | 34 → 19 | 47 → 35 | 4,1 % → 1,6 % | 0 → 0 | 40 → 27 |
+| | warm | 23 → 19 | 45 → 35 | 2,5 % → 1,4 % | 0 → 0 | 27 → 27 |
+
+Gegenprobe mit `?sprites=page` (neuer Build, Tierbilder wieder auf der Seite): Zoom + Schwenk kalt 207 ms p99,
+11,2 % über 16,7 ms, 31 lange Tasks. Der Gewinn kommt also fast ganz von den Tierbildern. Simulationstempo
+(6,6–6,7 Ticks/s) und Zustandsalter (≈ 75 ms) sind unverändert.
+
+**Vorlauf**, DPR 1, Median über 3 Läufe:
+
+| Fahrt | Runde | aktuell beim Sichtbarwerden: ohne → mit | angefragt / genutzt / ungenutzt / verworfen / hochgestuft |
+|---|---|---|---|
+| Ziehen | kalt | 29 % → 56 % | 138 / 83 / 37 / 8 / 6 |
+| | warm | 37 % → 65 % | 153 / 105 / 40 / 6 / 3 |
+| Zoom + Schwenk | kalt | 28 % → 39 % | 52 / 34 / 9 / 5 / 2 |
+| | warm | 35 % → 48 % | 54 / 32 / 6 / 5 / 3 |
+| Zoomstufen | – | unverändert, kein Vorlauf im Stillstand | 0 |
+
+- Die Wartezeit der Chunks, die beim Sichtbarwerden noch nicht aktuell sind, bleibt gleich (Median 23–30 ms beim
+  Ziehen).
+- Kosten: etwa 5–8 % mehr Kompositionsarbeit im Worker und 5 % mehr Nachrichten. Die Bildzeiten im Hauptthread
+  ändern sich nicht messbar.
+
+**Zoomcache**, nur `plain` gegen `zoom`, je 3 Läufe, Runde 2 (warm):
+
+| DPR | Fahrt | Kennzahl | ohne | 64 MiB | 96 MiB | 160 MiB |
+|---|---|---|---|---|---|---|
+| 1 | Zoomstufen | Arbeit p99 / Abstand p99 (ms) | 18,7 / 67 | 17,1 / 53 | – | – |
+| 1,5 | Zoomstufen | Abstand p99 (ms) | 227 | 160 | 119 | 133 |
+| 1,5 | Zoomstufen | Bilder > 16,7 ms | 6,9 % | 5,4 % | 3,9 % | 3,8 % |
+| 1,5 | Zoom + Schwenk | Abstand p95 / p99 (ms) | 59 / 88 | 58 / 75 | 45 / 74 | 53 / 80 |
+| 2 | Zoom + Schwenk | Abstand p95 / p99 (ms) | 253 / 480 | 107 / 280 | – | 67 / 240 |
+| 2 | Zoomstufen | Abstand p99 (ms) | 107 | 93 | – | 107 |
+
+- **DPR 1:** Die Arbeit im Hauptthread ist mit und ohne Cache gleich; die Unterschiede liegen im Rauschen der
+  Wiederholungen.
+- **DPR 1,5 und 2:** Die Bildabstände werden länger, ohne dass mehr Arbeit im Hauptthread anfällt; die Seite
+  wartet also auf die GPU. Der alte Weg vergrößert jeden Chunk in ein wiederverwendetes Zwischencanvas, das vor
+  dem Überschreiben kopiert werden muss, bei k bis 6 jeweils mehrere MiB. Mit fertigen Zoombildern entfallen diese
+  Kopien.
+- **Kosten:**
+  - Das Budget ist in den Zoomfahrten voll ausgeschöpft.
+  - Mit 64 MiB verdrängt der Cache bei DPR 2 je Runde 180–334 Bilder und lehnt 35–87 Anfragen ab; mit 160 MiB
+    sind es 77–176 Verdrängungen und 0–7 Ablehnungen.
+  - 10–20 % der gebauten Bilder werden nie gezeichnet.
+  - Das Vergrößern kostet im Worker 0,2 ms je Bild (p50) mit GPU, ohne GPU 17 ms.
+
+**Ohne GPU** (`--gpu off`, Software-Raster, 2 Läufe), Zoom + Schwenk kalt:
+- Arbeit p99 vorher 172 ms → nachher 89 ms (`plain`) bzw. 75 ms (`both`).
+- Bilder über 16,7 ms: 30 % → 11–13 %.
+- Lange Tasks: 48 → 26–31.
+
+Ohne GPU-Canvas bleibt das Zeichnen selbst der Engpass, flüssig ist das nicht.
+
+**DPR 1,5** (2 Läufe), Zoomstufen kalt:
+- Arbeit p99 197 ms → 24 ms.
+- Bilder über 16,7 ms: 18 % → 3–5 %.
+- Lange Tasks: 36 → 0–1.
+
+**Angehaltene Welt** (2 Läufe): Alle Varianten liegen bei Arbeit p99 8–12 ms und unter 0,3 % der Bilder über
+16,7 ms. Die Varianten unterscheiden sich dort nicht.
+
+### 10.6 Entscheidung: Standard und Budget
+
+- **Standard ohne `?land=`:**
+  - Vorlauf an: gemessener Nutzen bei der Verfügbarkeit, keine Kosten im Hauptthread.
+  - Zoombilder ab DPR 1,5: dort gemessener Nutzen bei den Bildabständen. Bei DPR 1 kein messbarer Nutzen; dort
+    bleibt der Speicher frei.
+  - DPR 1,25 wurde nicht gemessen und fällt unter die Schwelle.
+- **Budget:** sechs Bildschirme in Gerätepixeln (Breite × Höhe × 4 Bytes × 6), mindestens 64 und höchstens
+  192 MiB. Das sind etwa 100 MiB bei DPR 1,5 und etwa 175–190 MiB bei DPR 2 auf einem 1080p- bzw. 4K-Bildschirm.
+  Begründung:
+  - Die sichtbaren Zoombilder wachsen mit den Gerätepixeln des Bildschirms (bei k = 6 sind es 9,7 MiB je Chunk).
+    Das 64-MiB-Startbudget lehnte bei DPR 2 den Großteil ab und verdrängte laufend.
+  - Gemessen am besten: 96 MiB bei DPR 1,5 (160 MiB brachten dort nichts mehr) und 160 MiB bei DPR 2. Das sind je
+    etwa 5½ Bildschirme; sechs liegen knapp darüber.
+  - Die Obergrenze schützt Rechner mit kleinem Grafikspeicher.
+  - Nicht gemessen: das Verhalten bei knappem Grafikspeicher (integrierte GPU). Dafür gibt es `?land=ahead`
+    (Zoombilder aus) und `?zoombudget=`.
+- **Bestätigung des Standards** mit der endgültigen Fassung (nach der Prüfung in 10.9), ohne `?land=`, 2 Läufe
+  (`tmp/perf/final-dpr1.json`, `final-dpr15.json`, `final-dpr2.json`):
+  - DPR 1: keine Zoombilder (0 MiB), Vorlauf aktiv. Alle drei Fahrten kalt und warm: Arbeit p99 18–21 ms,
+    1,2–2,2 % über 16,7 ms, 0–2 lange Tasks. Beim Ziehen sind 59–69 % der Chunks beim Sichtbarwerden aktuell.
+  - DPR 1,5: Zoombilder mit 100,8 MiB Budget. Zoomstufen warm: Abstand p99 181 ms (227 ms ohne Zoombilder). Zoom +
+    Schwenk warm: p95 53 ms, p99 80 ms.
+  - DPR 2: Zoombilder mit 179 MiB Budget, 0–6 Ablehnungen je Runde. Zoom + Schwenk warm: Abstand p95 96 ms und p99
+    281 ms, gegenüber 253 / 480 ms ohne Zoombilder.
+  - In der Ausgabe des Messwerkzeugs steht beim Standard „[ahead+zoom]“. Das heißt nur, dass die Zoombilder
+    möglich sind, nicht, dass sie bei DPR 1 laufen.
+
+### 10.7 Bildprüfung
+
+- **Zoombilder gegen alten Weg:** gleicher Spielstand, angehaltene Welt, gleiche Kamera; Zoomstufen 17, 24, 31, 32,
+  33, 40 und 48 px bei DPR 1, 1,25, 1,5 und 2.
+  - Es weichen 0,003–0,12 % der Farbkanäle ab. Zweimal der alte Weg in getrennten Sitzungen ergibt 0,008–0,05 %;
+    die Abweichungen liegen fast alle abseits der Chunkgrenzen und sind zeitabhängiges Zeichnen.
+  - Das Nahtmaß (Farbsprung an Chunkgrenzen gegen sonst) ist gleich, etwa 4,511 gegen 4,516. Es gibt keine neuen
+    Nähte, keine abgeschnittenen Kronen und keine springenden Pixel.
+  - Ausschnitte im Vergleich: optisch identisch.
+- **Pinsel bei 24 und 32 px:** Nach einem Strich über 51–55 Kacheln ist die Karte mit Zoombildern gleich der ohne
+  (0,02–0,03 %, Rauschniveau). Es bleiben keine veralteten Bilder stehen; die Überblendung läuft über den alten Weg.
+- **Meereis-Übergänge:** nutzen denselben Überblendungsweg wie der Pinsel und zeichnen dabei keine Zoombilder. Ein
+  eigener Meereis-Testfall wurde nicht ausgelöst.
+- **Tierbilder:** pixelgleich (Abschnitt 10.3). Für einige Bilder nach einem Zoomschritt zeigen sie die vorige
+  Größe skaliert, wie schon während der Zoomvorschau.
+
+### 10.8 Tests und Prüfungen
+
+- **`tests/landahead.test.js` (neu, 21 Tests):**
+  - Prioritäten, Doppelaufträge, Hochstufen, Verwerfen, Generation und Worker-Ausfall (`LandJobs`)
+  - Geschwindigkeit, Kartennaht, Diagonale, Sprung, Pause, Zoom und Begrenzung des Vorlaufs (`CameraMotion`,
+    `aheadChunks`)
+  - Gültigkeit, verspätete Bilder, Budget, Verdrängung mit Schutz und Freigabe (`LandZoomCache`)
+  - Tierbilder über den Worker samt Ausfall; Platzhalter, Anfragegrenzen und Schließen (`TileCache`)
+  - Die Budgetregel
+- `tests/simworker.test.js`: weiterhin grün.
+- Browser-Funktionsprüfung über `file://` im Worker- und im Direktmodus: grün.
+- `npm run test:quick`: 290 bestanden.
+- `npm run test:full` auf dem Endstand: 471 Tests, 469 bestanden, Dauer 36 min. Die zwei Fehlschläge sind dieselben
+  wie vor beiden Runden auf dem unveränderten Stand (Abschnitt 7): Dinosaurier Stufe 3 ohne Herdensymbol, und Seed
+  31337 bleibt bei 30 von 31 Schritten stehen, bitgleich an derselben Stelle.
+
+### 10.9 Unabhängige Prüfung
+
+Eine separate Prüfung hat den Code ohne Ausführung gegen die Anforderungen gelesen. Ohne Befund blieben:
+Bitmap-Besitz, Freigabe der Reservierungen, Signatur-Zwischenspeicher, Überblendungen, DPR-Schwelle, Worker-Code ohne
+DOM sowie Kartennaht, Pole und Diagonalen. Behoben:
+
+1. Sichtbare Chunks warteten auf ihr Zoombild (siehe oben: Pixel zuerst).
+2. Abgelehnte Zoombilder wurden nur bei einem k-Wechsel erneut versucht.
+3. Der Merker für wartende sichtbare Chunks konnte stehen bleiben und den Vorlauf blockieren.
+4. Die Geschwindigkeit hielt sich über Zoom und Zentrieren hinweg.
+5. Ein nach dem Start hochgestufter Vorlauf-Auftrag wurde in der Messung noch als Vorlauf gezählt.
+6. Zoomaufträge für ein verlassenes k liefen weiter.
+7. Nach dem Verwerfen eines Vorlauf-Auftrags folgt der nächste erst ein Bild später. Ein schon gestarteter läuft
+   noch zu Ende, kurz können also zwei unterwegs sein.
+8. Ein ersetzter Auftrag verlor in der Warteschlange seinen Platz.
+9. Platzhalter-Tierbilder werden nach einem Worker-Ausfall geschlossen.
+
+Bewusst offen: Die Platzhalter-Tierbilder (je Bild das jüngste) liegen außerhalb des Zoom-Budgets. Ihre Zahl ist
+durch die Zahl der Tierbilder begrenzt, bei 96 Gerätepixeln je Kachel sind es grob 50 KB je Bild.
+
+### 10.10 Grenzen und offen
+
+- **Stadtmarker:** werden weiter auf der Seite gerastert. In der Zivilisation sind das einmal je neuer Zoomgröße
+  bis 15 ms. Siedler und wandernde Gruppen fielen in der Messung nicht ins Gewicht.
+- **Neu ins Bild kommende Tierarten:** erscheinen wenige Bilder später als bisher.
+- **Ohne GPU-Canvas:** Software-Raster bleibt deutlich über dem 60-Hz-Budget (Abschnitt 10.5).
+- **Ungeprüft:** Chrome in einem echten Fenster, andere Browser, DPR 1,25 und 3, integrierte GPUs mit wenig
+  Speicher, Laptops im Akkubetrieb.
+- **Manuell zu prüfen:**
+  - Zoomen mit Mausrad und Touchpad bei gleichzeitigem Schwenken mit WASD und Maus
+  - Kameraflüge, etwa „Zu Ereignis springen“
+  - Ein Fenster auf einen Monitor mit anderem Skalierungsfaktor ziehen: Zoombilder an bzw. aus
+  - Meereis-Übergänge bei Vergrößerung

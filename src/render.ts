@@ -412,6 +412,9 @@ namespace SE {
     private readonly swap: HTMLCanvasElement;
     private readonly swapCtx: CanvasRenderingContext2D;
     private readonly land = PixelTerrain.shared();
+    /** How the camera actually moved lately, for the landscape asked for ahead of it (landahead.ts). */
+    private readonly motion = new CameraMotion();
+    private motionSeed = NaN;
     /** Sea ice calving off the pack edge now and then (icecalving.ts). */
     private readonly calving = new IceCalving(this.land);
 
@@ -429,6 +432,8 @@ namespace SE {
       if (!sctx) throw new Error('SimEarth: offscreen 2D context unavailable');
       this.swapCtx = sctx;
       if (TERRAIN_STYLE === 'pixel') this.land.whenReady(() => this.markDirty());
+      // `?sprites=page` keeps creature pictures on the page, for measuring (tools/perf-bench.js).
+      if (typeof location === 'undefined' || !/[?&]sprites=page(&|$)/.test(location.search)) this.tiles.remote = () => this.land.sprites;
       this.cities.whenReady(() => this.markDirty());
       this.calving.occupied = (i) => this.layers.life && this.herds.markerOn(i) !== null;
     }
@@ -534,6 +539,8 @@ namespace SE {
       this.scrollX = x + 0.5 - this.cols / 2;
       this.scrollY = y + 0.5 - this.rows / 2;
       this.clampScroll();
+      // A jump, not motion: nothing is asked for ahead in its direction.
+      this.motion.reset();
     }
 
     /** Scroll by a number of tiles (fractions allowed). */
@@ -675,8 +682,16 @@ namespace SE {
         ctx.drawImage(this.base, 0, 0);
       }
 
-      const fx = this.layers.events && this.pixelTerrain && this.land.ready ? this.fx : null;
       const cam: LandCamera = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr };
+      if (this.pixelTerrain) {
+        if (world.seed !== this.motionSeed) {
+          this.motion.reset();
+          this.motionSeed = world.seed;
+        }
+        this.motion.sample(this.scrollX, this.scrollY, this.tilePx, now, this.cols, this.rows);
+        this.land.frame(cam, this.canvas.width, this.canvas.height, this.motion, now);
+      }
+      const fx = this.layers.events && this.pixelTerrain && this.land.ready ? this.fx : null;
       const cities = (x0: number, y0: number, x1: number, y1: number): void => {
         if (this.layers.cities) this.cities.draw(ctx, cam, world, this.land.field, x0, y0, x1, y1);
       };
@@ -749,6 +764,8 @@ namespace SE {
       } else {
         this.drawCursor(ctx, this.tilePx);
       }
+      // Creature pictures of a new size: asked of the landscape worker, a few per frame (tilecache.ts).
+      this.tiles.flush();
     }
 
     /**

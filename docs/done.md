@@ -15,3 +15,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-19 v0.9.3 feat(ui): Gaia sleeps until first life, rumble bass for altitude brush
 - 2026-10-21 v0.10.0 feat(game): space project, dinosaur comet, extinction, bands, living planet
 - 2026-10-22 v0.10.1 perf(sim): simulation in web workers, perf bench and era icons
+- 2026-10-22 v0.10.2 perf(map): look-ahead chunk loading and worker zoom pictures

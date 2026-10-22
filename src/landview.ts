@@ -22,6 +22,7 @@ namespace SE {
   /** Tiles per chunk side. */
   export const LAND_CHUNK = 16;
   const CHUNKS_X = GRID_W / LAND_CHUNK;
+  const CHUNK_COUNT = CHUNKS_X * (GRID_H / LAND_CHUNK);
   /** Composed pixels around a chunk, so smoothing at its border reads real neighbours. */
   const MARGIN = 2;
   /** Art pixels each blit reaches past its tiles, so neighbouring blits overlap instead of leaving a seam. */
@@ -98,6 +99,24 @@ namespace SE {
     refetch = false;
     /** The newest field from the worker while a brush was moving ground: taken over once it rests (it carries the stroke's settling). */
     private held: { parts: Record<string, unknown>; key: string; ms: number; tiles: number } | null = null;
+    /** Zoom pictures the worker magnified (landzoom.ts). */
+    private readonly zoom = new LandZoomCache();
+    /** k of the zoom pictures the last draw used, 0 for none (below 16 px per tile, or the feature off). */
+    private zoomK = 0;
+    /** Current chunks the last draw found without their zoom picture. */
+    private readonly zoomWanted: number[] = [];
+    /** Chunk signatures of the field as it is now (stamp === fieldStamp): drawing reads 22 × 22 tiles per chunk once per field, not per frame. */
+    private readonly sigMemo = new Uint32Array(CHUNK_COUNT);
+    private readonly sigStamp = new Uint32Array(CHUNK_COUNT);
+    private fieldStamp = 1;
+    /** The planet the field describes: work for the one before is dropped. */
+    private seed = NaN;
+    /** Chunks in view at the last frame → when they came into view out of date (-1: current by then). */
+    private seen = new Map<number, number>();
+    /** Chunks installed from an ahead job → their signature, until they come into view or change. */
+    private readonly aheadSig = new Map<number, number>();
+    /** Visible chunks were refused a job lately: nothing is asked for ahead. */
+    private backlog = false;
 
     get ready(): boolean {
       return this.state === 'ready';
@@ -118,7 +137,15 @@ namespace SE {
         this.art = art;
         this.composer = new LandComposer(art);
         this.jobs = LandJobs.start(indices);
-        if (this.jobs) this.jobs.onChunk = (n, sig, words, motion) => this.install(n, sig, words, motion);
+        if (this.jobs) {
+          this.jobs.onChunk = (m, own, prio) => this.install(m, own, prio);
+          this.jobs.onZoom = (m, reserved) => this.zoomArrived(m, reserved);
+          this.jobs.onDrop = (n, k) => this.zoom.release(n, k);
+          this.jobs.onFail = () => {
+            this.zoom.clear();
+            this.aheadSig.clear();
+          };
+        }
         this.state = 'ready';
         for (const l of this.listeners.splice(0)) l();
       }, (why) => {
@@ -132,12 +159,15 @@ namespace SE {
     refresh(world: WorldState, oceans: boolean, here = false): void {
       const key = PixelTerrain.keyOf(world, oceans);
       if (key === this.fieldKey && world === this.fieldWorld) return;
+      if (world.seed !== this.seed) this.newPlanet(world.seed);
       // Fed: the landscape worker refreshes the field from the simulation worker's states and sends it (adopt).
       if (oceans && !here && this.jobs?.fed && this.jobs.alive) {
         this.fieldWorld = world;
         if (this.seaColor) {
           this.seaColor = null;
           this.flatFresh = false;
+          this.fieldStamp++;
+          this.zoom.clear();
         }
         return;
       }
@@ -145,6 +175,9 @@ namespace SE {
       this.fieldWorld = world;
       const t0 = performance.now();
       this.field.refresh(world);
+      this.fieldStamp++;
+      // The flat sea colours draw other pictures: the zoom pictures of the other look would only wait for eviction.
+      if (!!this.seaColor === oceans) this.zoom.clear();
       this.ice.update(world, this.field, t0);
       perfHud.field(performance.now() - t0, this.field.lastRead);
       this.flatFresh = false;
@@ -187,6 +220,7 @@ namespace SE {
         return true;
       }
       const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
+      this.fieldStamp++;
       this.flatFresh = false;
       this.jobs?.fieldChanged();
       const now = performance.now();
@@ -229,6 +263,11 @@ namespace SE {
       } finally {
         this.composeHere = false;
       }
+    }
+
+    /** The landscape worker while it can raster creature pictures (tilecache.ts). */
+    get sprites(): LandJobs | null {
+      return this.jobs?.alive && this.jobs.spriteCapable ? this.jobs : null;
     }
 
     /** Chunks the worker is composing: until they arrive the map shows older ground. */
@@ -274,6 +313,7 @@ namespace SE {
       }
       this.held = null;
       mergeInto(this.field as unknown as Record<string, unknown>, parts);
+      this.fieldStamp++;
       // Its incremental bookkeeping is the worker's: a refresh here starts afresh.
       this.field.forget();
       this.fieldKey = `${key}|1`;
@@ -283,27 +323,43 @@ namespace SE {
       perfHud.field(ms, tiles);
     }
 
-    /** A chunk composed in the worker: installed if the field has not moved on since; the map redraws just its tiles (takeFresh). */
-    private install(n: number, sig: number, composed: Uint32Array, motion: LandMotion): void {
+    /**
+     * A chunk composed in the worker: installed if the field has not moved on
+     * since; the map redraws just its tiles (takeFresh). `prio` as the page
+     * asked for it last.
+     */
+    private install(m: LandChunkAnswer, own: boolean, prio: LandPriority): void {
+      const n = m.n;
       const c = this.chunks.get(n);
-      if (!c) return;
-      const cx = n % CHUNKS_X;
-      const cy = Math.floor(n / CHUNKS_X);
-      if (sig === c.sig) return;
-      if (this.field.signature(cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0) !== sig) {
-        // Composed from a field that has moved on: asked for again.
-        this.refetch = true;
-        return;
-      }
-      const side = LAND_CHUNK * 16 + 2 * MARGIN;
-      if (!this.image) this.image = c.ctx.createImageData(side, side);
-      const words = new Uint32Array(this.image.data.buffer);
-      words.set(composed);
-      this.place(c, n, cx, cy, words, motion, sig);
-      this.fresh.add(n);
       // The worker has room again: the next chunks due are asked for (want), longest waiting first.
       this.refetch = true;
-      perfHud.chunks(1, false);
+      if (c && m.words && m.sig !== c.sig && m.sig === this.sigOf(n)) {
+        const side = LAND_CHUNK * 16 + 2 * MARGIN;
+        if (!this.image) this.image = c.ctx.createImageData(side, side);
+        const words = new Uint32Array(this.image.data.buffer);
+        words.set(m.words);
+        this.place(c, n, n % CHUNKS_X, Math.floor(n / CHUNKS_X), words, m.motion, m.sig);
+        this.fresh.add(n);
+        perfHud.chunks(1, false);
+        if (prio === LandPriority.Ahead) {
+          this.aheadSig.set(n, m.sig);
+          landStats.aheadInstalled++;
+        }
+      }
+      this.zoom.workerBytes = m.held;
+      // No picture follows: the reservation goes now (only the answer to the job asked for now holds one).
+      if (own && m.k > 1 && !m.later) this.zoom.release(n, m.k);
+    }
+
+    /** A zoom picture after its chunk: kept if it shows what the chunk shows now, closed otherwise. */
+    private zoomArrived(m: LandZoomAnswer, reserved: boolean): void {
+      this.zoom.workerBytes = m.held;
+      if (!m.bitmap) {
+        if (reserved) this.zoom.release(m.n, m.k);
+        return;
+      }
+      const c = this.chunks.get(m.n);
+      this.zoom.put(m.n, m.k, m.sig, m.bitmap, !!c && c.sig === m.sig && m.sig === this.sigOf(m.n), reserved);
     }
 
     /** Tile boxes [x0, y0, x1, y1] of the chunks the worker delivered since the last call, for the map to redraw. */
@@ -331,7 +387,25 @@ namespace SE {
       const txB = Math.ceil(cam.scrollX + x1 / T);
       const tyA = Math.max(0, Math.floor(cam.scrollY + y0 / T));
       const tyB = Math.min(GRID_H, Math.ceil(cam.scrollY + y1 / T));
+      this.setZoom(T, cam.dpr);
+      // The whole view: whether visible chunks still wait for a slot is known afresh.
+      this.backlog = false;
       if (txB > txA && tyB > tyA) this.composeDue(txA, txB, tyA, tyB);
+    }
+
+    /** Zoom pictures in use at T device px per tile: k, or 0 below 16 px (the shrunk copies there), without the worker or the feature. */
+    private setZoom(T: number, dpr: number): void {
+      const k = T > 16 + 1e-6 ? Math.ceil(T / 16 - 1e-6) : 0;
+      const on = dpr >= LAND_FEATURES.zoomFromDpr && !this.composeHere && !!this.jobs?.alive && this.jobs.zoomCapable;
+      // Off for good (another screen's pixel ratio): the pictures go. Below 16 px they wait for the zoom to come back.
+      if (!on && !this.composeHere && this.zoom.size > 0) this.zoom.clear();
+      const z = on ? k : 0;
+      if (z !== this.zoomK) {
+        this.zoom.forgetRefusals();
+        // Zoom jobs for the magnification left behind are pointless now.
+        if (!this.composeHere) this.jobs?.dropZoom(z);
+      }
+      this.zoomK = z;
     }
 
     /** The chunk canvas for chunk (cx, cy), composed if its tiles changed. */
@@ -339,24 +413,15 @@ namespace SE {
       const composer = this.composer;
       if (!composer) return null;
       const n = cy * CHUNKS_X + cx;
-      let c = this.chunks.get(n);
+      const c = this.slot(n);
+      if (!c) return null;
       const side = LAND_CHUNK * 16 + 2 * MARGIN;
-      if (!c) {
-        const canvas = document.createElement('canvas');
-        canvas.width = side;
-        canvas.height = side;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-        c = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: NO_LAND_MOTION, fade: null, ice: false };
-        this.chunks.set(n, c);
-      }
-      const sig = this.field.signature(cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0);
+      const sig = this.sigOf(n);
       if (sig !== c.sig) {
         // The worker composes it; older ground (or the flat colours) shows until it arrives (install).
-        // Fed, from the worker's own field, unless the page's is ahead (a brush) or differs (flat sea colours).
         const jobs = this.composeHere ? null : this.jobs;
         if (jobs?.alive) {
-          jobs.ask(this.field, this.seaColor, n, cx * LAND_CHUNK, cy * LAND_CHUNK, side, MARGIN, sig, !jobs.fed || !!this.seaColor || this.brushing);
+          if (!this.askChunk(jobs, n, sig, LandPriority.Visible, c.sig)) this.backlog = true;
           return c.sig === -1 ? null : c;
         }
         if (performance.now() > this.deadline) {
@@ -379,6 +444,121 @@ namespace SE {
         }
       }
       return c;
+    }
+
+    /** Chunk n's entry, made blank (never composed) when first wanted. */
+    private slot(n: number): Chunk | null {
+      const had = this.chunks.get(n);
+      if (had) return had;
+      const side = LAND_CHUNK * 16 + 2 * MARGIN;
+      const canvas = document.createElement('canvas');
+      canvas.width = side;
+      canvas.height = side;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      const c: Chunk = { canvas, ctx, sig: -1, small: null, smallT: 0, smallSig: -1, motion: NO_LAND_MOTION, fade: null, ice: false };
+      this.chunks.set(n, c);
+      return c;
+    }
+
+    /**
+     * Ask the worker for chunk n at signature `sig`, with its zoom picture
+     * while the map magnifies (zoomK) and the budget has room — a zoom job
+     * asks only for that. False when that priority's slots are full, or a
+     * zoom job finds no room.
+     */
+    private askChunk(jobs: LandJobs, n: number, sig: number, prio: LandPriority, have: number): boolean {
+      const side = LAND_CHUNK * 16 + 2 * MARGIN;
+      const kz = this.zoomK;
+      const fresh = !jobs.asking(n);
+      if (fresh && !jobs.room(prio)) return false;
+      // Not while a brush reshapes the ground: its pictures change every few frames.
+      const k = kz > 1 && fresh && !this.brushing && !this.zoom.holds(n, kz, sig) && this.zoom.reserve(n, kz, side) ? kz : 0;
+      if (prio === LandPriority.Zoom && k === 0) return false;
+      // Fed, from the worker's own field, unless the page's is ahead (a brush) or differs (flat sea colours).
+      const page = !jobs.fed || !!this.seaColor || this.brushing;
+      if (jobs.ask(this.field, this.seaColor, n, (n % CHUNKS_X) * LAND_CHUNK, Math.floor(n / CHUNKS_X) * LAND_CHUNK, side, MARGIN, sig, page, prio, k, have)) return true;
+      if (k) this.zoom.release(n, k);
+      return false;
+    }
+
+    /** Chunk n's signature in the field as it is now. */
+    private sigOf(n: number): number {
+      if (this.sigStamp[n] !== this.fieldStamp) {
+        this.sigMemo[n] = this.field.signature((n % CHUNKS_X) * LAND_CHUNK, Math.floor(n / CHUNKS_X) * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0);
+        this.sigStamp[n] = this.fieldStamp;
+      }
+      return this.sigMemo[n];
+    }
+
+    /** The field now describes another planet: work and pictures for the one before go. */
+    private newPlanet(seed: number): void {
+      this.seed = seed;
+      this.jobs?.clear();
+      this.zoom.clear();
+      this.seen.clear();
+      this.aheadSig.clear();
+      this.backlog = false;
+    }
+
+    /**
+     * Once per map frame, after drawing: which chunks came into view (for
+     * measuring), and while the camera moves, the chunk it is about to show
+     * asked for — one at a time, and only when nothing visible waits.
+     */
+    frame(cam: LandCamera, w: number, h: number, motion: CameraMotion, now: number): void {
+      if (!this.ready) return;
+      this.zoom.nextFrame();
+      const T = cam.tilePx * cam.dpr;
+      const cols = w / T;
+      const rows = h / T;
+      const seen = new Map<number, number>();
+      for (const n of chunksIn(cam.scrollX, cam.scrollY, cam.scrollX + cols, cam.scrollY + rows)) {
+        let at = this.seen.get(n);
+        if (at === undefined) {
+          const c = this.chunks.get(n);
+          const current = !!c && c.sig !== -1 && c.sig === this.sigOf(n);
+          landStats.entered++;
+          if (current) landStats.readyOnEntry++;
+          at = current ? -1 : now;
+          const ahead = this.aheadSig.get(n);
+          if (ahead !== undefined) {
+            if (c && ahead === c.sig) landStats.aheadUsed++;
+            else landStats.aheadUnused++;
+            this.aheadSig.delete(n);
+          }
+        }
+        seen.set(n, at);
+      }
+      this.seen = seen;
+      let small = 0;
+      for (const c of this.chunks.values()) if (c.small) small += c.small.width * c.small.height * 4;
+      const side = LAND_CHUNK * 16 + 2 * MARGIN;
+      landStats.baseBytes = this.chunks.size * side * side * 4;
+      landStats.smallBytes = small;
+      this.zoom.budget = landZoomBudget(w, h);
+      const jobs = this.jobs;
+      if (!LAND_FEATURES.ahead || !jobs?.alive || this.composeHere) return;
+      const [ax, ay] = motion.ahead(cam.tilePx);
+      const wanted = aheadChunks(cam.scrollX, cam.scrollY, cols, rows, ax, ay);
+      // The camera turned away: a job ahead not started yet is dropped (one in view is made visible by the next draw).
+      const running = jobs.aheadChunk;
+      if (running >= 0 && !wanted.includes(running) && !seen.has(running)) {
+        jobs.cancel(running);
+        landStats.aheadDropped++;
+        // It may have started already: the next one waits a frame, so two rarely run at once.
+        return;
+      }
+      // Visible chunks waited for a slot; once one is free again they get it first (want), the backlog is over.
+      if (this.backlog && jobs.room(LandPriority.Visible)) this.backlog = false;
+      if (this.backlog || !jobs.room(LandPriority.Visible) || !jobs.room(LandPriority.Ahead)) return;
+      for (const n of wanted) {
+        const sig = this.sigOf(n);
+        const c = this.slot(n);
+        if (!c || c.sig === sig || jobs.asking(n)) continue;
+        this.askChunk(jobs, n, sig, LandPriority.Ahead, c.sig);
+        break;
+      }
     }
 
     /** Put a composed picture (in `this.image`, viewed as `words`) on chunk n: at once, or dissolving into it after a brush or a sea ice flip. */
@@ -410,6 +590,14 @@ namespace SE {
       c.sig = sig;
       this.waiting.delete(n);
       this.composed++;
+      this.zoom.forgetChunk(n);
+      // Replaced before it came into view: the picture made ahead was not needed.
+      if (this.aheadSig.delete(n)) landStats.aheadUnused++;
+      const at = this.seen.get(n);
+      if (at !== undefined && at >= 0) {
+        if (landStats.recording) landStats.ready.push(now - at);
+        this.seen.set(n, -1);
+      }
     }
 
     /** Chunks dissolving sea ice now. */
@@ -484,6 +672,8 @@ namespace SE {
       const tyA = Math.max(0, Math.floor(cam.scrollY + y0 / T));
       const tyB = Math.min(GRID_H, Math.ceil(cam.scrollY + y1 / T));
       if (txB <= txA || tyB <= tyA) return;
+      this.setZoom(T, cam.dpr);
+      this.zoomWanted.length = 0;
       if (ask) this.composeDue(txA, txB, tyA, tyB);
       ctx.save();
       ctx.beginPath();
@@ -513,6 +703,18 @@ namespace SE {
           const s = T / 16;
           const ox = (cu * LAND_CHUNK - cam.scrollX) * T;
           const oy = (cy * LAND_CHUNK - cam.scrollY) * T;
+          // The worker's magnified picture: step 1 done, a whole multiple only copies. Not while the chunk dissolves.
+          if (this.zoomK > 1 && !c.fade) {
+            const n = cy * CHUNKS_X + (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X);
+            const pic = this.zoom.get(n, k, c.sig);
+            if (pic) {
+              ctx.imageSmoothingEnabled = mode !== 'sharp';
+              ctx.imageSmoothingQuality = SMOOTHING;
+              ctx.drawImage(pic, (MARGIN + sx) * k, (MARGIN + sy) * k, sw * k, sh * k, ox + sx * s, oy + sy * s, sw * s, sh * s);
+              continue;
+            }
+            if (ask && c.sig === this.sigOf(n)) this.zoomWanted.push(n);
+          }
           const small = mode === 'smooth' ? this.small(c, T) : null;
           if (small) {
             // Whole device pixels of the cached picture, copied one to one.
@@ -530,6 +732,15 @@ namespace SE {
       }
       ctx.restore();
       perfHud.chunks(this.composed, this.pending);
+      // Current chunks drawn the old way get their zoom pictures, two at a time, after any visible chunk out of date.
+      const jobs = this.jobs;
+      if (jobs?.alive) {
+        for (const n of this.zoomWanted) {
+          const c = this.chunks.get(n);
+          if (c && !jobs.asking(n) && !this.askChunk(jobs, n, c.sig, LandPriority.Zoom, c.sig) && !jobs.room(LandPriority.Zoom)) break;
+        }
+      }
+      this.zoomWanted.length = 0;
     }
 
     /**
@@ -544,7 +755,7 @@ namespace SE {
         for (let cu = Math.floor(txA / LAND_CHUNK); cu <= Math.floor((txB - 1) / LAND_CHUNK); cu++) {
           const n = cy * CHUNKS_X + (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X);
           const c = this.chunks.get(n);
-          if (due.includes(n) || (c && c.sig === this.field.signature((n % CHUNKS_X) * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0))) continue;
+          if (due.includes(n) || (c && c.sig === this.sigOf(n))) continue;
           due.push(n);
           if (!this.waiting.has(n)) this.waiting.set(n, c && c.sig !== -1 ? performance.now() : -Infinity);
         }

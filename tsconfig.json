@@ -180,6 +180,8 @@
     "src/landcompose.ts",
     "src/landfade.ts",
     "src/landice.ts",
+    "src/landahead.ts",
+    "src/landzoom.ts",
     "src/landview.ts",
     "src/landworker.ts",
     "src/examinetile.ts",
