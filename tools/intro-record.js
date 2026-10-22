@@ -77,7 +77,8 @@ async function main() {
   const proc = launchChrome(chrome, work, a.w, a.h);
   try {
     const { ws, cdp } = await connect(work, a.w, a.h);
-    await cdp.send('Page.navigate', { url: pathToUrl(html) });
+    // The planet is set up synchronously below: the simulation runs on the page (src/simhost.ts).
+    await cdp.send('Page.navigate', { url: `${pathToUrl(html)}?sim=direct` });
     for (let k = 0; ; k++) {
       await sleep(250);
       try { if (await cdp.eval('!!(window.SE && SE.app && SE.app.title)')) break; } catch { /* still loading */ }

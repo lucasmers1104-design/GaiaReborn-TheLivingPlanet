@@ -59,12 +59,41 @@ namespace SE {
     [1.0, [255, 230, 120]],
   ];
 
+  const canvasBoxes = new WeakMap<HTMLCanvasElement, { width: number; height: number }>();
+  let canvasSizer: ResizeObserver | null = null;
+
+  /**
+   * A canvas's CSS box, kept current by a ResizeObserver. Reading it with
+   * getBoundingClientRect every frame forced a synchronous layout after each
+   * DOM write of the frame (10 % of the main thread in the biosphere
+   * scenario, tools/perf-bench.js).
+   */
+  function cssSize(canvas: HTMLCanvasElement): { width: number; height: number } {
+    let box = canvasBoxes.get(canvas);
+    if (box) return box;
+    const r = canvas.getBoundingClientRect();
+    if (typeof ResizeObserver === 'undefined') return r;
+    box = { width: r.width, height: r.height };
+    canvasBoxes.set(canvas, box);
+    canvasSizer ??= new ResizeObserver((entries) => {
+      for (const e of entries) {
+        const b = canvasBoxes.get(e.target as HTMLCanvasElement);
+        if (!b) continue;
+        const size = e.borderBoxSize?.[0];
+        b.width = size ? size.inlineSize : e.contentRect.width;
+        b.height = size ? size.blockSize : e.contentRect.height;
+      }
+    });
+    canvasSizer.observe(canvas);
+    return box;
+  }
+
   /**
    * Resize a canvas's backing store to its CSS box, in device pixels — or a
    * fraction of them, for a deliberately chunky picture.
    */
   export function fitCanvas(canvas: HTMLCanvasElement, scale = 1): boolean {
-    const rect = canvas.getBoundingClientRect();
+    const rect = cssSize(canvas);
     if (rect.width <= 0 || rect.height <= 0) return false;
     const dpr = (window.devicePixelRatio || 1) * scale;
     const w = Math.max(1, Math.round(rect.width * dpr));
@@ -158,9 +187,14 @@ namespace SE {
     return 1 + clamp(slope * 1.4, -0.3, 0.3);
   }
 
-  /** Colour of a tile in a given map mode, with relief on the surface modes. */
-  export function mapColor(world: WorldState, i: number, mode: MapMode): Rgb {
-    const flat = flatMapColor(world, i, mode);
+  /**
+   * Colour of a tile in a given map mode, with relief on the surface modes.
+   * `hidden` is a bit mask of switched-off categories: biomes on the habitat
+   * map, life classes on the life map (bit 0 there: the faint plant cover),
+   * eras on the technology map.
+   */
+  export function mapColor(world: WorldState, i: number, mode: MapMode, hidden = 0): Rgb {
+    const flat = flatMapColor(world, i, mode, hidden);
     switch (mode) {
       case MapMode.Terrain:
       case MapMode.Biomes:
@@ -171,7 +205,7 @@ namespace SE {
     }
   }
 
-  function flatMapColor(world: WorldState, i: number, mode: MapMode): Rgb {
+  function flatMapColor(world: WorldState, i: number, mode: MapMode, hidden: number): Rgb {
     const water = world.isWater(i);
 
     // The drainage network is one of the things the overview is for — it shows
@@ -231,16 +265,26 @@ namespace SE {
 
       case MapMode.Biomes:
         // The sea in the main map's two classes: no depth.
+        if (hidden & (1 << world.biome[i])) return water ? [16, 24, 48] : [34, 30, 26];
         return BIOME_COLORS[world.biome[i]];
 
       case MapMode.LifeMap: {
         // The overview map stays area-filling on purpose: it answers "where is
         // this species", which is exactly what the sparse Edit view cannot.
         // Where no animal lives, the leading plant group shows faintly.
-        const c = world.dominantLife[i] as Life;
+        let c = world.dominantLife[i] as Life;
+        if (c !== Life.None && hidden & (1 << c)) {
+          // A hidden leader hands the tile to the densest class still shown.
+          let best = 0;
+          c = Life.None;
+          for (let k = 1; k < LIFE_COUNT; k++) {
+            const d = world.density(i, k);
+            if (d > best && !(hidden & (1 << k))) { best = d; c = k; }
+          }
+        }
         if (c === Life.None) {
           const g = world.floraTop[i] as Flora;
-          if (!water && g !== Flora.None && world.vegetation[i] > 0.05) return shade(FLORA[g].color, 0.55);
+          if (!(hidden & 1) && !water && g !== Flora.None && world.vegetation[i] > 0.05) return shade(FLORA[g].color, 0.55);
           return water ? [16, 24, 48] : [34, 30, 26];
         }
         const hue = LIFE[c].color;
@@ -250,7 +294,7 @@ namespace SE {
 
       case MapMode.Technology: {
         const t = world.tech[i];
-        if (t === Tech.None) return water ? [16, 24, 48] : [34, 30, 26];
+        if (t === Tech.None || hidden & (1 << t)) return water ? [16, 24, 48] : [34, 30, 26];
         return TECH_COLORS[t];
       }
 
@@ -582,6 +626,8 @@ namespace SE {
         // A full redraw on a huge screen can take tens of milliseconds; the
         // slower it is, the less often the world's progress triggers one.
         const interval = Math.max(250, this.drawCost * 8);
+        // Composing on the page ran out of time last frame: finish it now, not a frame later.
+        if (this.pixelTerrain && this.land.pending) this.dirty = true;
         const worldMoved = !this.holdWorld && world.ticks !== this.baseTick && now - this.baseTime > interval;
         const scrolled = this.scrollX !== this.baseScrollX || this.scrollY !== this.baseScrollY;
         if (this.dirty || key !== this.baseKey || worldMoved || (scrolled && !this.shiftBase(world, dpr))) {
@@ -589,6 +635,9 @@ namespace SE {
           const box = this.dirtyTiles;
           if (box && this.pixelTerrain) this.land.refreshBox(world, this.layers.oceans, box[0], Math.max(0, box[1]), box[2], Math.min(GRID_H - 1, box[3]));
           this.dirtyTiles = null;
+          // The full redraw draws the worker's latest pictures and asks for every chunk out of date (with a field just taken over).
+          this.land.takeFresh();
+          this.land.refetch = false;
           this.drawBase(world, dpr);
           this.drawCost = performance.now() - t0;
           perfHud.drawBase(this.drawCost);
@@ -610,6 +659,14 @@ namespace SE {
           if ((changed || fade) && this.redrawTiles(world, dpr, changed, fade) && changed) {
             this.dirtyTiles = null;
             this.tilesAt = now;
+          }
+          if (this.pixelTerrain) {
+            // The landscape worker's pictures: each chunk redrawn alone as it arrives; after a new field, its chunks asked for.
+            for (const box of this.land.takeFresh()) this.redrawChunk(world, dpr, box);
+            if (this.land.refetch) {
+              this.land.refetch = false;
+              this.land.want({ scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr }, 0, 0, this.canvas.width, this.canvas.height);
+            }
           }
         }
         // The terrain or the cities ran out of time for composing: finish next frame.
@@ -637,7 +694,7 @@ namespace SE {
       }
       if (!fx) this.fx.show.flush(world);
       // Only a finished base counts: while the terrain is still composing it shows older ground.
-      if (!this.land.pending) this.fx.baseTick = this.baseTick;
+      if (!this.land.pending && !this.land.composing) this.fx.baseTick = this.baseTick;
       if (fx) {
         fx.update(world, cam, this.cols, this.rows, now, this.tickPhase);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -699,6 +756,18 @@ namespace SE {
      * tile's picture reads its neighbours from, together with the box `more`
      * of tiles to draw again without re-reading them.
      */
+    /** One chunk the landscape worker delivered: its tiles and one around (the art's overlap), drawn as composed, nothing asked for. */
+    private redrawChunk(world: WorldState, dpr: number, box: readonly [number, number, number, number]): void {
+      const size = this.tilePx;
+      let rx = (((box[0] - 1 - this.scrollX) % GRID_W) + GRID_W) % GRID_W;
+      if (rx > this.cols) rx -= GRID_W;
+      const span = box[2] - box[0] + 3;
+      if (rx + span < 0 || rx > this.cols) return;
+      this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.baseCtx.imageSmoothingEnabled = false;
+      this.drawLandRegion(world, rx * size, (box[1] - 1 - this.scrollY) * size, (rx + span) * size, (box[3] + 2 - this.scrollY) * size, false);
+    }
+
     private redrawTiles(world: WorldState, dpr: number, changed: readonly [number, number, number, number] | null,
       more: readonly [number, number, number, number] | null = null): boolean {
       const pad = 4; // SIGNATURE_REACH (landfield.ts) + 1
@@ -1010,7 +1079,7 @@ namespace SE {
      * The pixel terrain over every tile overlapping a rectangle of the view
      * (CSS pixels), then cities, events and the climate overlay on top.
      */
-    private drawLandRegion(world: WorldState, x0: number, y0: number, x1: number, y1: number): void {
+    private drawLandRegion(world: WorldState, x0: number, y0: number, x1: number, y1: number, ask = true): void {
       const ctx = this.baseCtx;
       const dpr = window.devicePixelRatio || 1;
       const size = this.tilePx;
@@ -1025,7 +1094,7 @@ namespace SE {
       const cam: LandCamera = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: size, dpr };
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       if (land.ready) {
-        land.draw(ctx, cam, (txA - this.scrollX) * T, (tyA - this.scrollY) * T, (txB - this.scrollX) * T, (tyB - this.scrollY) * T);
+        land.draw(ctx, cam, (txA - this.scrollX) * T, (tyA - this.scrollY) * T, (txB - this.scrollX) * T, (tyB - this.scrollY) * T, ask);
         this.drawCities(world, x0, y0, x1, y1);
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1156,6 +1225,12 @@ namespace SE {
 
   /* --------------------------------------------------------------- MapView -- */
 
+  /** How long a news spot pulses on the overview, and one ring's cycle. */
+  const NEWS_PING_MS = 20000;
+  const NEWS_PULSE_MS = 1400;
+  const NEWS_PINGS_MAX = 24;
+  const CITY_RIM: Rgb = [10, 14, 12];
+
   export class MapView {
     mode: MapMode = MapMode.Terrain;
     /** Flat Robinson-ish projection, or the planet as a globe. */
@@ -1170,6 +1245,10 @@ namespace SE {
     pixelScale = 1;
     /** Draw stars and black space around the globe, or leave it transparent. */
     space = true;
+    /** Per mode, the categories switched off in the legend (see `mapColor`). */
+    readonly hidden: number[] = MAP_MODES.map(() => 0);
+    /** Where news happened, pulsing in every mode until NEWS_PING_MS have passed. */
+    private readonly pings: { x: number; y: number; color: string; born: number }[] = [];
 
     private readonly canvas: HTMLCanvasElement;
     private readonly ctx: CanvasRenderingContext2D;
@@ -1231,18 +1310,10 @@ namespace SE {
 
       // The planet texture only changes when the world does; the globe's spin
       // and the viewport box redraw on top of an unchanged texture.
-      const key = `${world.ticks}|${this.mode}|${world.revision}`;
+      const key = `${world.ticks}|${this.mode}|${world.revision}|${this.hidden[this.mode]}`;
       if (key !== this.textureKey) {
         this.textureKey = key;
-        const data = this.image.data;
-        for (let i = 0; i < TILE_COUNT; i++) {
-          const c = mapColor(world, i, this.mode);
-          const p = i * 4;
-          data[p] = c[0];
-          data[p + 1] = c[1];
-          data[p + 2] = c[2];
-        }
-        this.bufferCtx.putImageData(this.image, 0, 0);
+        this.paint(world);
         this.globeSrc = null;
       }
 
@@ -1260,20 +1331,91 @@ namespace SE {
         ctx.drawImage(this.buffer, 0, 0, GRID_W, GRID_H, 0, 0, w, h);
         if (this.mode === MapMode.AirCurrents) this.winds.drawFlat(ctx, w, h, this.pixelScale * (window.devicePixelRatio || 1));
         this.drawEditRect(ctx, w, h);
+        this.drawPings(ctx, (x, y) => [x * w / GRID_W, y * h / GRID_H]);
       }
     }
 
-    /** A fresh, enlarged image of the whole planet in the current mode. */
-    exportImage(world: WorldState, scale = 4): HTMLCanvasElement {
+    /** Mark the spot of a piece of news. */
+    ping(x: number, y: number, color: string): void {
+      if (this.pings.length >= NEWS_PINGS_MAX) this.pings.shift();
+      this.pings.push({ x, y, color, born: performance.now() });
+    }
+
+    /** Rings are pulsing: the map wants frames, not just the few a still texture needs. */
+    get pulsing(): boolean {
+      return this.pings.length > 0;
+    }
+
+    /** The planet in the current mode into the buffer, the technology map's cities stamped large. */
+    private paint(world: WorldState): void {
       const data = this.image.data;
+      const hidden = this.hidden[this.mode];
+      const stamp = this.mode === MapMode.Technology;
+      const cities: number[] = [];
       for (let i = 0; i < TILE_COUNT; i++) {
-        const c = mapColor(world, i, this.mode);
+        const c = mapColor(world, i, this.mode, hidden);
         const p = i * 4;
         data[p] = c[0];
         data[p + 1] = c[1];
         data[p + 2] = c[2];
+        if (stamp && world.tech[i] !== Tech.None && !(hidden & (1 << world.tech[i]))) cities.push(i);
+      }
+      // A city is one tile, under two screen pixels here: a block with a dark
+      // rim makes each one findable. Rims first, so no rim cuts a neighbour.
+      for (const rim of [true, false]) {
+        for (const i of cities) {
+          const r = (citySize(world.cityPop[i]) === CitySize.Metropolis ? 2 : 1) + (rim ? 1 : 0);
+          const c = rim ? CITY_RIM : TECH_COLORS[world.tech[i]];
+          const x0 = i % GRID_W;
+          const y0 = Math.floor(i / GRID_W);
+          for (let y = Math.max(0, y0 - r); y <= Math.min(GRID_H - 1, y0 + r); y++) {
+            for (let dx = -r; dx <= r; dx++) {
+              const p = idx(wrapX(x0 + dx), y) * 4;
+              data[p] = c[0];
+              data[p + 1] = c[1];
+              data[p + 2] = c[2];
+            }
+          }
+        }
       }
       this.bufferCtx.putImageData(this.image, 0, 0);
+    }
+
+    /** Two rings pulsing out of each news spot, fading towards its end; `at` places a tile point on the canvas. */
+    private drawPings(ctx: CanvasRenderingContext2D, at: (x: number, y: number) => readonly [number, number] | null): void {
+      const now = performance.now();
+      const unit = this.canvas.width / Math.max(1, this.canvas.clientWidth);
+      for (let k = this.pings.length - 1; k >= 0; k--) {
+        const p = this.pings[k];
+        const age = now - p.born;
+        if (age >= NEWS_PING_MS) { this.pings.splice(k, 1); continue; }
+        const pt = at(p.x + 0.5, p.y + 0.5);
+        if (!pt) continue;
+        const fade = Math.min(1, (NEWS_PING_MS - age) / 3000);
+        for (let r = 0; r < 2; r++) {
+          const t = (age / NEWS_PULSE_MS + r / 2) % 1;
+          ctx.globalAlpha = fade * (1 - t);
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], unit * (3 + 13 * t), 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(6,14,12,0.7)';
+          ctx.lineWidth = unit * 3.5;
+          ctx.stroke();
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = unit * 2;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = fade;
+        ctx.fillStyle = 'rgba(6,14,12,0.8)';
+        ctx.fillRect(pt[0] - unit * 2.5, pt[1] - unit * 2.5, unit * 5, unit * 5);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(pt[0] - unit * 1.5, pt[1] - unit * 1.5, unit * 3, unit * 3);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    /** A fresh, enlarged image of the whole planet in the current mode. */
+    exportImage(world: WorldState, scale = 4): HTMLCanvasElement {
+      this.paint(world);
       this.textureKey = '';
       const out = document.createElement('canvas');
       out.width = GRID_W * scale;
@@ -1334,6 +1476,21 @@ namespace SE {
       this.decorateGlobe(ctx, w, h, radius, cx, cy);
       if (this.mode === MapMode.AirCurrents) this.winds.drawGlobe(ctx, radius, cx, cy, this.spin, this.tilt);
       this.drawGlobeRect(ctx, radius, cx, cy);
+      this.drawPings(ctx, (x, y) => this.globePoint(x, y, radius, cx, cy));
+    }
+
+    /** A tile position on the globe's disc, or null on its far side. */
+    private globePoint(tx: number, ty: number, r: number, cx: number, cy: number): [number, number] | null {
+      const lon = (tx / GRID_W - 0.5) * Math.PI * 2 - this.spin;
+      const lat = (0.5 - ty / GRID_H) * Math.PI;
+      const x = Math.cos(lat) * Math.sin(lon);
+      const y = Math.sin(lat);
+      const z = Math.cos(lat) * Math.cos(lon);
+      // Inverse of the tilt in renderGlobe; z is towards the viewer.
+      const cosT = Math.cos(this.tilt);
+      const sinT = Math.sin(this.tilt);
+      if (y * sinT + z * cosT < 0) return null;
+      return [cx + x * r, cy - (y * cosT - z * sinT) * r];
     }
 
     /** Ease the globe towards the Edit window's viewport; idle spin without one. */
@@ -1366,25 +1523,14 @@ namespace SE {
       for (let i = 0; i < N; i++) pts.push([x1 - (x1 - x0) * i / N, y1]);
       for (let i = 0; i <= N; i++) pts.push([x0, y1 - (y1 - y0) * i / N]);
 
-      const cosT = Math.cos(this.tilt);
-      const sinT = Math.sin(this.tilt);
       const path = (): void => {
         ctx.beginPath();
         let drawing = false;
         for (const [tx, ty] of pts) {
-          const lon = (tx / GRID_W - 0.5) * Math.PI * 2 - this.spin;
-          const lat = (0.5 - ty / GRID_H) * Math.PI;
-          const x = Math.cos(lat) * Math.sin(lon);
-          const y = Math.sin(lat);
-          const z = Math.cos(lat) * Math.cos(lon);
-          // Inverse of the tilt in renderGlobe; z is towards the viewer.
-          const up = y * cosT - z * sinT;
-          const depth = y * sinT + z * cosT;
-          if (depth < 0) { drawing = false; continue; }
-          const px = cx + x * r;
-          const py = cy - up * r;
-          if (drawing) ctx.lineTo(px, py);
-          else ctx.moveTo(px, py);
+          const pt = this.globePoint(tx, ty, r, cx, cy);
+          if (!pt) { drawing = false; continue; }
+          if (drawing) ctx.lineTo(pt[0], pt[1]);
+          else ctx.moveTo(pt[0], pt[1]);
           drawing = true;
         }
         ctx.stroke();

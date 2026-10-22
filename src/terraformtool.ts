@@ -71,6 +71,8 @@ namespace SE {
     perSecond = 0;
     /** Which way the running (or last) stroke works. */
     sign: 1 | -1 = 1;
+    /** The last step's dabs, flat [x, y, radius, sign, seconds] each, for the simulation to repeat (SimCore.dabs). */
+    readonly dabs: number[] = [];
     private last: { x: number; y: number } | null = null;
     private held = 0;
     private readonly touched = new Set<number>();
@@ -161,8 +163,12 @@ namespace SE {
       let emerged = 0;
       let flooded = 0;
       let height = 0;
+      this.dabs.length = 0;
       for (let k = 1; k <= n; k++) {
-        const d = terraformDab(world, wrapX(Math.round(from.x + (dx * k) / n)), Math.round(from.y + (dy * k) / n), brush, push / n);
+        const dx1 = wrapX(Math.round(from.x + (dx * k) / n));
+        const dy1 = Math.round(from.y + (dy * k) / n);
+        this.dabs.push(dx1, dy1, brush.radius, brush.sign, push / n);
+        const d = terraformDab(world, dx1, dy1, brush, push / n);
         for (const t of d.tiles) { tiles.push(t); this.touched.add(t); }
         moved += d.moved;
         emerged += d.emerged;

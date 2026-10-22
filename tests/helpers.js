@@ -21,50 +21,27 @@ function loadSE() {
   return SE;
 }
 
-/** A complete simulation without any UI, ticking exactly like App.tick, on an epoch's planet (src/epochs.ts). */
+/**
+ * A complete simulation without any UI on an epoch's planet (src/epochs.ts):
+ * the app's own core (src/simcore.ts), ticked by its harness tick, which is
+ * the order these tests were tuned to (no disasters, lexicon or time scales;
+ * SimCore.tick is the app's full order). `s.core` is the SimCore.
+ */
 function makeSim(seed = 12345, epoch = 'random') {
   const SE = loadSE();
+  const core = new SE.SimCore();
   const s = {
-    SE,
-    world: new SE.WorldState(),
-    params: new SE.ModelParams(),
-    geo: new SE.GeoSystem(),
-    climate: new SE.ClimateSystem(),
-    flora: new SE.FloraSystem(),
-    life: new SE.LifeSystem(),
-    civ: new SE.CivSystem(),
-    events: new SE.EventSystem(),
-    atmo: new SE.AtmosphereSystem(),
-    history: new SE.HistoryRecorder(),
+    SE, core,
+    world: core.world, params: core.params, geo: core.geo, climate: core.climate, flora: core.flora, life: core.life,
+    civ: core.civ, events: core.events, atmo: core.atmo, history: core.history, evo: core.evolution, hazards: core.hazards,
   };
-  s.evo = new SE.EvolutionSystem(s.life, s.flora);
-  s.hazards = new SE.HazardSystem();
+  // Only the civilization's events reach the harness; disasters never start by themselves here (no hazardSink).
   SE.civEventSink = (k, x, y) => s.events.trigger(s.world, k, x, y);
   s.world.reset(seed, SE.OCEAN_FRACTION, epoch);
   SE.applyEpochParams(s.params, epoch);
   s.evo.refresh(s.world, s.params, true);
 
-  s.tick = () => {
-    const { world: w, params: p } = s;
-    s.geo.step(w, p);
-    s.events.step(w, p);
-    SE.RiverSystem.maybeRebuild(w);
-    s.climate.step(w, p);
-    s.flora.step(w, p);
-    SE.BiomeSystem.step(w);
-    SE.CoalSystem.step(w);
-    SE.OilSystem.step(w);
-    s.life.stepLife(w, p, s.atmo);
-    SE.placeTermiteMound(w);
-    s.evo.step(w, p);
-    s.civ.step(w, p, s.atmo);
-    s.atmo.step(w, p);
-    SE.regenOmega(w);
-    w.ticks++;
-    w.absoluteYears += w.yearsPerTick;
-    w.scaleYears += w.yearsPerTick;
-    s.history.sample(w);
-  };
+  s.tick = () => core.harnessTick();
 
   /**
    * Answer the dinosaurs' question for the player (src/comet.ts): 'survive'

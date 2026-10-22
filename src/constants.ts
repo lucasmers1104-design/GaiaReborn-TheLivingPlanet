@@ -775,6 +775,11 @@ namespace SE {
     'Atomzeitalter', 'Informationszeitalter', 'Nanotech-Zeitalter',
   ];
 
+  /** File stem under assets/events/ for each era's badge. */
+  export const TECH_ICONS: readonly string[] = [
+    '', 'era-stone', 'era-bronze', 'era-iron', 'era-industrial', 'era-atomic', 'era-information', 'era-nanotech',
+  ];
+
   /** Ω cost of placing a city at each technology level. */
   export const TECH_COST: readonly number[] = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500];
 

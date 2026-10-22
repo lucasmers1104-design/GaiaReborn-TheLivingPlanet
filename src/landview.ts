@@ -89,6 +89,15 @@ namespace SE {
     private readonly fading = new Map<number, Chunk>();
     /** Chunk number → when it was first seen out of date (-Infinity: never composed), until composed. */
     private readonly waiting = new Map<number, number>();
+    /** The worker composing chunks (landworker.ts); null where none runs, or for the snapshot (`picture`). */
+    private jobs: LandJobs | null = null;
+    private composeHere = false;
+    /** Chunks the worker delivered and the map has not redrawn yet. */
+    private readonly fresh = new Set<number>();
+    /** A new field (or a stale answer) means chunks to ask for again (want). */
+    refetch = false;
+    /** The newest field from the worker while a brush was moving ground: taken over once it rests (it carries the stroke's settling). */
+    private held: { parts: Record<string, unknown>; key: string; ms: number; tiles: number } | null = null;
 
     get ready(): boolean {
       return this.state === 'ready';
@@ -105,9 +114,11 @@ namespace SE {
       this.listeners.push(fn);
       if (this.state !== 'idle') return;
       this.state = 'loading';
-      decodeLandAtlas((art) => {
+      decodeLandAtlas((art, indices) => {
         this.art = art;
         this.composer = new LandComposer(art);
+        this.jobs = LandJobs.start(indices);
+        if (this.jobs) this.jobs.onChunk = (n, sig, words, motion) => this.install(n, sig, words, motion);
         this.state = 'ready';
         for (const l of this.listeners.splice(0)) l();
       }, (why) => {
@@ -118,9 +129,18 @@ namespace SE {
     }
 
     /** Read the world into the field when it changed; `oceans` false draws water as flat elevation colours. */
-    refresh(world: WorldState, oceans: boolean): void {
+    refresh(world: WorldState, oceans: boolean, here = false): void {
       const key = PixelTerrain.keyOf(world, oceans);
       if (key === this.fieldKey && world === this.fieldWorld) return;
+      // Fed: the landscape worker refreshes the field from the simulation worker's states and sends it (adopt).
+      if (oceans && !here && this.jobs?.fed && this.jobs.alive) {
+        this.fieldWorld = world;
+        if (this.seaColor) {
+          this.seaColor = null;
+          this.flatFresh = false;
+        }
+        return;
+      }
       this.fieldKey = key;
       this.fieldWorld = world;
       const t0 = performance.now();
@@ -128,6 +148,7 @@ namespace SE {
       this.ice.update(world, this.field, t0);
       perfHud.field(performance.now() - t0, this.field.lastRead);
       this.flatFresh = false;
+      this.jobs?.fieldChanged();
       if (oceans) {
         this.seaColor = null;
       } else {
@@ -167,6 +188,7 @@ namespace SE {
       }
       const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
       this.flatFresh = false;
+      this.jobs?.fieldChanged();
       const now = performance.now();
       const b = this.brushBox;
       if (b && now - this.brushAt < FADE_WINDOW_MS) {
@@ -182,7 +204,8 @@ namespace SE {
 
     /** Read the world into the field if it describes another planet (the map keeps it current). */
     ensure(world: WorldState): void {
-      if (this.fieldWorld !== world || !this.fieldKey.startsWith(`${world.seed}|`)) this.refresh(world, true);
+      // Read here when the field is another planet's: the snapshot and the examine crop are wanted now.
+      if (this.fieldWorld !== world || !this.fieldKey.startsWith(`${world.seed}|`)) this.refresh(world, true, true);
     }
 
     /** The whole planet at `tilePx` CSS px per tile, every chunk composed (the map snapshot); null before the atlas is ready. */
@@ -195,12 +218,120 @@ namespace SE {
       const ctx = out.getContext('2d');
       if (!ctx) return null;
       const cam: LandCamera = { scrollX: 0, scrollY: 0, tilePx, dpr: 1 };
-      // Each draw composes for COMPOSE_BUDGET_MS; repeat until no chunk is missing.
-      for (let pass = 0; pass < CHUNKS_X * (GRID_H / LAND_CHUNK) + 1; pass++) {
-        this.draw(ctx, cam, 0, 0, out.width, out.height);
-        if (!this.pending) return out;
+      // Each draw composes for COMPOSE_BUDGET_MS; repeat until no chunk is missing. Here, not in the worker: it is wanted now.
+      this.composeHere = true;
+      try {
+        for (let pass = 0; pass < CHUNKS_X * (GRID_H / LAND_CHUNK) + 1; pass++) {
+          this.draw(ctx, cam, 0, 0, out.width, out.height);
+          if (!this.pending) return out;
+        }
+        return out;
+      } finally {
+        this.composeHere = false;
       }
+    }
+
+    /** Chunks the worker is composing: until they arrive the map shows older ground. */
+    get composing(): boolean {
+      return !!this.jobs && this.jobs.busy > 0;
+    }
+
+    /**
+     * Let the landscape worker keep the field, refreshed from the simulation
+     * worker's states (`connect` hands that worker the port: SimHost.feed).
+     * The full refresh after a plate shift (≈ 40 ms) then never runs here.
+     */
+    feedFrom(connect: (port: MessagePort) => boolean): void {
+      const jobs = this.jobs;
+      const port = jobs?.feedPort();
+      if (!jobs || !port || !connect(port)) return;
+      jobs.fed = true;
+      jobs.onField = (parts, key, ms, tiles) => this.adopt(parts, key, ms, tiles);
+    }
+
+    /** The page keeps the field again (the simulation worker is gone); the next refresh reads everything. */
+    fieldHere(): void {
+      if (!this.jobs) return;
+      this.jobs.fed = false;
+      this.jobs.fieldChanged();
+      this.field.forget();
+      this.fieldKey = '';
+    }
+
+    /** The brush moved ground lately: the page's own field is ahead of the worker's. */
+    private get brushing(): boolean {
+      return performance.now() - this.brushAt < FADE_WINDOW_MS;
+    }
+
+    /** A field the landscape worker refreshed: taken over unless the brush's field is ahead of it. */
+    private adopt(parts: Record<string, unknown>, key: string, ms: number, tiles: number): void {
+      if (!this.jobs?.fed || this.seaColor) return;
+      // While a brush moves ground the page's field is ahead, and a field of a planet whose state has not reached the
+      // page yet does not fit it: the newest such field waits, taken over by takeFresh once it does.
+      if (this.brushing || (this.fieldWorld && !key.startsWith(`${this.fieldWorld.seed}|`))) {
+        this.held = { parts, key, ms, tiles };
+        return;
+      }
+      this.held = null;
+      mergeInto(this.field as unknown as Record<string, unknown>, parts);
+      // Its incremental bookkeeping is the worker's: a refresh here starts afresh.
+      this.field.forget();
+      this.fieldKey = `${key}|1`;
+      if (this.fieldWorld) this.ice.update(this.fieldWorld, this.field, performance.now());
+      this.flatFresh = false;
+      this.refetch = true;
+      perfHud.field(ms, tiles);
+    }
+
+    /** A chunk composed in the worker: installed if the field has not moved on since; the map redraws just its tiles (takeFresh). */
+    private install(n: number, sig: number, composed: Uint32Array, motion: LandMotion): void {
+      const c = this.chunks.get(n);
+      if (!c) return;
+      const cx = n % CHUNKS_X;
+      const cy = Math.floor(n / CHUNKS_X);
+      if (sig === c.sig) return;
+      if (this.field.signature(cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0) !== sig) {
+        // Composed from a field that has moved on: asked for again.
+        this.refetch = true;
+        return;
+      }
+      const side = LAND_CHUNK * 16 + 2 * MARGIN;
+      if (!this.image) this.image = c.ctx.createImageData(side, side);
+      const words = new Uint32Array(this.image.data.buffer);
+      words.set(composed);
+      this.place(c, n, cx, cy, words, motion, sig);
+      this.fresh.add(n);
+      // The worker has room again: the next chunks due are asked for (want), longest waiting first.
+      this.refetch = true;
+      perfHud.chunks(1, false);
+    }
+
+    /** Tile boxes [x0, y0, x1, y1] of the chunks the worker delivered since the last call, for the map to redraw. */
+    takeFresh(): [number, number, number, number][] {
+      const held = this.held;
+      if (held && !this.brushing) {
+        this.held = null;
+        this.adopt(held.parts, held.key, held.ms, held.tiles);
+      }
+      const out: [number, number, number, number][] = [];
+      for (const n of this.fresh) {
+        const x = (n % CHUNKS_X) * LAND_CHUNK;
+        const y = Math.floor(n / CHUNKS_X) * LAND_CHUNK;
+        out.push([x, y, x + LAND_CHUNK - 1, y + LAND_CHUNK - 1]);
+      }
+      this.fresh.clear();
       return out;
+    }
+
+    /** Ask the worker for the chunks over a device-pixel rectangle without drawing: after a new field, their pictures arrive one by one. */
+    want(cam: LandCamera, x0: number, y0: number, x1: number, y1: number): void {
+      if (!this.ready || !this.jobs) return;
+      const T = cam.tilePx * cam.dpr;
+      const txA = Math.floor(cam.scrollX + x0 / T);
+      const txB = Math.ceil(cam.scrollX + x1 / T);
+      const tyA = Math.max(0, Math.floor(cam.scrollY + y0 / T));
+      const tyB = Math.min(GRID_H, Math.ceil(cam.scrollY + y1 / T));
+      if (txB > txA && tyB > tyA) this.composeDue(txA, txB, tyA, tyB);
     }
 
     /** The chunk canvas for chunk (cx, cy), composed if its tiles changed. */
@@ -221,6 +352,13 @@ namespace SE {
       }
       const sig = this.field.signature(cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, this.seaColor ? 1 : 0);
       if (sig !== c.sig) {
+        // The worker composes it; older ground (or the flat colours) shows until it arrives (install).
+        // Fed, from the worker's own field, unless the page's is ahead (a brush) or differs (flat sea colours).
+        const jobs = this.composeHere ? null : this.jobs;
+        if (jobs?.alive) {
+          jobs.ask(this.field, this.seaColor, n, cx * LAND_CHUNK, cy * LAND_CHUNK, side, MARGIN, sig, !jobs.fed || !!this.seaColor || this.brushing);
+          return c.sig === -1 ? null : c;
+        }
         if (performance.now() > this.deadline) {
           this.pending = true;
           return c.sig === -1 ? null : c;
@@ -228,32 +366,7 @@ namespace SE {
         if (!this.image) this.image = c.ctx.createImageData(side, side);
         const words = new Uint32Array(this.image.data.buffer);
         composer.compose(this.field, cx * LAND_CHUNK, cy * LAND_CHUNK, LAND_CHUNK, LAND_CHUNK, MARGIN, words, this.seaColor);
-        const now = performance.now();
-        const brush = c.sig !== -1 && this.brushNear(cx, cy, now);
-        // Sea ice dissolves when zoomed in far enough and below the cap; a calving tile always does.
-        const ice = c.sig !== -1 && !brush && this.ice.near(cx, cy, now) && (this.ice.holding(cx, cy) ||
-          (this.tilePx >= ICE_ANIM.minTilePx && (c.ice || this.iceFades() < ICE_ANIM.maxFades)));
-        // A chunk already dissolving keeps going rather than jump to its newest picture.
-        if (brush || ice || (c.fade !== null && !c.fade.settled)) {
-          const ox = cx * LAND_CHUNK * 16 - MARGIN;
-          const oy = cy * LAND_CHUNK * 16 - MARGIN;
-          c.fade ??= new LandFade(c.ctx.getImageData(0, 0, side, side), side, ox, oy);
-          if (brush || ice) c.ice = ice;
-          const timing = c.ice && this.art ? this.ice.timing(this.art, new Uint32Array(c.fade.image.data.buffer), words, side, ox, oy) : null;
-          c.fade.retarget(words, now, timing);
-          c.fade.step(now);
-          c.ctx.putImageData(c.fade.image, 0, 0);
-          if (!c.fade.settled) this.fading.set(n, c);
-        } else {
-          c.fade = null;
-          c.ice = false;
-          this.fading.delete(n);
-          c.ctx.putImageData(this.image, 0, 0);
-        }
-        c.motion = composer.motion;
-        c.sig = sig;
-        this.waiting.delete(n);
-        this.composed++;
+        this.place(c, n, cx, cy, words, composer.motion, sig);
       } else if (c.fade) {
         const now = performance.now();
         if (c.fade.step(now)) {
@@ -266,6 +379,37 @@ namespace SE {
         }
       }
       return c;
+    }
+
+    /** Put a composed picture (in `this.image`, viewed as `words`) on chunk n: at once, or dissolving into it after a brush or a sea ice flip. */
+    private place(c: Chunk, n: number, cx: number, cy: number, words: Uint32Array, motion: LandMotion, sig: number): void {
+      const side = LAND_CHUNK * 16 + 2 * MARGIN;
+      const now = performance.now();
+      const brush = c.sig !== -1 && this.brushNear(cx, cy, now);
+      // Sea ice dissolves when zoomed in far enough and below the cap; a calving tile always does.
+      const ice = c.sig !== -1 && !brush && this.ice.near(cx, cy, now) && (this.ice.holding(cx, cy) ||
+        (this.tilePx >= ICE_ANIM.minTilePx && (c.ice || this.iceFades() < ICE_ANIM.maxFades)));
+      // A chunk already dissolving keeps going rather than jump to its newest picture.
+      if (brush || ice || (c.fade !== null && !c.fade.settled)) {
+        const ox = cx * LAND_CHUNK * 16 - MARGIN;
+        const oy = cy * LAND_CHUNK * 16 - MARGIN;
+        c.fade ??= new LandFade(c.ctx.getImageData(0, 0, side, side), side, ox, oy);
+        if (brush || ice) c.ice = ice;
+        const timing = c.ice && this.art ? this.ice.timing(this.art, new Uint32Array(c.fade.image.data.buffer), words, side, ox, oy) : null;
+        c.fade.retarget(words, now, timing);
+        c.fade.step(now);
+        c.ctx.putImageData(c.fade.image, 0, 0);
+        if (!c.fade.settled) this.fading.set(n, c);
+      } else {
+        c.fade = null;
+        c.ice = false;
+        this.fading.delete(n);
+        c.ctx.putImageData(this.image!, 0, 0);
+      }
+      c.motion = motion;
+      c.sig = sig;
+      this.waiting.delete(n);
+      this.composed++;
     }
 
     /** Chunks dissolving sea ice now. */
@@ -326,7 +470,7 @@ namespace SE {
      * Draw the terrain into `ctx` (device pixels, identity transform), only
      * where it meets the device-pixel rectangle [x0, x1) × [y0, y1).
      */
-    draw(ctx: CanvasRenderingContext2D, cam: LandCamera, x0: number, y0: number, x1: number, y1: number): void {
+    draw(ctx: CanvasRenderingContext2D, cam: LandCamera, x0: number, y0: number, x1: number, y1: number, ask = true): void {
       if (!this.ready) return;
       this.tilePx = cam.tilePx;
       this.composed = 0;
@@ -340,14 +484,16 @@ namespace SE {
       const tyA = Math.max(0, Math.floor(cam.scrollY + y0 / T));
       const tyB = Math.min(GRID_H, Math.ceil(cam.scrollY + y1 / T));
       if (txB <= txA || tyB <= tyA) return;
-      this.composeDue(txA, txB, tyA, tyB);
+      if (ask) this.composeDue(txA, txB, tyA, tyB);
       ctx.save();
       ctx.beginPath();
       ctx.rect(x0, y0, x1 - x0, y1 - y0);
       ctx.clip();
       for (let cy = Math.floor(tyA / LAND_CHUNK); cy <= Math.floor((tyB - 1) / LAND_CHUNK); cy++) {
         for (let cu = Math.floor(txA / LAND_CHUNK); cu <= Math.floor((txB - 1) / LAND_CHUNK); cu++) {
-          const c = this.chunk(((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X, cy);
+          // Without `ask` only what is composed already: no signatures read, nothing composed or asked for.
+          const known = ask ? null : this.chunks.get(cy * CHUNKS_X + (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X));
+          const c = ask ? this.chunk(((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X, cy) : known && known.sig !== -1 ? known : null;
           if (!c) {
             this.drawFlat(ctx, cu, cy, cam);
             continue;

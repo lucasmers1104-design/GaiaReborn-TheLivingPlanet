@@ -11,6 +11,8 @@
 namespace SE {
   export interface TitleHooks {
     world(): WorldState;
+    /** The waiting planet's seed (the world may still be on its way from the simulation worker). */
+    seed(): number;
     /** The automatic save to offer, if there is one. */
     readonly autosave: SaveMeta | null;
     /** Load the automatic save; true on success. */
@@ -93,7 +95,7 @@ namespace SE {
       const planet = buildTitlePlanet({
         epoch: hooks.epoch,
         oceanShare: hooks.oceanShare,
-        seed: () => hooks.world().seed,
+        seed: () => hooks.seed(),
         chooseEpoch: (id) => this.chooseEpoch(id),
         reshape: (share) => this.reshape(share),
         reroll: () => this.reroll(),

@@ -147,7 +147,7 @@ namespace SE {
    * Decode the atlas PNG in the browser. A data URI neither needs a fetch over
    * file:// nor taints the canvas, so getImageData is allowed.
    */
-  export function decodeLandAtlas(done: (art: LandArt) => void, failed: (why: string) => void): void {
+  export function decodeLandAtlas(done: (art: LandArt, indices: Uint8Array) => void, failed: (why: string) => void): void {
     const img = new Image();
     img.onload = () => {
       const m = TERRAIN_MANIFEST;
@@ -157,7 +157,8 @@ namespace SE {
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) { failed('no 2D context'); return; }
       ctx.drawImage(img, 0, 0);
-      done(LandArt.fromIndices(LandArt.indicesOf(ctx.getImageData(0, 0, m.width, m.height).data, m), m));
+      const indices = LandArt.indicesOf(ctx.getImageData(0, 0, m.width, m.height).data, m);
+      done(LandArt.fromIndices(indices, m), indices);
     };
     img.onerror = () => failed('the atlas image did not decode');
     img.src = TERRAIN_ATLAS_PNG;

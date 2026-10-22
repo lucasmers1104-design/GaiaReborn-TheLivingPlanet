@@ -1,3 +1,4 @@
+function seBundle() {
 "use strict";
 /* =============================================================================
  * SimEarth 2.0 — constants, enums and the data tables that drive everything
@@ -659,6 +660,10 @@ var SE;
     SE.TECH_NAMES = [
         'Keine', 'Steinzeit', 'Bronzezeit', 'Eisenzeit', 'Industriezeitalter',
         'Atomzeitalter', 'Informationszeitalter', 'Nanotech-Zeitalter',
+    ];
+    /** File stem under assets/events/ for each era's badge. */
+    SE.TECH_ICONS = [
+        '', 'era-stone', 'era-bronze', 'era-iron', 'era-industrial', 'era-atomic', 'era-information', 'era-nanotech',
     ];
     /** Ω cost of placing a city at each technology level. */
     SE.TECH_COST = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500];
@@ -1826,7 +1831,7 @@ var SE;
                 this.max = v;
         }
     }
-    const PERF_KEYS = ['frame', 'gap', 'tick', 'steps', 'base', 'chunks', 'pending', 'field', 'tiles', 'full'];
+    const PERF_KEYS = ['frame', 'gap', 'tick', 'steps', 'base', 'chunks', 'pending', 'field', 'tiles', 'full', 'age', 'msg'];
     const perfWindow = () => Object.fromEntries(PERF_KEYS.map((k) => [k, new PerfStat()]));
     /** Half a second per window; the display joins the last two. */
     const PERF_WINDOW_MS = 500;
@@ -1874,6 +1879,16 @@ var SE;
             if (this.on)
                 this.cur.steps.add(n);
         }
+        /** Worker mode: how old the state on screen is, ms. */
+        stateAge(ms) {
+            if (this.on)
+                this.cur.age.add(ms);
+        }
+        /** Worker mode: a state arrived carrying this many bytes of typed arrays. */
+        message(bytes) {
+            if (this.on)
+                this.cur.msg.add(bytes);
+        }
         drawBase(ms) {
             if (this.on)
                 this.cur.base.add(ms);
@@ -1915,12 +1930,15 @@ var SE;
             const chunks = joined('chunks');
             const field = joined('field');
             const tiles = joined('tiles');
+            const age = joined('age');
+            const msg = joined('msg');
             this.el.textContent = [
                 `Bilder ${(frame.n / span).toFixed(0)}/s  Bild Ø ${mean(frame)} max ${frame.max.toFixed(1)} ms  Abstand max ${joined('gap').max.toFixed(0)} ms`,
                 `Ticks ${(tick.n / span).toFixed(1)}/s  Ø ${mean(tick)} max ${tick.max.toFixed(1)} ms  je Bild Ø ${(steps.n > 0 ? steps.sum / steps.n : 0).toFixed(2)} max ${steps.max}`,
                 `drawBase ${(base.n / span).toFixed(1)}/s  Ø ${mean(base)} max ${base.max.toFixed(1)} ms`,
                 `Chunks je Bild Ø ${(frame.n > 0 ? chunks.sum / frame.n : 0).toFixed(2)} max ${chunks.max}  pending ${joined('pending').sum}×`,
                 `Feld ${(field.n / span).toFixed(1)}/s  Ø ${mean(field)} max ${field.max.toFixed(1)} ms  Kacheln Ø ${tiles.n > 0 ? Math.round(tiles.sum / tiles.n) : '–'} max ${tiles.max}  voll ${joined('full').n}×`,
+                age.n > 0 ? `Worker: Zustand Ø ${mean(age)} max ${age.max.toFixed(0)} ms alt  Nachrichten ${(msg.n / span).toFixed(1)}/s ${(msg.sum / 1048576 / span).toFixed(1)} MB/s` : 'Simulation im Hauptthread',
             ].join('\n');
         }
     }
@@ -33026,7 +33044,8 @@ var SE;
                 return;
             }
             ctx.drawImage(img, 0, 0);
-            done(LandArt.fromIndices(LandArt.indicesOf(ctx.getImageData(0, 0, m.width, m.height).data, m), m));
+            const indices = LandArt.indicesOf(ctx.getImageData(0, 0, m.width, m.height).data, m);
+            done(LandArt.fromIndices(indices, m), indices);
         };
         img.onerror = () => failed('the atlas image did not decode');
         img.src = SE.TERRAIN_ATLAS_PNG;
@@ -39106,6 +39125,15 @@ var SE;
             this.fading = new Map();
             /** Chunk number → when it was first seen out of date (-Infinity: never composed), until composed. */
             this.waiting = new Map();
+            /** The worker composing chunks (landworker.ts); null where none runs, or for the snapshot (`picture`). */
+            this.jobs = null;
+            this.composeHere = false;
+            /** Chunks the worker delivered and the map has not redrawn yet. */
+            this.fresh = new Set();
+            /** A new field (or a stale answer) means chunks to ask for again (want). */
+            this.refetch = false;
+            /** The newest field from the worker while a brush was moving ground: taken over once it rests (it carries the stroke's settling). */
+            this.held = null;
         }
         static shared() {
             return PixelTerrain.instance ?? (PixelTerrain.instance = new PixelTerrain());
@@ -39127,9 +39155,12 @@ var SE;
             if (this.state !== 'idle')
                 return;
             this.state = 'loading';
-            SE.decodeLandAtlas((art) => {
+            SE.decodeLandAtlas((art, indices) => {
                 this.art = art;
                 this.composer = new SE.LandComposer(art);
+                this.jobs = SE.LandJobs.start(indices);
+                if (this.jobs)
+                    this.jobs.onChunk = (n, sig, words, motion) => this.install(n, sig, words, motion);
                 this.state = 'ready';
                 for (const l of this.listeners.splice(0))
                     l();
@@ -39141,10 +39172,19 @@ var SE;
             });
         }
         /** Read the world into the field when it changed; `oceans` false draws water as flat elevation colours. */
-        refresh(world, oceans) {
+        refresh(world, oceans, here = false) {
             const key = PixelTerrain.keyOf(world, oceans);
             if (key === this.fieldKey && world === this.fieldWorld)
                 return;
+            // Fed: the landscape worker refreshes the field from the simulation worker's states and sends it (adopt).
+            if (oceans && !here && this.jobs?.fed && this.jobs.alive) {
+                this.fieldWorld = world;
+                if (this.seaColor) {
+                    this.seaColor = null;
+                    this.flatFresh = false;
+                }
+                return;
+            }
             this.fieldKey = key;
             this.fieldWorld = world;
             const t0 = performance.now();
@@ -39152,6 +39192,7 @@ var SE;
             this.ice.update(world, this.field, t0);
             SE.perfHud.field(performance.now() - t0, this.field.lastRead);
             this.flatFresh = false;
+            this.jobs?.fieldChanged();
             if (oceans) {
                 this.seaColor = null;
             }
@@ -39192,6 +39233,7 @@ var SE;
             }
             const slow = this.field.refreshBox(world, x0, y0, x1 + 1, y1 + 1);
             this.flatFresh = false;
+            this.jobs?.fieldChanged();
             const now = performance.now();
             const b = this.brushBox;
             if (b && now - this.brushAt < FADE_WINDOW_MS) {
@@ -39207,8 +39249,9 @@ var SE;
         }
         /** Read the world into the field if it describes another planet (the map keeps it current). */
         ensure(world) {
+            // Read here when the field is another planet's: the snapshot and the examine crop are wanted now.
             if (this.fieldWorld !== world || !this.fieldKey.startsWith(`${world.seed}|`))
-                this.refresh(world, true);
+                this.refresh(world, true, true);
         }
         /** The whole planet at `tilePx` CSS px per tile, every chunk composed (the map snapshot); null before the atlas is ready. */
         picture(world, tilePx) {
@@ -39222,13 +39265,123 @@ var SE;
             if (!ctx)
                 return null;
             const cam = { scrollX: 0, scrollY: 0, tilePx, dpr: 1 };
-            // Each draw composes for COMPOSE_BUDGET_MS; repeat until no chunk is missing.
-            for (let pass = 0; pass < CHUNKS_X * (SE.GRID_H / SE.LAND_CHUNK) + 1; pass++) {
-                this.draw(ctx, cam, 0, 0, out.width, out.height);
-                if (!this.pending)
-                    return out;
+            // Each draw composes for COMPOSE_BUDGET_MS; repeat until no chunk is missing. Here, not in the worker: it is wanted now.
+            this.composeHere = true;
+            try {
+                for (let pass = 0; pass < CHUNKS_X * (SE.GRID_H / SE.LAND_CHUNK) + 1; pass++) {
+                    this.draw(ctx, cam, 0, 0, out.width, out.height);
+                    if (!this.pending)
+                        return out;
+                }
+                return out;
             }
+            finally {
+                this.composeHere = false;
+            }
+        }
+        /** Chunks the worker is composing: until they arrive the map shows older ground. */
+        get composing() {
+            return !!this.jobs && this.jobs.busy > 0;
+        }
+        /**
+         * Let the landscape worker keep the field, refreshed from the simulation
+         * worker's states (`connect` hands that worker the port: SimHost.feed).
+         * The full refresh after a plate shift (≈ 40 ms) then never runs here.
+         */
+        feedFrom(connect) {
+            const jobs = this.jobs;
+            const port = jobs?.feedPort();
+            if (!jobs || !port || !connect(port))
+                return;
+            jobs.fed = true;
+            jobs.onField = (parts, key, ms, tiles) => this.adopt(parts, key, ms, tiles);
+        }
+        /** The page keeps the field again (the simulation worker is gone); the next refresh reads everything. */
+        fieldHere() {
+            if (!this.jobs)
+                return;
+            this.jobs.fed = false;
+            this.jobs.fieldChanged();
+            this.field.forget();
+            this.fieldKey = '';
+        }
+        /** The brush moved ground lately: the page's own field is ahead of the worker's. */
+        get brushing() {
+            return performance.now() - this.brushAt < FADE_WINDOW_MS;
+        }
+        /** A field the landscape worker refreshed: taken over unless the brush's field is ahead of it. */
+        adopt(parts, key, ms, tiles) {
+            if (!this.jobs?.fed || this.seaColor)
+                return;
+            // While a brush moves ground the page's field is ahead, and a field of a planet whose state has not reached the
+            // page yet does not fit it: the newest such field waits, taken over by takeFresh once it does.
+            if (this.brushing || (this.fieldWorld && !key.startsWith(`${this.fieldWorld.seed}|`))) {
+                this.held = { parts, key, ms, tiles };
+                return;
+            }
+            this.held = null;
+            SE.mergeInto(this.field, parts);
+            // Its incremental bookkeeping is the worker's: a refresh here starts afresh.
+            this.field.forget();
+            this.fieldKey = `${key}|1`;
+            if (this.fieldWorld)
+                this.ice.update(this.fieldWorld, this.field, performance.now());
+            this.flatFresh = false;
+            this.refetch = true;
+            SE.perfHud.field(ms, tiles);
+        }
+        /** A chunk composed in the worker: installed if the field has not moved on since; the map redraws just its tiles (takeFresh). */
+        install(n, sig, composed, motion) {
+            const c = this.chunks.get(n);
+            if (!c)
+                return;
+            const cx = n % CHUNKS_X;
+            const cy = Math.floor(n / CHUNKS_X);
+            if (sig === c.sig)
+                return;
+            if (this.field.signature(cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, this.seaColor ? 1 : 0) !== sig) {
+                // Composed from a field that has moved on: asked for again.
+                this.refetch = true;
+                return;
+            }
+            const side = SE.LAND_CHUNK * 16 + 2 * MARGIN;
+            if (!this.image)
+                this.image = c.ctx.createImageData(side, side);
+            const words = new Uint32Array(this.image.data.buffer);
+            words.set(composed);
+            this.place(c, n, cx, cy, words, motion, sig);
+            this.fresh.add(n);
+            // The worker has room again: the next chunks due are asked for (want), longest waiting first.
+            this.refetch = true;
+            SE.perfHud.chunks(1, false);
+        }
+        /** Tile boxes [x0, y0, x1, y1] of the chunks the worker delivered since the last call, for the map to redraw. */
+        takeFresh() {
+            const held = this.held;
+            if (held && !this.brushing) {
+                this.held = null;
+                this.adopt(held.parts, held.key, held.ms, held.tiles);
+            }
+            const out = [];
+            for (const n of this.fresh) {
+                const x = (n % CHUNKS_X) * SE.LAND_CHUNK;
+                const y = Math.floor(n / CHUNKS_X) * SE.LAND_CHUNK;
+                out.push([x, y, x + SE.LAND_CHUNK - 1, y + SE.LAND_CHUNK - 1]);
+            }
+            this.fresh.clear();
             return out;
+        }
+        /** Ask the worker for the chunks over a device-pixel rectangle without drawing: after a new field, their pictures arrive one by one. */
+        want(cam, x0, y0, x1, y1) {
+            if (!this.ready || !this.jobs)
+                return;
+            const T = cam.tilePx * cam.dpr;
+            const txA = Math.floor(cam.scrollX + x0 / T);
+            const txB = Math.ceil(cam.scrollX + x1 / T);
+            const tyA = Math.max(0, Math.floor(cam.scrollY + y0 / T));
+            const tyB = Math.min(SE.GRID_H, Math.ceil(cam.scrollY + y1 / T));
+            if (txB > txA && tyB > tyA)
+                this.composeDue(txA, txB, tyA, tyB);
         }
         /** The chunk canvas for chunk (cx, cy), composed if its tiles changed. */
         chunk(cx, cy) {
@@ -39250,6 +39403,13 @@ var SE;
             }
             const sig = this.field.signature(cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, this.seaColor ? 1 : 0);
             if (sig !== c.sig) {
+                // The worker composes it; older ground (or the flat colours) shows until it arrives (install).
+                // Fed, from the worker's own field, unless the page's is ahead (a brush) or differs (flat sea colours).
+                const jobs = this.composeHere ? null : this.jobs;
+                if (jobs?.alive) {
+                    jobs.ask(this.field, this.seaColor, n, cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, side, MARGIN, sig, !jobs.fed || !!this.seaColor || this.brushing);
+                    return c.sig === -1 ? null : c;
+                }
                 if (performance.now() > this.deadline) {
                     this.pending = true;
                     return c.sig === -1 ? null : c;
@@ -39258,35 +39418,7 @@ var SE;
                     this.image = c.ctx.createImageData(side, side);
                 const words = new Uint32Array(this.image.data.buffer);
                 composer.compose(this.field, cx * SE.LAND_CHUNK, cy * SE.LAND_CHUNK, SE.LAND_CHUNK, SE.LAND_CHUNK, MARGIN, words, this.seaColor);
-                const now = performance.now();
-                const brush = c.sig !== -1 && this.brushNear(cx, cy, now);
-                // Sea ice dissolves when zoomed in far enough and below the cap; a calving tile always does.
-                const ice = c.sig !== -1 && !brush && this.ice.near(cx, cy, now) && (this.ice.holding(cx, cy) ||
-                    (this.tilePx >= SE.ICE_ANIM.minTilePx && (c.ice || this.iceFades() < SE.ICE_ANIM.maxFades)));
-                // A chunk already dissolving keeps going rather than jump to its newest picture.
-                if (brush || ice || (c.fade !== null && !c.fade.settled)) {
-                    const ox = cx * SE.LAND_CHUNK * 16 - MARGIN;
-                    const oy = cy * SE.LAND_CHUNK * 16 - MARGIN;
-                    c.fade ?? (c.fade = new SE.LandFade(c.ctx.getImageData(0, 0, side, side), side, ox, oy));
-                    if (brush || ice)
-                        c.ice = ice;
-                    const timing = c.ice && this.art ? this.ice.timing(this.art, new Uint32Array(c.fade.image.data.buffer), words, side, ox, oy) : null;
-                    c.fade.retarget(words, now, timing);
-                    c.fade.step(now);
-                    c.ctx.putImageData(c.fade.image, 0, 0);
-                    if (!c.fade.settled)
-                        this.fading.set(n, c);
-                }
-                else {
-                    c.fade = null;
-                    c.ice = false;
-                    this.fading.delete(n);
-                    c.ctx.putImageData(this.image, 0, 0);
-                }
-                c.motion = composer.motion;
-                c.sig = sig;
-                this.waiting.delete(n);
-                this.composed++;
+                this.place(c, n, cx, cy, words, composer.motion, sig);
             }
             else if (c.fade) {
                 const now = performance.now();
@@ -39301,6 +39433,39 @@ var SE;
                 }
             }
             return c;
+        }
+        /** Put a composed picture (in `this.image`, viewed as `words`) on chunk n: at once, or dissolving into it after a brush or a sea ice flip. */
+        place(c, n, cx, cy, words, motion, sig) {
+            const side = SE.LAND_CHUNK * 16 + 2 * MARGIN;
+            const now = performance.now();
+            const brush = c.sig !== -1 && this.brushNear(cx, cy, now);
+            // Sea ice dissolves when zoomed in far enough and below the cap; a calving tile always does.
+            const ice = c.sig !== -1 && !brush && this.ice.near(cx, cy, now) && (this.ice.holding(cx, cy) ||
+                (this.tilePx >= SE.ICE_ANIM.minTilePx && (c.ice || this.iceFades() < SE.ICE_ANIM.maxFades)));
+            // A chunk already dissolving keeps going rather than jump to its newest picture.
+            if (brush || ice || (c.fade !== null && !c.fade.settled)) {
+                const ox = cx * SE.LAND_CHUNK * 16 - MARGIN;
+                const oy = cy * SE.LAND_CHUNK * 16 - MARGIN;
+                c.fade ?? (c.fade = new SE.LandFade(c.ctx.getImageData(0, 0, side, side), side, ox, oy));
+                if (brush || ice)
+                    c.ice = ice;
+                const timing = c.ice && this.art ? this.ice.timing(this.art, new Uint32Array(c.fade.image.data.buffer), words, side, ox, oy) : null;
+                c.fade.retarget(words, now, timing);
+                c.fade.step(now);
+                c.ctx.putImageData(c.fade.image, 0, 0);
+                if (!c.fade.settled)
+                    this.fading.set(n, c);
+            }
+            else {
+                c.fade = null;
+                c.ice = false;
+                this.fading.delete(n);
+                c.ctx.putImageData(this.image, 0, 0);
+            }
+            c.motion = motion;
+            c.sig = sig;
+            this.waiting.delete(n);
+            this.composed++;
         }
         /** Chunks dissolving sea ice now. */
         iceFades() {
@@ -39368,7 +39533,7 @@ var SE;
          * Draw the terrain into `ctx` (device pixels, identity transform), only
          * where it meets the device-pixel rectangle [x0, x1) × [y0, y1).
          */
-        draw(ctx, cam, x0, y0, x1, y1) {
+        draw(ctx, cam, x0, y0, x1, y1, ask = true) {
             if (!this.ready)
                 return;
             this.tilePx = cam.tilePx;
@@ -39384,14 +39549,17 @@ var SE;
             const tyB = Math.min(SE.GRID_H, Math.ceil(cam.scrollY + y1 / T));
             if (txB <= txA || tyB <= tyA)
                 return;
-            this.composeDue(txA, txB, tyA, tyB);
+            if (ask)
+                this.composeDue(txA, txB, tyA, tyB);
             ctx.save();
             ctx.beginPath();
             ctx.rect(x0, y0, x1 - x0, y1 - y0);
             ctx.clip();
             for (let cy = Math.floor(tyA / SE.LAND_CHUNK); cy <= Math.floor((tyB - 1) / SE.LAND_CHUNK); cy++) {
                 for (let cu = Math.floor(txA / SE.LAND_CHUNK); cu <= Math.floor((txB - 1) / SE.LAND_CHUNK); cu++) {
-                    const c = this.chunk(((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X, cy);
+                    // Without `ask` only what is composed already: no signatures read, nothing composed or asked for.
+                    const known = ask ? null : this.chunks.get(cy * CHUNKS_X + (((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X));
+                    const c = ask ? this.chunk(((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X, cy) : known && known.sig !== -1 ? known : null;
                     if (!c) {
                         this.drawFlat(ctx, cu, cy, cam);
                         continue;
@@ -39559,6 +39727,185 @@ var SE;
     }
     PixelTerrain.instance = null;
     SE.PixelTerrain = PixelTerrain;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — landscape chunks composed in a worker
+ * -----------------------------------------------------------------------------
+ * Composing a 16 × 16-tile chunk (landcompose.ts) is pure arithmetic over the
+ * terrain field and took about a third of the page's time on a living planet
+ * at the fastest speed (tools/perf-bench.js). A second Blob worker runs the
+ * same composer: the page sends its field when chunks are wanted after it
+ * changed, asks for the chunks it shows, and installs each picture only if
+ * it was composed from the field the page has now (the answer carries the
+ * signature of the field it was composed from). The page keeps the field,
+ * the dissolves and every draw; without the worker it composes as before.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** What the composer and the signature read of TerrainField; the rest is the page's own bookkeeping. */
+    const FIELD_PARTS = [
+        'key', 'sea', 'lagoon', 'seaTile', 'reef', 'corals', 'sands', 'cay', 'beach', 'shade', 'rugged', 'volcano', 'ridges',
+        'river', 'paths', 'algae', 'edge', 'scene', 'density', 'groups', 'top', 'cactus', 'savannaTree', 'palm', 'sig',
+    ];
+    /** Chunks asked for at once: enough to keep the worker busy, few enough that a newer field is used soon. */
+    const LAND_JOBS_MAX = 6;
+    class LandJobs {
+        constructor(worker, url) {
+            this.worker = worker;
+            this.url = url;
+            /** Chunk number → the field signature it was asked for at, and the job's id. */
+            this.asked = new Map();
+            this.jobId = 0;
+            this.fieldSent = false;
+            this.dead = false;
+            /** This worker refreshes its own field from the simulation's states (feedPort); the page's goes over only for page jobs. */
+            this.fed = false;
+            /** A composed chunk arrived: number, signature of the field it was composed from, pixels, moving water. */
+            this.onChunk = null;
+            /** A field refreshed here arrived (fed mode). */
+            this.onField = null;
+            worker.onmessage = (e) => this.receive(e.data);
+            worker.onerror = (e) => {
+                e.preventDefault();
+                this.fail(e.message);
+            };
+        }
+        /** The worker, with the atlas it composes from; null where none can start. */
+        static start(indices) {
+            const started = SE.bundleWorker('SE.landWorkerMain(self);', 'simearth-land');
+            if (!started)
+                return null;
+            started.worker.postMessage({ t: 'art', indices });
+            return new LandJobs(started.worker, started.url);
+        }
+        get alive() {
+            return !this.dead;
+        }
+        /** Chunks asked for and not answered yet. */
+        get busy() {
+            return this.asked.size;
+        }
+        /** A port for the simulation worker's states; this worker gets the other end. Set `fed` once it is connected. */
+        feedPort() {
+            if (this.dead || typeof MessageChannel === 'undefined')
+                return null;
+            const ch = new MessageChannel();
+            this.worker.postMessage({ t: 'feed', port: ch.port2 }, [ch.port2]);
+            return ch.port1;
+        }
+        /** The page's field changed: it goes over before the next chunk is asked for. */
+        fieldChanged() {
+            this.fieldSent = false;
+        }
+        /**
+         * Ask for chunk `n` (tiles from tx, ty) at field signature `sig`. False
+         * while enough are on their way; asking again at the same signature costs
+         * nothing. `page`: from the page's own field (sent first if it changed),
+         * which is ahead of the worker's while a brush moves ground, or the only
+         * one when the worker is not fed.
+         */
+        ask(field, seaColor, n, tx, ty, side, margin, sig, page = true) {
+            if (this.dead)
+                return false;
+            if (this.asked.get(n)?.sig === sig)
+                return true;
+            if (this.asked.size >= LAND_JOBS_MAX)
+                return false;
+            if (page && !this.fieldSent) {
+                const parts = {};
+                for (const k of FIELD_PARTS)
+                    parts[k] = field[k];
+                this.worker.postMessage({ t: 'field', parts, seaColor });
+                this.fieldSent = true;
+            }
+            const id = ++this.jobId;
+            this.asked.set(n, { sig, id });
+            this.worker.postMessage({ t: 'job', id, n, tx, ty, side, margin, page });
+            return true;
+        }
+        receive(m) {
+            if (m.t === 'fatal') {
+                this.fail(m.message);
+                return;
+            }
+            if (this.url) {
+                URL.revokeObjectURL(this.url);
+                this.url = '';
+            }
+            if (m.t === 'field') {
+                this.onField?.(m.parts, m.key, m.ms, m.tiles);
+                return;
+            }
+            if (this.asked.get(m.n)?.id === m.id)
+                this.asked.delete(m.n);
+            this.onChunk?.(m.n, m.sig, m.words, m.motion);
+        }
+        fail(why) {
+            if (this.dead)
+                return;
+            this.dead = true;
+            this.fed = false;
+            this.asked.clear();
+            this.worker.terminate();
+            if (this.url)
+                URL.revokeObjectURL(this.url);
+            console.warn(`SimEarth: the landscape worker failed (${why}); chunks are composed on the page again`);
+        }
+    }
+    SE.LandJobs = LandJobs;
+    /** The worker's side: the same composer over a copy of the page's field, and over the one it refreshes itself when fed. */
+    function landWorkerMain(port) {
+        let composer = null;
+        const pageField = new SE.TerrainField();
+        let seaColor = null;
+        const field = new SE.TerrainField();
+        port.onmessage = (e) => {
+            const m = e.data;
+            try {
+                if (m.t === 'art') {
+                    composer = new SE.LandComposer(SE.LandArt.fromIndices(m.indices));
+                }
+                else if (m.t === 'field') {
+                    SE.mergeInto(pageField, m.parts);
+                    seaColor = m.seaColor;
+                }
+                else if (m.t === 'feed') {
+                    // The world as the simulation worker has it: refreshed here, sent to the page, one at a time.
+                    const world = new SE.WorldState();
+                    const feed = m.port;
+                    feed.onmessage = (ev) => {
+                        try {
+                            SE.mergeInto(world, ev.data.world);
+                            const t0 = performance.now();
+                            field.refresh(world);
+                            const ms = performance.now() - t0;
+                            const parts = {};
+                            for (const k of FIELD_PARTS)
+                                parts[k] = field[k];
+                            port.postMessage({ t: 'field', parts, key: `${world.seed}|${world.ticks}|${world.revision}`, ms, tiles: field.lastRead });
+                        }
+                        catch (err) {
+                            port.postMessage({ t: 'fatal', message: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });
+                        }
+                        feed.postMessage({ t: 'ack' });
+                    };
+                }
+                else if (composer) {
+                    const words = new Uint32Array(m.side * m.side);
+                    const f = m.page ? pageField : field;
+                    const sea = m.page ? seaColor : null;
+                    composer.compose(f, m.tx, m.ty, SE.LAND_CHUNK, SE.LAND_CHUNK, m.margin, words, sea);
+                    const sig = f.signature(m.tx, m.ty, SE.LAND_CHUNK, SE.LAND_CHUNK, sea ? 1 : 0);
+                    const out = { t: 'chunk', id: m.id, n: m.n, sig, words, motion: composer.motion };
+                    port.postMessage(out, [words.buffer]);
+                }
+            }
+            catch (err) {
+                port.postMessage({ t: 'fatal', message: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });
+            }
+        };
+    }
+    SE.landWorkerMain = landWorkerMain;
 })(SE || (SE = {}));
 /* One field of terrain with only its own objects, including their overhang. */
 var SE;
@@ -44961,6 +45308,8 @@ var SE;
                     st.commit();
         }
         begin(h, now) {
+            if (this.known.has(h.id))
+                return;
             this.known.add(h.id);
             if (SE.FX_SCRIPTS[h.kind])
                 this.started.push({ id: h.id, kind: h.kind, x: h.x, y: h.y, born: now, strength: h.strength });
@@ -50873,12 +51222,42 @@ var SE;
         [0.7, [220, 90, 20]],
         [1.0, [255, 230, 120]],
     ];
+    const canvasBoxes = new WeakMap();
+    let canvasSizer = null;
+    /**
+     * A canvas's CSS box, kept current by a ResizeObserver. Reading it with
+     * getBoundingClientRect every frame forced a synchronous layout after each
+     * DOM write of the frame (10 % of the main thread in the biosphere
+     * scenario, tools/perf-bench.js).
+     */
+    function cssSize(canvas) {
+        let box = canvasBoxes.get(canvas);
+        if (box)
+            return box;
+        const r = canvas.getBoundingClientRect();
+        if (typeof ResizeObserver === 'undefined')
+            return r;
+        box = { width: r.width, height: r.height };
+        canvasBoxes.set(canvas, box);
+        canvasSizer ?? (canvasSizer = new ResizeObserver((entries) => {
+            for (const e of entries) {
+                const b = canvasBoxes.get(e.target);
+                if (!b)
+                    continue;
+                const size = e.borderBoxSize?.[0];
+                b.width = size ? size.inlineSize : e.contentRect.width;
+                b.height = size ? size.blockSize : e.contentRect.height;
+            }
+        }));
+        canvasSizer.observe(canvas);
+        return box;
+    }
     /**
      * Resize a canvas's backing store to its CSS box, in device pixels — or a
      * fraction of them, for a deliberately chunky picture.
      */
     function fitCanvas(canvas, scale = 1) {
-        const rect = canvas.getBoundingClientRect();
+        const rect = cssSize(canvas);
         if (rect.width <= 0 || rect.height <= 0)
             return false;
         const dpr = (window.devicePixelRatio || 1) * scale;
@@ -50967,9 +51346,14 @@ var SE;
             Math.max(0, e[SE.idx(x, SE.clampY(y - 1))]) - Math.max(0, e[SE.idx(x, SE.clampY(y + 1))]);
         return 1 + SE.clamp(slope * 1.4, -0.3, 0.3);
     }
-    /** Colour of a tile in a given map mode, with relief on the surface modes. */
-    function mapColor(world, i, mode) {
-        const flat = flatMapColor(world, i, mode);
+    /**
+     * Colour of a tile in a given map mode, with relief on the surface modes.
+     * `hidden` is a bit mask of switched-off categories: biomes on the habitat
+     * map, life classes on the life map (bit 0 there: the faint plant cover),
+     * eras on the technology map.
+     */
+    function mapColor(world, i, mode, hidden = 0) {
+        const flat = flatMapColor(world, i, mode, hidden);
         switch (mode) {
             case SE.MapMode.Terrain:
             case SE.MapMode.Biomes:
@@ -50980,7 +51364,7 @@ var SE;
         }
     }
     SE.mapColor = mapColor;
-    function flatMapColor(world, i, mode) {
+    function flatMapColor(world, i, mode, hidden) {
         const water = world.isWater(i);
         // The drainage network is one of the things the overview is for — it shows
         // at a glance which continents are watered and where they are not. Only on
@@ -51031,15 +51415,29 @@ var SE;
             }
             case SE.MapMode.Biomes:
                 // The sea in the main map's two classes: no depth.
+                if (hidden & (1 << world.biome[i]))
+                    return water ? [16, 24, 48] : [34, 30, 26];
                 return SE.BIOME_COLORS[world.biome[i]];
             case SE.MapMode.LifeMap: {
                 // The overview map stays area-filling on purpose: it answers "where is
                 // this species", which is exactly what the sparse Edit view cannot.
                 // Where no animal lives, the leading plant group shows faintly.
-                const c = world.dominantLife[i];
+                let c = world.dominantLife[i];
+                if (c !== SE.Life.None && hidden & (1 << c)) {
+                    // A hidden leader hands the tile to the densest class still shown.
+                    let best = 0;
+                    c = SE.Life.None;
+                    for (let k = 1; k < SE.LIFE_COUNT; k++) {
+                        const d = world.density(i, k);
+                        if (d > best && !(hidden & (1 << k))) {
+                            best = d;
+                            c = k;
+                        }
+                    }
+                }
                 if (c === SE.Life.None) {
                     const g = world.floraTop[i];
-                    if (!water && g !== SE.Flora.None && world.vegetation[i] > 0.05)
+                    if (!(hidden & 1) && !water && g !== SE.Flora.None && world.vegetation[i] > 0.05)
                         return SE.shade(SE.FLORA[g].color, 0.55);
                     return water ? [16, 24, 48] : [34, 30, 26];
                 }
@@ -51049,7 +51447,7 @@ var SE;
             }
             case SE.MapMode.Technology: {
                 const t = world.tech[i];
-                if (t === SE.Tech.None)
+                if (t === SE.Tech.None || hidden & (1 << t))
                     return water ? [16, 24, 48] : [34, 30, 26];
                 return SE.TECH_COLORS[t];
             }
@@ -51363,6 +51761,9 @@ var SE;
                 // A full redraw on a huge screen can take tens of milliseconds; the
                 // slower it is, the less often the world's progress triggers one.
                 const interval = Math.max(250, this.drawCost * 8);
+                // Composing on the page ran out of time last frame: finish it now, not a frame later.
+                if (this.pixelTerrain && this.land.pending)
+                    this.dirty = true;
                 const worldMoved = !this.holdWorld && world.ticks !== this.baseTick && now - this.baseTime > interval;
                 const scrolled = this.scrollX !== this.baseScrollX || this.scrollY !== this.baseScrollY;
                 if (this.dirty || key !== this.baseKey || worldMoved || (scrolled && !this.shiftBase(world, dpr))) {
@@ -51371,6 +51772,9 @@ var SE;
                     if (box && this.pixelTerrain)
                         this.land.refreshBox(world, this.layers.oceans, box[0], Math.max(0, box[1]), box[2], Math.min(SE.GRID_H - 1, box[3]));
                     this.dirtyTiles = null;
+                    // The full redraw draws the worker's latest pictures and asks for every chunk out of date (with a field just taken over).
+                    this.land.takeFresh();
+                    this.land.refetch = false;
                     this.drawBase(world, dpr);
                     this.drawCost = performance.now() - t0;
                     SE.perfHud.drawBase(this.drawCost);
@@ -51393,6 +51797,15 @@ var SE;
                     if ((changed || fade) && this.redrawTiles(world, dpr, changed, fade) && changed) {
                         this.dirtyTiles = null;
                         this.tilesAt = now;
+                    }
+                    if (this.pixelTerrain) {
+                        // The landscape worker's pictures: each chunk redrawn alone as it arrives; after a new field, its chunks asked for.
+                        for (const box of this.land.takeFresh())
+                            this.redrawChunk(world, dpr, box);
+                        if (this.land.refetch) {
+                            this.land.refetch = false;
+                            this.land.want({ scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr }, 0, 0, this.canvas.width, this.canvas.height);
+                        }
                     }
                 }
                 // The terrain or the cities ran out of time for composing: finish next frame.
@@ -51424,7 +51837,7 @@ var SE;
             if (!fx)
                 this.fx.show.flush(world);
             // Only a finished base counts: while the terrain is still composing it shows older ground.
-            if (!this.land.pending)
+            if (!this.land.pending && !this.land.composing)
                 this.fx.baseTick = this.baseTick;
             if (fx) {
                 fx.update(world, cam, this.cols, this.rows, now, this.tickPhase);
@@ -51488,6 +51901,19 @@ var SE;
          * tile's picture reads its neighbours from, together with the box `more`
          * of tiles to draw again without re-reading them.
          */
+        /** One chunk the landscape worker delivered: its tiles and one around (the art's overlap), drawn as composed, nothing asked for. */
+        redrawChunk(world, dpr, box) {
+            const size = this.tilePx;
+            let rx = (((box[0] - 1 - this.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
+            if (rx > this.cols)
+                rx -= SE.GRID_W;
+            const span = box[2] - box[0] + 3;
+            if (rx + span < 0 || rx > this.cols)
+                return;
+            this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            this.baseCtx.imageSmoothingEnabled = false;
+            this.drawLandRegion(world, rx * size, (box[1] - 1 - this.scrollY) * size, (rx + span) * size, (box[3] + 2 - this.scrollY) * size, false);
+        }
         redrawTiles(world, dpr, changed, more = null) {
             const pad = 4; // SIGNATURE_REACH (landfield.ts) + 1
             if (changed && this.pixelTerrain && this.land.refreshBox(world, this.layers.oceans, changed[0], Math.max(0, changed[1]), changed[2], Math.min(SE.GRID_H - 1, changed[3])))
@@ -51803,7 +52229,7 @@ var SE;
          * The pixel terrain over every tile overlapping a rectangle of the view
          * (CSS pixels), then cities, events and the climate overlay on top.
          */
-        drawLandRegion(world, x0, y0, x1, y1) {
+        drawLandRegion(world, x0, y0, x1, y1, ask = true) {
             const ctx = this.baseCtx;
             const dpr = window.devicePixelRatio || 1;
             const size = this.tilePx;
@@ -51819,7 +52245,7 @@ var SE;
             const cam = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: size, dpr };
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             if (land.ready) {
-                land.draw(ctx, cam, (txA - this.scrollX) * T, (tyA - this.scrollY) * T, (txB - this.scrollX) * T, (tyB - this.scrollY) * T);
+                land.draw(ctx, cam, (txA - this.scrollX) * T, (tyA - this.scrollY) * T, (txB - this.scrollX) * T, (tyB - this.scrollY) * T, ask);
                 this.drawCities(world, x0, y0, x1, y1);
             }
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -51961,6 +52387,11 @@ var SE;
     EditView.MAX_TILE = 48;
     SE.EditView = EditView;
     /* --------------------------------------------------------------- MapView -- */
+    /** How long a news spot pulses on the overview, and one ring's cycle. */
+    const NEWS_PING_MS = 20000;
+    const NEWS_PULSE_MS = 1400;
+    const NEWS_PINGS_MAX = 24;
+    const CITY_RIM = [10, 14, 12];
     class MapView {
         constructor(canvas) {
             this.mode = SE.MapMode.Terrain;
@@ -51976,6 +52407,10 @@ var SE;
             this.pixelScale = 1;
             /** Draw stars and black space around the globe, or leave it transparent. */
             this.space = true;
+            /** Per mode, the categories switched off in the legend (see `mapColor`). */
+            this.hidden = SE.MAP_MODES.map(() => 0);
+            /** Where news happened, pulsing in every mode until NEWS_PING_MS have passed. */
+            this.pings = [];
             this.winds = new SE.WindMapLayer();
             this.textureKey = '';
             /** Orthographic projection — the planet seen from space. */
@@ -52033,18 +52468,10 @@ var SE;
                 return;
             // The planet texture only changes when the world does; the globe's spin
             // and the viewport box redraw on top of an unchanged texture.
-            const key = `${world.ticks}|${this.mode}|${world.revision}`;
+            const key = `${world.ticks}|${this.mode}|${world.revision}|${this.hidden[this.mode]}`;
             if (key !== this.textureKey) {
                 this.textureKey = key;
-                const data = this.image.data;
-                for (let i = 0; i < SE.TILE_COUNT; i++) {
-                    const c = mapColor(world, i, this.mode);
-                    const p = i * 4;
-                    data[p] = c[0];
-                    data[p + 1] = c[1];
-                    data[p + 2] = c[2];
-                }
-                this.bufferCtx.putImageData(this.image, 0, 0);
+                this.paint(world);
                 this.globeSrc = null;
             }
             const ctx = this.ctx;
@@ -52062,19 +52489,92 @@ var SE;
                 if (this.mode === SE.MapMode.AirCurrents)
                     this.winds.drawFlat(ctx, w, h, this.pixelScale * (window.devicePixelRatio || 1));
                 this.drawEditRect(ctx, w, h);
+                this.drawPings(ctx, (x, y) => [x * w / SE.GRID_W, y * h / SE.GRID_H]);
             }
         }
-        /** A fresh, enlarged image of the whole planet in the current mode. */
-        exportImage(world, scale = 4) {
+        /** Mark the spot of a piece of news. */
+        ping(x, y, color) {
+            if (this.pings.length >= NEWS_PINGS_MAX)
+                this.pings.shift();
+            this.pings.push({ x, y, color, born: performance.now() });
+        }
+        /** Rings are pulsing: the map wants frames, not just the few a still texture needs. */
+        get pulsing() {
+            return this.pings.length > 0;
+        }
+        /** The planet in the current mode into the buffer, the technology map's cities stamped large. */
+        paint(world) {
             const data = this.image.data;
+            const hidden = this.hidden[this.mode];
+            const stamp = this.mode === SE.MapMode.Technology;
+            const cities = [];
             for (let i = 0; i < SE.TILE_COUNT; i++) {
-                const c = mapColor(world, i, this.mode);
+                const c = mapColor(world, i, this.mode, hidden);
                 const p = i * 4;
                 data[p] = c[0];
                 data[p + 1] = c[1];
                 data[p + 2] = c[2];
+                if (stamp && world.tech[i] !== SE.Tech.None && !(hidden & (1 << world.tech[i])))
+                    cities.push(i);
+            }
+            // A city is one tile, under two screen pixels here: a block with a dark
+            // rim makes each one findable. Rims first, so no rim cuts a neighbour.
+            for (const rim of [true, false]) {
+                for (const i of cities) {
+                    const r = (SE.citySize(world.cityPop[i]) === 2 /* CitySize.Metropolis */ ? 2 : 1) + (rim ? 1 : 0);
+                    const c = rim ? CITY_RIM : SE.TECH_COLORS[world.tech[i]];
+                    const x0 = i % SE.GRID_W;
+                    const y0 = Math.floor(i / SE.GRID_W);
+                    for (let y = Math.max(0, y0 - r); y <= Math.min(SE.GRID_H - 1, y0 + r); y++) {
+                        for (let dx = -r; dx <= r; dx++) {
+                            const p = SE.idx(SE.wrapX(x0 + dx), y) * 4;
+                            data[p] = c[0];
+                            data[p + 1] = c[1];
+                            data[p + 2] = c[2];
+                        }
+                    }
+                }
             }
             this.bufferCtx.putImageData(this.image, 0, 0);
+        }
+        /** Two rings pulsing out of each news spot, fading towards its end; `at` places a tile point on the canvas. */
+        drawPings(ctx, at) {
+            const now = performance.now();
+            const unit = this.canvas.width / Math.max(1, this.canvas.clientWidth);
+            for (let k = this.pings.length - 1; k >= 0; k--) {
+                const p = this.pings[k];
+                const age = now - p.born;
+                if (age >= NEWS_PING_MS) {
+                    this.pings.splice(k, 1);
+                    continue;
+                }
+                const pt = at(p.x + 0.5, p.y + 0.5);
+                if (!pt)
+                    continue;
+                const fade = Math.min(1, (NEWS_PING_MS - age) / 3000);
+                for (let r = 0; r < 2; r++) {
+                    const t = (age / NEWS_PULSE_MS + r / 2) % 1;
+                    ctx.globalAlpha = fade * (1 - t);
+                    ctx.beginPath();
+                    ctx.arc(pt[0], pt[1], unit * (3 + 13 * t), 0, Math.PI * 2);
+                    ctx.strokeStyle = 'rgba(6,14,12,0.7)';
+                    ctx.lineWidth = unit * 3.5;
+                    ctx.stroke();
+                    ctx.strokeStyle = p.color;
+                    ctx.lineWidth = unit * 2;
+                    ctx.stroke();
+                }
+                ctx.globalAlpha = fade;
+                ctx.fillStyle = 'rgba(6,14,12,0.8)';
+                ctx.fillRect(pt[0] - unit * 2.5, pt[1] - unit * 2.5, unit * 5, unit * 5);
+                ctx.fillStyle = p.color;
+                ctx.fillRect(pt[0] - unit * 1.5, pt[1] - unit * 1.5, unit * 3, unit * 3);
+            }
+            ctx.globalAlpha = 1;
+        }
+        /** A fresh, enlarged image of the whole planet in the current mode. */
+        exportImage(world, scale = 4) {
+            this.paint(world);
             this.textureKey = '';
             const out = document.createElement('canvas');
             out.width = SE.GRID_W * scale;
@@ -52130,6 +52630,21 @@ var SE;
             if (this.mode === SE.MapMode.AirCurrents)
                 this.winds.drawGlobe(ctx, radius, cx, cy, this.spin, this.tilt);
             this.drawGlobeRect(ctx, radius, cx, cy);
+            this.drawPings(ctx, (x, y) => this.globePoint(x, y, radius, cx, cy));
+        }
+        /** A tile position on the globe's disc, or null on its far side. */
+        globePoint(tx, ty, r, cx, cy) {
+            const lon = (tx / SE.GRID_W - 0.5) * Math.PI * 2 - this.spin;
+            const lat = (0.5 - ty / SE.GRID_H) * Math.PI;
+            const x = Math.cos(lat) * Math.sin(lon);
+            const y = Math.sin(lat);
+            const z = Math.cos(lat) * Math.cos(lon);
+            // Inverse of the tilt in renderGlobe; z is towards the viewer.
+            const cosT = Math.cos(this.tilt);
+            const sinT = Math.sin(this.tilt);
+            if (y * sinT + z * cosT < 0)
+                return null;
+            return [cx + x * r, cy - (y * cosT - z * sinT) * r];
         }
         /** Ease the globe towards the Edit window's viewport; idle spin without one. */
         aimAtEditRect() {
@@ -52164,30 +52679,19 @@ var SE;
                 pts.push([x1 - (x1 - x0) * i / N, y1]);
             for (let i = 0; i <= N; i++)
                 pts.push([x0, y1 - (y1 - y0) * i / N]);
-            const cosT = Math.cos(this.tilt);
-            const sinT = Math.sin(this.tilt);
             const path = () => {
                 ctx.beginPath();
                 let drawing = false;
                 for (const [tx, ty] of pts) {
-                    const lon = (tx / SE.GRID_W - 0.5) * Math.PI * 2 - this.spin;
-                    const lat = (0.5 - ty / SE.GRID_H) * Math.PI;
-                    const x = Math.cos(lat) * Math.sin(lon);
-                    const y = Math.sin(lat);
-                    const z = Math.cos(lat) * Math.cos(lon);
-                    // Inverse of the tilt in renderGlobe; z is towards the viewer.
-                    const up = y * cosT - z * sinT;
-                    const depth = y * sinT + z * cosT;
-                    if (depth < 0) {
+                    const pt = this.globePoint(tx, ty, r, cx, cy);
+                    if (!pt) {
                         drawing = false;
                         continue;
                     }
-                    const px = cx + x * r;
-                    const py = cy - up * r;
                     if (drawing)
-                        ctx.lineTo(px, py);
+                        ctx.lineTo(pt[0], pt[1]);
                     else
-                        ctx.moveTo(px, py);
+                        ctx.moveTo(pt[0], pt[1]);
                     drawing = true;
                 }
                 ctx.stroke();
@@ -52348,8 +52852,9 @@ var SE;
  * SimEarth 2.0 — legend of the overview map
  * -----------------------------------------------------------------------------
  * Continuous maps (height, temperature, rain) get a gradient strip with its
- * ends named; categorical ones (habitats, life, technology, currents) get
- * swatches. "Werte" swaps the legend for the planet's headline figures.
+ * ends named; habitats, life and eras get icons that switch each category on
+ * and off, the other categorical ones (currents, drift) swatches. "Werte"
+ * swaps the legend for the planet's headline figures.
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -52374,11 +52879,109 @@ var SE;
         box.append(bar, marks);
         host.appendChild(box);
     }
+    /**
+     * One small icon per category; a click shows or hides it on the map. Rebuilt
+     * only when the set changes, so the periodic refresh keeps the button under
+     * the pointer and its tooltip alive.
+     */
+    function toggles(host, mode, items, hidden, onToggle) {
+        const key = `${mode}:${items.map(t => t.bit).join(',')}`;
+        if (host.dataset.toggles !== key) {
+            host.innerHTML = '';
+            host.dataset.toggles = key;
+            host.classList.add('legend-icons');
+            for (const t of items) {
+                const b = SE.button({ label: t.name, icon: t.icon, cls: 'icon-btn legend-toggle', showLabel: false, onClick: () => onToggle(t.bit) });
+                b.style.setProperty('--swatch', SE.rgbCss(t.color));
+                host.appendChild(b);
+            }
+        }
+        items.forEach((t, k) => {
+            const b = host.children[k];
+            const off = (hidden & (1 << t.bit)) !== 0;
+            b.classList.toggle('off', off);
+            b.setAttribute('aria-pressed', off ? 'false' : 'true');
+            b.title = `${t.name}\n${t.detail}\nKlicken: ${off ? 'einblenden' : 'ausblenden'}`;
+        });
+    }
+    /** Up to three names whose score reaches 0.75, best first. */
+    function bestFits(items, score, name) {
+        return items.filter(t => score(t) >= 0.75).sort((a, b) => score(b) - score(a)).slice(0, 3).map(name).join(', ');
+    }
+    function biomeToggles(world) {
+        const living = [];
+        for (let c = 1; c < SE.LIFE_COUNT; c++)
+            if (world.lifeCounts[c] > 0)
+                living.push(c);
+        const out = [];
+        for (let b = 0; b < SE.BIOME_COUNT; b++) {
+            if (world.biomeCounts[b] === 0)
+                continue;
+            const fits = bestFits(living, c => SE.LIFE[c].suit[b], c => SE.LIFE[c].name);
+            out.push({
+                bit: b, icon: SE.habitatAsset(SE.BIOME_ICONS[b]), name: SE.BIOME_NAMES[b], color: SE.BIOME_COLORS[b],
+                detail: `${SE.fmt.pct(world.biomeCounts[b] / SE.TILE_COUNT)} der Oberfläche` + (fits ? `\nAm besten angepasst: ${fits}` : ''),
+            });
+        }
+        return out;
+    }
+    function lifeToggles(world) {
+        const out = [];
+        for (let c = 1; c < SE.LIFE_COUNT; c++) {
+            if (world.lifeCounts[c] === 0)
+                continue;
+            const def = SE.LIFE[c];
+            const home = bestFits(def.suit.map((_, b) => b), b => def.suit[b], b => SE.BIOME_NAMES[b]);
+            out.push({
+                bit: c, icon: SE.evoIcon(def.id), name: def.name, color: def.color,
+                detail: `${def.realm === 'sea' ? 'Meer' : 'Land'} · ${SE.fmt.pct(world.lifeCounts[c] / SE.TILE_COUNT)} der Oberfläche besiedelt` +
+                    `\nVerträgt ${SE.fmt.int(def.temp[0]).replace('-', '−')} bis ${SE.fmt.int(def.temp[1])} °C` + (home ? `\nZu Hause: ${home}` : ''),
+            });
+        }
+        out.sort((a, b) => world.lifeFirstSeen[a.bit] - world.lifeFirstSeen[b.bit]);
+        out.push({
+            bit: 0, icon: SE.evoIcon(SE.FLORA[SE.Flora.LandPlants].id), name: 'Pflanzen ohne Tiere', color: [70, 110, 60],
+            detail: 'Wo kein Tier lebt, zeigt die Karte blass die häufigste Pflanzengruppe.',
+        });
+        return out;
+    }
+    function techToggles(world) {
+        const count = new Array(SE.TECH_COUNT).fill(0);
+        const largest = new Array(SE.TECH_COUNT).fill(-1);
+        for (let i = 0; i < SE.TILE_COUNT; i++) {
+            const t = world.tech[i];
+            if (t === SE.Tech.None)
+                continue;
+            count[t]++;
+            if (largest[t] < 0 || world.cityPop[i] > world.cityPop[largest[t]])
+                largest[t] = i;
+        }
+        const out = [];
+        for (let t = 1; t < SE.TECH_COUNT; t++) {
+            if (count[t] === 0)
+                continue;
+            const big = world.civ.cityAt(largest[t]);
+            out.push({
+                bit: t, icon: SE.eventIcon(SE.TECH_ICONS[t]), name: SE.TECH_NAMES[t], color: SE.TECH_COLORS[t],
+                detail: (count[t] === 1 ? 'Eine Siedlung' : `${SE.fmt.int(count[t])} Siedlungen`) +
+                    (big ? `\nGrößte: ${big.name} (${SE.CITY_SIZE_NAMES[SE.citySize(world.cityPop[largest[t]])]})` : ''),
+            });
+        }
+        return out;
+    }
     /** "−3.500 m": an elevation as a legend mark, to 10 m. */
     function metersLabel(elevation) {
         return `${SE.fmt.int(Math.round(SE.elevationMeters(elevation) / 10) * 10).replace('-', '−')} m`;
     }
-    function renderMapLegend(host, world, mode, values) {
+    function renderMapLegend(host, world, mode, values, hidden = 0, onToggle = () => { }) {
+        const items = values ? [] : mode === SE.MapMode.Biomes ? biomeToggles(world) : mode === SE.MapMode.LifeMap ? lifeToggles(world)
+            : mode === SE.MapMode.Technology ? techToggles(world) : [];
+        if (items.length > 0) {
+            toggles(host, mode, items, hidden, onToggle);
+            return;
+        }
+        delete host.dataset.toggles;
+        host.classList.remove('legend-icons');
         host.innerHTML = '';
         if (values) {
             const stats = [
@@ -52406,25 +53009,8 @@ var SE;
                 swatch(host, 'Land', SE.SEAFLOOR_LAND_COLOR);
                 swatch(host, 'Flüsse', SE.RIVER_MAP_COLOR);
                 break;
-            case SE.MapMode.Biomes:
-                for (let b = 0; b < SE.BIOME_COUNT; b++)
-                    if (world.biomeCounts[b] > 0)
-                        swatch(host, SE.BIOME_NAMES[b], SE.BIOME_COLORS[b]);
-                break;
-            case SE.MapMode.LifeMap: {
-                let shown = 0;
-                for (let c = 1; c < SE.LIFE_COUNT && shown < 8; c++) {
-                    if (world.lifeCounts[c] > 0) {
-                        swatch(host, SE.LIFE[c].name, SE.LIFE[c].color);
-                        shown++;
-                    }
-                }
-                swatch(host, 'Pflanzen ohne Tiere (blass)', [70, 110, 60]);
-                break;
-            }
             case SE.MapMode.Technology:
-                for (let t = 1; t < SE.TECH_COUNT; t++)
-                    swatch(host, SE.TECH_NAMES[t], SE.TECH_COLORS[t]);
+                host.appendChild(SE.make('span', 'legend-line', 'Noch keine Städte'));
                 break;
             case SE.MapMode.AirTemp:
             case SE.MapMode.OceanTemp:
@@ -63165,8 +63751,9 @@ var SE;
             }
         }
         tryDevelop(id) {
-            const res = this.hooks.develop(id);
-            if (res.ok) {
+            this.hooks.develop(id, (res) => {
+                if (!res.ok)
+                    return;
                 this.justDeveloped = id;
                 this.detailSig = '';
                 this.update(true);
@@ -63177,7 +63764,7 @@ var SE;
                     void card.offsetWidth;
                     card.classList.add('just-developed');
                 }
-            }
+            });
         }
         renderDetail() {
             const id = this.selected;
@@ -63765,7 +64352,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.10.0';
+    SE.APP_VERSION = '0.10.1';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -64363,7 +64950,7 @@ var SE;
             const planet = SE.buildTitlePlanet({
                 epoch: hooks.epoch,
                 oceanShare: hooks.oceanShare,
-                seed: () => hooks.world().seed,
+                seed: () => hooks.seed(),
                 chooseEpoch: (id) => this.chooseEpoch(id),
                 reshape: (share) => this.reshape(share),
                 reroll: () => this.reroll(),
@@ -65249,6 +65836,8 @@ var SE;
             this.perSecond = 0;
             /** Which way the running (or last) stroke works. */
             this.sign = 1;
+            /** The last step's dabs, flat [x, y, radius, sign, seconds] each, for the simulation to repeat (SimCore.dabs). */
+            this.dabs = [];
             this.last = null;
             this.held = 0;
             this.touched = new Set();
@@ -65336,8 +65925,12 @@ var SE;
             let emerged = 0;
             let flooded = 0;
             let height = 0;
+            this.dabs.length = 0;
             for (let k = 1; k <= n; k++) {
-                const d = SE.terraformDab(world, SE.wrapX(Math.round(from.x + (dx * k) / n)), Math.round(from.y + (dy * k) / n), brush, push / n);
+                const dx1 = SE.wrapX(Math.round(from.x + (dx * k) / n));
+                const dy1 = Math.round(from.y + (dy * k) / n);
+                this.dabs.push(dx1, dy1, brush.radius, brush.sign, push / n);
+                const d = SE.terraformDab(world, dx1, dy1, brush, push / n);
                 for (const t of d.tiles) {
                     tiles.push(t);
                     this.touched.add(t);
@@ -69551,6 +70144,1334 @@ var SE;
     SE.LaunchFilm = LaunchFilm;
 })(SE || (SE = {}));
 /* =============================================================================
+ * SimEarth 2.0 — the simulation core
+ * -----------------------------------------------------------------------------
+ * One planet: its state, every system, the tick in the game's order and the
+ * player's actions as commands, each checked against the current state and
+ * applied between two ticks. No DOM: the app runs it in place or in a worker
+ * (simhost.ts), the tests and probes run it in Node. What the screen should
+ * hear about goes to `notes` (messages, disasters that started),
+ * `evolution.pending` (chronicle) and `fauna.pending` (discoveries).
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Wall-clock milliseconds per simulation tick, index-aligned with the speed names (app.ts). */
+    SE.SPEED_TICK_MS = [0, SE.SLOWEST_TICK_MS, 1000, 400, 150];
+    const OK = { ok: true };
+    class SimCore {
+        constructor() {
+            this.world = new SE.WorldState();
+            this.params = new SE.ModelParams();
+            this.geo = new SE.GeoSystem();
+            this.climate = new SE.ClimateSystem();
+            this.flora = new SE.FloraSystem();
+            this.life = new SE.LifeSystem();
+            this.evolution = new SE.EvolutionSystem(this.life, this.flora);
+            this.civ = new SE.CivSystem();
+            this.events = new SE.EventSystem();
+            this.hazards = new SE.HazardSystem();
+            this.atmo = new SE.AtmosphereSystem();
+            this.history = new SE.HistoryRecorder();
+            this.fauna = new SE.FaunaDex();
+            /** Model panels already paid for on this planet. */
+            this.paidModels = new Set();
+            this.notes = [];
+            /** The game speed; 0 is paused (a paused world rebuilds the evolution statuses after a stroke). */
+            this.speed = 0;
+            /** A finished stroke's settling, a step at a time (beginSettle); always done before the next tick. */
+            this.settling = [];
+            /** Disasters paid for and waiting for their omen to end ('kind|x|y'); startHazard needs and uses one up. */
+            this.hazardsPaid = [];
+            this.hazards.onStart = (h) => this.notes.push({ kind: 'hazard', id: h.id, event: h.kind, cause: h.cause, x: h.x, y: h.y });
+        }
+        /** Wire the late-bound sinks of this realm to this core: one live core per realm. */
+        bind() {
+            SE.driftProbe = (y) => this.geo.plateVelocity(y);
+            SE.civEventSink = (kind, x, y) => this.events.trigger(this.world, kind, x, y);
+            SE.hazardSink = (kind, i, cause) => !!this.hazards.start(this.world, kind, i % SE.GRID_W, Math.floor(i / SE.GRID_W), cause);
+        }
+        /** Milliseconds per tick at `speed`: a burning fire holds the world at the slowest (its sound is as long as FIRE_MAX_TICKS). */
+        tickMs(speed) {
+            return speed > 0 && this.world.hazards.list.some((h) => (h.fire?.burning.length ?? 0) > 0) ? SE.SLOWEST_TICK_MS : SE.SPEED_TICK_MS[speed];
+        }
+        /* =========================================================== tick === */
+        /** One tick in the game's order; false while the dinosaurs' fate holds the world (dinoera.ts). */
+        tick() {
+            const w = this.world;
+            const p = this.params;
+            if (SE.dinoEraHoldsTime(w))
+                return false;
+            this.finishSettle();
+            this.geo.step(w, p);
+            this.events.step(w, p);
+            this.hazards.step(w);
+            // Rivers before the climate: their corridors are an input to it.
+            SE.RiverSystem.maybeRebuild(w);
+            this.climate.step(w, p);
+            this.flora.step(w, p);
+            SE.BiomeSystem.step(w);
+            SE.CoalSystem.step(w);
+            SE.OilSystem.step(w);
+            this.life.stepLife(w, p, this.atmo); // also refreshes derived aggregates
+            SE.placeTermiteMound(w);
+            this.fauna.step(w);
+            this.evolution.step(w, p);
+            this.civ.step(w, p, this.atmo);
+            this.atmo.step(w, p);
+            SE.regenOmega(w);
+            w.ticks++;
+            w.absoluteYears += w.yearsPerTick;
+            w.scaleYears += w.yearsPerTick;
+            this.advanceTimeScale();
+            this.history.sample(w);
+            this.recordCiv();
+            // First reef and first white beach: from the map's own derivation (reefs.ts), not from the simulation.
+            for (const e of SE.reefMilestones(w))
+                this.evolution.record(w, e);
+            return true;
+        }
+        /**
+         * The tick of the test harness (tests/helpers.js) and the probes, kept as
+         * it always was: without disasters, the lexicon, the time scales and the
+         * civilization's chronicle, and with termite mounds only if `termites`
+         * (tools/headless.js never placed them). Their seeds are tuned to it.
+         */
+        harnessTick(termites = true) {
+            const w = this.world;
+            const p = this.params;
+            this.geo.step(w, p);
+            this.events.step(w, p);
+            SE.RiverSystem.maybeRebuild(w);
+            this.climate.step(w, p);
+            this.flora.step(w, p);
+            SE.BiomeSystem.step(w);
+            SE.CoalSystem.step(w);
+            SE.OilSystem.step(w);
+            this.life.stepLife(w, p, this.atmo);
+            if (termites)
+                SE.placeTermiteMound(w);
+            this.evolution.step(w, p);
+            this.civ.step(w, p, this.atmo);
+            this.atmo.step(w, p);
+            SE.regenOmega(w);
+            w.ticks++;
+            w.absoluteYears += w.yearsPerTick;
+            w.scaleYears += w.yearsPerTick;
+            this.history.sample(w);
+        }
+        /** Hand the civilization's news to the chronicle, or else to the player as a message. */
+        civNews() {
+            const w = this.world;
+            for (const n of w.civ.news) {
+                if (!n.chronicle) {
+                    this.notes.push({ kind: 'message', text: n.text, tone: n.tone, spaceport: n.space || undefined, at: n.at >= 0 ? n.at : undefined });
+                    continue;
+                }
+                this.evolution.record(w, {
+                    key: n.chronicle.key, kind: 'civ', title: n.chronicle.title, text: n.text, change: n.chronicle.change,
+                    icon: SE.eventIcon(n.space ? 'spaceport' : 'civilization'), tick: w.ticks, years: w.absoluteYears, major: !!n.chronicle.major, at: n.at,
+                });
+            }
+            w.civ.news.length = 0;
+        }
+        recordCiv() {
+            this.civNews();
+            const civ = this.civ;
+            if (!civ.lastKind)
+                return;
+            const w = this.world;
+            if (civ.lastKind === 'sentience' && w.sentientClass !== SE.Life.None) {
+                this.evolution.record(w, {
+                    key: 'civ:sentience', kind: 'civ', title: 'Intelligenz erwacht',
+                    text: civ.lastNotice,
+                    change: 'Das Zeitalter der Zivilisation beginnt: Ein Zeitschritt umfasst nur noch 100 Jahre. Werden die Gruppen sesshaft, entstehen die ersten Dörfer.',
+                    icon: SE.eventIcon('sentience'), tick: w.ticks, years: w.absoluteYears, major: true,
+                });
+            }
+            else if (civ.lastKind === 'tech') {
+                const t = civ.lastTech;
+                this.evolution.record(w, {
+                    key: `civ:tech:${t}`, kind: 'civ', title: SE.TECH_NAMES[t],
+                    text: civ.lastNotice,
+                    change: t === SE.Tech.Industrial
+                        ? 'Fossile Energie setzt nun spürbar CO₂ frei. Den Energiemix steuerst du im Modell „Zivilisation“.'
+                        : t === SE.Tech.Atomic ? 'Mit Atomwaffen wächst die Kriegsgefahr – Philosophie und Kunst dämpfen sie.'
+                            : 'Städte entwickeln sich weiter und verbrauchen mehr Energie.',
+                    icon: SE.eventIcon('civilization'), tick: w.ticks, years: w.absoluteYears, major: false,
+                });
+            }
+            else if (civ.lastKind === 'war') {
+                this.notes.push({ kind: 'message', text: civ.lastNotice, tone: 'warn' });
+            }
+        }
+        /** Move up a time scale as the planet reaches each milestone. */
+        advanceTimeScale() {
+            const w = this.world;
+            let next = w.timeScale;
+            if (w.timeScale === SE.TimeScale.Geologic && w.totalBiomass > 0) {
+                next = SE.TimeScale.Evolution;
+            }
+            else if (w.timeScale === SE.TimeScale.Evolution && w.sentientClass !== SE.Life.None) {
+                next = SE.TimeScale.Civilized;
+            }
+            else if (w.timeScale === SE.TimeScale.Civilized) {
+                let industrial = 0;
+                for (let t = SE.Tech.Industrial; t < SE.TECH_COUNT; t++)
+                    industrial += w.techCounts[t];
+                if (industrial > 0)
+                    next = SE.TimeScale.Technology;
+            }
+            if (next !== w.timeScale) {
+                w.timeScale = next;
+                w.scaleYears = 0;
+                this.evolution.record(w, {
+                    key: `timescale:${next}`, kind: 'milestone', title: `Zeitalter: ${SE.TIMESCALE_NAMES[next]}`,
+                    text: next === SE.TimeScale.Evolution ? 'Mit dem ersten Leben beginnt das Zeitalter der Evolution.'
+                        : next === SE.TimeScale.Civilized ? 'Eine intelligente Art prägt nun den Planeten.'
+                            : 'Die Industrialisierung verändert Atmosphäre und Klima.',
+                    change: next === SE.TimeScale.Evolution
+                        ? 'Die Zeit folgt dem Kalender der Erde: in der Urzeit große Schritte, ab dem Kambrium feine.'
+                        : `Ein Zeitschritt umfasst jetzt ${SE.fmt.int(SE.YEARS_PER_TICK[next])} Jahre.`,
+                    icon: SE.eventIcon('timescale'), tick: w.ticks, years: w.absoluteYears, major: false,
+                });
+            }
+        }
+        /* ======================================================= planets === */
+        newPlanet(seed, ocean, epoch) {
+            this.fauna.reset();
+            this.paidModels.clear();
+            this.settling = [];
+            this.hazardsPaid = [];
+            this.world.reset(seed >>> 0, ocean, epoch);
+            this.params.reset();
+            SE.applyEpochParams(this.params, epoch);
+            this.geo.resetDrift();
+            this.history.reset();
+            this.evolution.pending.length = 0;
+            this.notes.length = 0;
+            this.evolution.refresh(this.world, this.params, true);
+        }
+        /** A save document (SaveSystem.decode) over this planet; on any failure the planet stays as it was. */
+        load(doc) {
+            const w = this.world;
+            let notes;
+            try {
+                notes = SE.SaveSystem.load(doc, { world: w, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna, paidModels: this.paidModels }, this.life, this.flora).notes;
+            }
+            catch (err) {
+                return { ok: false, reason: err instanceof SE.SaveIncompatible || err instanceof SE.SaveCorrupt ? err.message : 'Der Spielstand ist unlesbar.' };
+            }
+            this.settling = [];
+            this.hazardsPaid = [];
+            // Cities, peoples and names are derived from the grid; a city carpet thins out here.
+            this.civ.sync(w, this.params);
+            w.refreshDerived();
+            const civNote = w.civ.news.length > 0 ? w.civ.news[0].text : '';
+            w.civ.news.length = 0;
+            this.evolution.pending.length = 0;
+            this.notes.length = 0;
+            this.evolution.refresh(w, this.params, true);
+            // Reefs and white beaches the planet already has are history, not news.
+            for (const e of SE.reefMilestones(w, true)) {
+                w.evo.chronicle.push(e);
+                w.evo.reported.add(e.key);
+            }
+            return { ok: true, text: notes.length > 0 ? notes[0] : civNote || 'Planet geladen.' };
+        }
+        /** The planet as a save document. */
+        serialize() {
+            return SE.SaveSystem.serialize({ world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna, paidModels: this.paidModels });
+        }
+        /** The planet as a save's text (gzip where the platform can) and its summary; serialized now, between two ticks. */
+        saveText() {
+            const doc = this.serialize();
+            return SE.SaveSystem.encode(doc).then((text) => ({ ok: true, text, meta: SE.SaveSystem.meta(doc) }));
+        }
+        /** A save's text over this planet; on any failure the planet stays as it was. */
+        loadText(text) {
+            return SE.SaveSystem.decode(text).then((doc) => this.apply({ type: 'load', doc }), (err) => ({ ok: false, reason: err instanceof SE.SaveIncompatible || err instanceof SE.SaveCorrupt ? err.message : 'Der Spielstand ist unlesbar.' }));
+        }
+        /* ====================================================== commands === */
+        /** Why Ω cannot pay `cost` now, or ''. */
+        spendProblem(cost) {
+            if (SE.isDevMode())
+                return ''; // DEVMODE
+            const w = this.world;
+            return w.omega < cost ? `Zu wenig Energie – ${SE.fmt.int(cost)} Ω benötigt, ${SE.fmt.int(w.omega)} Ω vorhanden.` : '';
+        }
+        spend(cost) {
+            if (SE.isDevMode())
+                return; // DEVMODE
+            this.world.omega -= cost;
+        }
+        /** After any edit: the derived state and the tree's statuses. */
+        afterEdit() {
+            this.world.refreshDerived();
+            this.evolution.refresh(this.world, this.params, true);
+        }
+        /**
+         * Why `cmd` would be refused against the state now, or ''. The app asks
+         * this of what it shows before sending; apply() asks again of the state
+         * the command meets.
+         */
+        check(cmd) {
+            const w = this.world;
+            switch (cmd.type) {
+                case 'examine': return this.spendProblem(SE.EXAMINE_COST);
+                case 'model': return this.paidModels.has(cmd.id) ? '' : this.spendProblem(SE.MODEL_PANEL_COST);
+                case 'plant': return this.plantPlan(cmd).reason;
+                case 'placeLife': return this.lifeProblem(cmd.life, cmd.x, cmd.y);
+                case 'placeCity': return this.cityProblem(cmd.tech, cmd.x, cmd.y);
+                case 'terraformer': return this.terraformerProblem(cmd.tf, cmd.x, cmd.y);
+                case 'event': return this.spendProblem(SE.EVENT_COST);
+                case 'payHazard': return this.hazards.refusal(w, cmd.kind, cmd.x, cmd.y) || this.spendProblem(SE.EVENT_COST);
+                case 'launch': return SE.spaceLaunchProblem(w);
+                default: return '';
+            }
+        }
+        apply(cmd) {
+            const why = this.check(cmd);
+            if (why)
+                return { ok: false, reason: why };
+            const w = this.world;
+            switch (cmd.type) {
+                case 'newPlanet':
+                    this.newPlanet(cmd.seed, cmd.ocean, cmd.epoch);
+                    return OK;
+                case 'load':
+                    return this.load(cmd.doc);
+                case 'sync':
+                    return OK;
+                case 'tick':
+                    for (let k = 0; k < cmd.n; k++)
+                        if (!this.tick())
+                            break;
+                    return OK;
+                case 'speed':
+                    this.speed = cmd.speed;
+                    return OK;
+                case 'devMode':
+                    SE.devMode.on = cmd.on;
+                    return OK;
+                case 'params':
+                    for (const [group, values] of Object.entries(this.params.groups())) {
+                        const v = cmd.groups[group];
+                        if (v)
+                            Object.assign(values, v);
+                    }
+                    return OK;
+                case 'reported':
+                    w.evo.reported.add(cmd.key);
+                    return OK;
+                case 'announced':
+                    this.fauna.markAnnounced(cmd.events);
+                    return OK;
+                case 'examine':
+                    this.spend(SE.EXAMINE_COST);
+                    return OK;
+                case 'model':
+                    // Paid once per planet: closing it by accident must not cost again.
+                    if (!this.paidModels.has(cmd.id)) {
+                        this.spend(SE.MODEL_PANEL_COST);
+                        this.paidModels.add(cmd.id);
+                    }
+                    return OK;
+                case 'record':
+                    this.evolution.record(w, cmd.entry);
+                    return OK;
+                case 'develop': {
+                    const res = this.evolution.develop(w, this.params, cmd.id);
+                    if (res.ok)
+                        this.afterEdit();
+                    return res.ok ? OK : { ok: false, reason: res.reason };
+                }
+                case 'plant':
+                    return this.plant(cmd);
+                case 'placeLife': {
+                    const def = SE.LIFE[cmd.life];
+                    this.spend(def.cost);
+                    SE.LifeSystem.seed(w, cmd.life, cmd.x, cmd.y);
+                    this.afterEdit();
+                    return { ok: true, text: `${def.name} angesiedelt.` };
+                }
+                case 'placeCity':
+                    return this.placeCity(cmd.tech, cmd.x, cmd.y);
+                case 'terraformer':
+                    return this.terraformer(cmd.tf, cmd.x, cmd.y);
+                case 'event':
+                    this.spend(SE.EVENT_COST);
+                    this.events.trigger(w, cmd.kind, cmd.x, cmd.y);
+                    if (w.terrainDirty)
+                        SE.RiverSystem.rebuild(w);
+                    this.civ.sync(w, this.params);
+                    this.afterEdit();
+                    this.civNews();
+                    return { ok: true, text: `${SE.EVENT_NAMES[cmd.kind]} ausgelöst.`, tone: 'info' };
+                case 'payHazard':
+                    this.spend(SE.EVENT_COST);
+                    this.hazardsPaid.push(`${cmd.kind}|${cmd.x}|${cmd.y}`);
+                    return OK;
+                case 'startHazard': {
+                    // Only what was paid for starts, and only that is paid back.
+                    const paid = this.hazardsPaid.indexOf(`${cmd.kind}|${cmd.x}|${cmd.y}`);
+                    if (paid < 0)
+                        return { ok: false, reason: '' };
+                    this.hazardsPaid.splice(paid, 1);
+                    const h = this.hazards.start(w, cmd.kind, cmd.x, cmd.y, 'player');
+                    if (!h) {
+                        // The tile changed during the omen (another hazard took it): the energy comes back.
+                        w.omega = Math.min(SE.omegaCap(w), w.omega + SE.EVENT_COST);
+                        return { ok: false, reason: this.hazards.refusal(w, cmd.kind, cmd.x, cmd.y) || `${SE.EVENT_NAMES[cmd.kind]} ist hier nicht mehr möglich.` };
+                    }
+                    if (w.terrainDirty)
+                        SE.RiverSystem.rebuild(w);
+                    this.civ.sync(w, this.params);
+                    this.afterEdit();
+                    this.civNews();
+                    return { ok: true, hazard: h.id, started: { id: h.id, kind: h.kind, x: h.x, y: h.y, strength: h.strength } };
+                }
+                case 'dabs':
+                    return this.dabs(cmd.dabs);
+                case 'settle':
+                    this.beginSettle(cmd.tiles);
+                    this.finishSettle();
+                    return OK;
+                case 'dinoFate':
+                    return SE.chooseDinoFate(w, this.evolution, cmd.choice) ? OK : { ok: false, reason: '' };
+                case 'comet': {
+                    const h = SE.applyComet(w, this.params, this.life, this.hazards, this.evolution);
+                    if (!h)
+                        return { ok: false, reason: '' };
+                    if (w.terrainDirty)
+                        SE.RiverSystem.rebuild(w);
+                    this.civ.sync(w, this.params);
+                    this.fauna.step(w);
+                    this.afterEdit();
+                    this.civNews();
+                    return { ok: true, hazard: h.id, started: { id: h.id, kind: h.kind, x: h.x, y: h.y, strength: h.strength } };
+                }
+                case 'launch':
+                    if (!SE.commitLaunch(w))
+                        return { ok: false, reason: '' };
+                    this.evolution.record(w, {
+                        key: SE.SPACE_KEY_LAUNCHED, kind: 'civ', title: 'Start in neue Welten',
+                        text: `Die Rakete der ${SE.mindName(w)} hebt ab und lässt ihre Heimatwelt hinter sich.`,
+                        change: 'Terraforming auf Mars, Venus und weiteren Welten wird in der Vollversion verfügbar sein. Dein Planet bleibt spielbar.',
+                        icon: SE.eventIcon('spaceport'), tick: w.ticks, years: w.absoluteYears, major: true, at: w.space.site,
+                    });
+                    // The closing dialog tells it: no card over the film.
+                    w.evo.reported.add(SE.SPACE_KEY_LAUNCHED);
+                    return OK;
+            }
+        }
+        /* ---- plants, life, cities, terraformers ---- */
+        /** The tiles of a 5×5 plant stroke that it would change, or why none. */
+        plantPlan(cmd) {
+            const w = this.world;
+            this.flora.prepare(w, this.params, true);
+            const tiles = [];
+            for (let dy = -2; dy <= 2; dy++) {
+                const y = cmd.y + dy;
+                if (y < 0 || y >= SE.GRID_H)
+                    continue;
+                for (let dx = -2; dx <= 2; dx++)
+                    tiles.push(SE.idx(SE.wrapX(cmd.x + dx), y));
+            }
+            if (cmd.clearing) {
+                const targets = tiles.filter((j) => !w.isWater(j) && (w.flora[j] !== 0 || w.vegetation[j] > 0));
+                if (targets.length === 0)
+                    return { reason: 'Hier wächst nichts, was gerodet werden könnte.', targets };
+                return { reason: this.spendProblem(SE.BIOME_COST), targets };
+            }
+            const n = SE.nodeForFlora(cmd.flora);
+            if (!n || !(SE.isDevMode() || w.evo.isDeveloped(n.id)))
+                return { reason: 'Diese Pflanzengruppe ist noch nicht entwickelt.', targets: [] }; // DEVMODE
+            const suitable = tiles.filter((j) => this.flora.suit(w, cmd.flora, j) >= 0.15);
+            if (suitable.length === 0) {
+                const why = this.flora.problem(w, cmd.flora, SE.idx(cmd.x, cmd.y)) ?? 'die Bedingungen sind dort zu ungünstig';
+                return { reason: `${n.name}: ${why}.`, targets: [] };
+            }
+            // Charge only for a stroke that adds something.
+            const targets = suitable.filter((j) => this.flora.wouldPlant(w, cmd.flora, j, 0.7));
+            if (targets.length === 0)
+                return { reason: `${n.name} wachsen hier bereits so dicht, wie es der Standort erlaubt.`, targets };
+            return { reason: this.spendProblem(SE.BIOME_COST), targets };
+        }
+        plant(cmd) {
+            const w = this.world;
+            const { targets } = this.plantPlan(cmd);
+            this.spend(SE.BIOME_COST);
+            if (cmd.clearing) {
+                for (const j of targets)
+                    this.flora.clear(w, j);
+                SE.BiomeSystem.step(w, false);
+                this.afterEdit();
+                return OK;
+            }
+            let changed = 0;
+            for (const j of targets)
+                if (this.flora.plant(w, cmd.flora, j, 0.7))
+                    changed++;
+            SE.BiomeSystem.step(w, false);
+            this.afterEdit();
+            return { ok: true, text: `${SE.nodeForFlora(cmd.flora).name} auf ${changed} ${changed === 1 ? 'Feld' : 'Feldern'} angesiedelt.` };
+        }
+        lifeProblem(c, x, y) {
+            const w = this.world;
+            const def = SE.LIFE[c];
+            const node = SE.nodeForLife(c);
+            const bar = SE.dinoEraLifeBar(w, c);
+            if (bar)
+                return bar;
+            if (!node || !(SE.isDevMode() || w.evo.isDeveloped(node.id)))
+                return `${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`; // DEVMODE
+            const i = SE.idx(x, y);
+            const problem = this.life.habitabilityProblem(w, this.params, i, c);
+            if (problem)
+                return `${def.name} ${problem}.`;
+            if (w.lifeDensity[SE.lifeIdx(i, c)] >= SE.LifeSystem.FOUNDER_DENSITY)
+                return `${def.name} leben hier bereits.`;
+            return this.spendProblem(def.cost);
+        }
+        cityProblem(tech, x, y) {
+            const w = this.world;
+            const i = SE.idx(x, y);
+            if (w.isWater(i))
+                return 'Städte brauchen festes Land.';
+            // A city implies someone to live in it: a species that has woken up.
+            // Waking one is the Monolith's job (civ.ts has the rule).
+            const founder = w.sentientClass;
+            if (founder === SE.Life.None)
+                return 'Städte brauchen eine intelligente Art. Erwecke eine mit dem Monolithen.';
+            if (w.tech[i] >= tech && w.cityPop[i] >= 0.3)
+                return 'Hier steht bereits eine solche Stadt.';
+            // A shrunken city may be revived, but never knocked back to an older age (and charged for it).
+            if (w.tech[i] > tech)
+                return `Hier steht bereits eine weiter entwickelte Stadt (${SE.TECH_NAMES[w.tech[i]]}).`;
+            const problem = w.tech[i] !== SE.Tech.None ? '' : SE.citySiteProblem(w, i, founder);
+            return problem || this.spendProblem(SE.TECH_COST[tech]);
+        }
+        placeCity(tech, x, y) {
+            const w = this.world;
+            const i = SE.idx(x, y);
+            const upgrade = w.tech[i] !== SE.Tech.None;
+            this.spend(SE.TECH_COST[tech]);
+            w.tech[i] = tech;
+            w.cityPop[i] = Math.max(w.cityPop[i], 0.3);
+            this.civ.sync(w, this.params);
+            this.afterEdit();
+            this.civNews();
+            const name = w.civ.cityAt(i)?.name ?? 'Stadt';
+            return { ok: true, text: upgrade ? `${name}: ${SE.TECH_NAMES[tech]}.` : `${name} gegründet (${SE.TECH_NAMES[tech]}).` };
+        }
+        /** Terraformers: every validity check before the charge. */
+        terraformerProblem(tf, x, y) {
+            const w = this.world;
+            const i = SE.idx(x, y);
+            if (tf === SE.Terraformer.Monolith) {
+                if (w.isWater(i))
+                    return 'Der Monolith braucht festes Land.';
+                // One sentient species per world: the Monolith only awakens the first.
+                if (w.sentientClass !== SE.Life.None)
+                    return `${SE.LIFE[w.sentientClass].name} sind bereits intelligent. Neue Städte gründest du mit dem Städte-Werkzeug.`;
+                const resident = this.sentientResident(i);
+                if (resident === SE.Life.None)
+                    return 'Der Monolith braucht eine heimische Tiergruppe, die Intelligenz entwickeln kann – etwa Säugetiere, Reptilien, Insekten oder Vögel.';
+                const site = SE.citySiteProblem(w, i, resident);
+                if (site)
+                    return site;
+            }
+            return this.spendProblem(SE.TERRAFORMER_COST[tf]);
+        }
+        terraformer(tf, x, y) {
+            const w = this.world;
+            const i = SE.idx(x, y);
+            this.spend(SE.TERRAFORMER_COST[tf]);
+            let text = '';
+            switch (tf) {
+                case SE.Terraformer.OxygenGenerator:
+                    w.o2 = SE.clamp(w.o2 + 1.5, 0, 40);
+                    text = 'Sauerstoff-Generator: +1,5 % Sauerstoff.';
+                    break;
+                case SE.Terraformer.CO2Generator:
+                    w.co2 = SE.clamp(w.co2 + 120, 0, 5000);
+                    text = 'CO₂-Generator: +120 ppm CO₂.';
+                    break;
+                case SE.Terraformer.VaporGenerator:
+                    w.vapor = SE.clamp(w.vapor + 0.08, 0, 1);
+                    for (let dy = -2; dy <= 2; dy++) {
+                        const yy = y + dy;
+                        if (yy < 0 || yy >= SE.GRID_H)
+                            continue;
+                        for (let dx = -2; dx <= 2; dx++) {
+                            const j = SE.idx(SE.wrapX(x + dx), yy);
+                            w.moisture[j] = SE.clamp(w.moisture[j] + 0.4, 0, 1);
+                        }
+                    }
+                    text = 'Wasserdampf-Generator: mehr Feuchtigkeit.';
+                    break;
+                case SE.Terraformer.Monolith: {
+                    const species = this.sentientResident(i);
+                    this.civ.sync(w, this.params);
+                    w.sentientClass = species;
+                    SE.spawnBands(w, i);
+                    this.civNews();
+                    text = `Monolith: ${SE.mindName(w)} erlangen Intelligenz. Kleine Gruppen ziehen umher und schlagen Lager auf.`;
+                    break;
+                }
+            }
+            this.afterEdit();
+            return { ok: true, text };
+        }
+        /** The most abundant land class on a tile that can become sentient. */
+        sentientResident(i) {
+            const w = this.world;
+            let best = SE.Life.None;
+            let bestD = 0;
+            for (let c = 1; c < SE.LIFE_COUNT; c++) {
+                const def = SE.LIFE[c];
+                if (!def.sentient || def.realm !== 'land')
+                    continue;
+                const d = w.lifeDensity[i * SE.LIFE_COUNT + c];
+                if (d > bestD) {
+                    bestD = d;
+                    best = c;
+                }
+            }
+            return best;
+        }
+        /* ---- terraforming brush ---- */
+        /** One frame of a held brush (terraformtool.ts recorded the dabs): pay for the elevation moved. */
+        dabs(dabs) {
+            const w = this.world;
+            if (SE.isDevMode())
+                w.omega = SE.omegaCap(w); // DEVMODE: the brush never runs dry
+            if (w.omega < 1)
+                return { ok: false, reason: '' };
+            let moved = 0;
+            for (let k = 0; k + 4 < dabs.length; k += 5) {
+                moved += SE.terraformDab(w, dabs[k], dabs[k + 1], { radius: dabs[k + 2], sign: dabs[k + 3] }, dabs[k + 4]).moved;
+            }
+            this.chargeDabs(moved);
+            return OK;
+        }
+        /** Charge the brush's moved elevation. ponytail: the first dab of a stroke is paid after the fact (no rate known yet), so it can overdraw by one frame; clamped at 0. */
+        chargeDabs(moved) {
+            const w = this.world;
+            if (moved > 0)
+                w.omega = Math.max(0, w.omega - moved * SE.TERRAFORM_COST_PER_UNIT);
+        }
+        /** A stroke's slow consequences over the tiles it touched (terraformSettleSteps), then what any edit needs. */
+        beginSettle(tiles) {
+            const w = this.world;
+            this.finishSettle();
+            this.settling = SE.terraformSettleSteps(w, tiles);
+            this.settling.push(() => { this.civ.sync(w, this.params); w.refreshDerived(); }, () => {
+                // While the world runs its tick rebuilds the statuses a few times a second anyway.
+                if (this.speed === 0)
+                    this.evolution.refresh(w, this.params, true);
+                this.civNews();
+            });
+        }
+        /** Run the next settle step; false once none is left. */
+        settleStep() {
+            const step = this.settling.shift();
+            if (step)
+                step();
+            return this.settling.length > 0;
+        }
+        get settlePending() {
+            return this.settling.length > 0;
+        }
+        finishSettle() {
+            while (this.settleStep()) { /* all of it */ }
+        }
+    }
+    SE.SimCore = SimCore;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the simulation state as a message
+ * -----------------------------------------------------------------------------
+ * What the worker's core sends after a tick or a command, and how the page
+ * takes it over into its own long-lived SimCore (the mirror the screen reads,
+ * simhost.ts). The page's objects stay the same objects: typed arrays are
+ * filled with .set(), class instances (WorldState, CivState, HazardState,
+ * EvolutionState …) keep their prototypes and get their fields replaced, so
+ * every cache keyed by world identity, `ticks` or `revision` keeps working.
+ * postMessage copies the state as it is at that moment (structured clone),
+ * so one message is always one consistent state between two ticks.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const fields = (o) => o;
+    function without(o, skip) {
+        const out = {};
+        for (const [k, v] of Object.entries(o))
+            if (!skip.includes(k))
+                out[k] = v;
+        return out;
+    }
+    /** Typed arrays at least this long travel in pooled buffers (TransferPool); smaller ones are simply copied. */
+    const POOLED_MIN = 4096;
+    /**
+     * Buffers for the big typed arrays of a state, handed back and forth: the
+     * worker copies the live arrays into them and transfers them, the page takes
+     * them over (applySimState) and transfers them back with its ack. Without it
+     * every state left 5 MB of garbage on the page (35 MB/s at the fastest speed).
+     */
+    class TransferPool {
+        constructor() {
+            this.free = new Map();
+        }
+        /** A pooled copy of `live` under `key`, its buffer added to `transfer`. */
+        copy(key, live, transfer) {
+            let buf = this.free.get(key);
+            const n = live.length;
+            if (!buf || buf.constructor !== live.constructor || buf.length !== n) {
+                buf = new live.constructor(n);
+            }
+            else {
+                this.free.delete(key);
+            }
+            buf.set(live);
+            transfer.push(buf.buffer);
+            return buf;
+        }
+        /** Buffers the page sent back. */
+        give(buffers) {
+            for (const [k, v] of Object.entries(buffers))
+                this.free.set(k, v);
+        }
+    }
+    SE.TransferPool = TransferPool;
+    /** The big typed arrays of a received state's world (and its hazards), by pool key: to send back. */
+    function pooledArrays(s, transfer) {
+        const out = {};
+        const walk = (o, prefix) => {
+            for (const [k, v] of Object.entries(o)) {
+                if (ArrayBuffer.isView(v) && v.length >= POOLED_MIN) {
+                    out[prefix + k] = v;
+                    transfer.push(v.buffer);
+                }
+                else if (!prefix && k === 'hazards' && v && typeof v === 'object') {
+                    walk(v, 'hazards.');
+                }
+            }
+        };
+        walk(s.world, '');
+        return out;
+    }
+    SE.pooledArrays = pooledArrays;
+    /** The world's own fields with its big typed arrays (and its hazards') copied into pooled buffers. */
+    function pooledWorld(core, pool, transfer) {
+        const swap = (o, prefix) => {
+            const out = {};
+            for (const [k, v] of Object.entries(o)) {
+                if (!prefix && k === 'rng')
+                    continue;
+                if (ArrayBuffer.isView(v) && v.length >= POOLED_MIN)
+                    out[k] = pool.copy(prefix + k, v, transfer);
+                else if (!prefix && k === 'hazards' && v && typeof v === 'object')
+                    out[k] = swap(v, 'hazards.');
+                else
+                    out[k] = v;
+            }
+            return out;
+        };
+        return swap(fields(core.world), '');
+    }
+    /**
+     * The core's state for postMessage: references to the live objects, which
+     * postMessage copies at once; with a pool, the big arrays go as pooled
+     * copies whose buffers are added to `transfer`.
+     */
+    function captureSimState(core, withHistory, pool, transfer) {
+        const h = core.history;
+        return {
+            world: pool && transfer ? pooledWorld(core, pool, transfer) : without(core.world, ['rng']),
+            rng: core.world.rng.getState(),
+            params: core.params.groups(),
+            evolution: without(core.evolution, ['life', 'flora', 'pending']),
+            fauna: without(core.fauna, ['pending']),
+            history: withHistory ? { years: h.years, data: h.series.map((s) => s.data) } : null,
+            paidModels: Array.from(core.paidModels),
+            offsets: core.geo.driftOffsets,
+        };
+    }
+    SE.captureSimState = captureSimState;
+    function isInstance(v) {
+        if (!v || typeof v !== 'object' || ArrayBuffer.isView(v) || Array.isArray(v) || v instanceof Map || v instanceof Set)
+            return false;
+        const proto = Object.getPrototypeOf(v);
+        return proto !== Object.prototype && proto !== null;
+    }
+    /**
+     * Take `data` over into `target`: same-size typed arrays are copied into,
+     * nested class instances merged field by field, everything else replaced.
+     */
+    function mergeInto(target, data) {
+        for (const k of Object.keys(data)) {
+            const v = data[k];
+            const t = target[k];
+            if (ArrayBuffer.isView(v) && ArrayBuffer.isView(t) && t.length === v.length && t.constructor === v.constructor) {
+                t.set(v);
+            }
+            else if (isInstance(t) && v && typeof v === 'object' && !ArrayBuffer.isView(v) && !Array.isArray(v) && !(v instanceof Map) && !(v instanceof Set)) {
+                mergeInto(fields(t), v);
+            }
+            else {
+                // A received typed array is never kept: its buffer may go back to the worker (TransferPool).
+                target[k] = ArrayBuffer.isView(v) ? v.slice() : v;
+            }
+        }
+    }
+    SE.mergeInto = mergeInto;
+    /** Take a received state over into the page's mirror core. */
+    function applySimState(view, s) {
+        mergeInto(fields(view.world), s.world);
+        // The mirror never draws a random number; this keeps it ready to take over (simhost.ts failover).
+        view.world.rng.setState(s.rng);
+        for (const [group, values] of Object.entries(view.params.groups())) {
+            const v = s.params[group];
+            if (v)
+                Object.assign(values, v);
+        }
+        mergeInto(fields(view.evolution), s.evolution);
+        mergeInto(fields(view.fauna), s.fauna);
+        if (s.history) {
+            const h = view.history;
+            h.years.length = 0;
+            h.years.push(...s.history.years);
+            h.series.forEach((series, k) => {
+                series.data.length = 0;
+                series.data.push(...(s.history.data[k] ?? []));
+            });
+        }
+        view.paidModels.clear();
+        for (const id of s.paidModels)
+            view.paidModels.add(id);
+        view.geo.driftOffsets = s.offsets;
+    }
+    SE.applySimState = applySimState;
+    /** Bytes of the typed arrays in a state: what dominates a message. */
+    function simStateBytes(s) {
+        let n = 0;
+        const walk = (o, depth) => {
+            for (const v of Object.values(o)) {
+                if (ArrayBuffer.isView(v))
+                    n += v.byteLength;
+                else if (depth < 2 && isInstanceData(v))
+                    walk(v, depth + 1);
+            }
+        };
+        walk(s.world, 0);
+        return n;
+    }
+    SE.simStateBytes = simStateBytes;
+    function isInstanceData(v) {
+        return !!v && typeof v === 'object' && !ArrayBuffer.isView(v) && !Array.isArray(v) && !(v instanceof Map) && !(v instanceof Set);
+    }
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the simulation worker
+ * -----------------------------------------------------------------------------
+ * Owns the planet: one SimCore, ticked on its own clock at the game speed,
+ * with the page's commands applied in order between two ticks. After a tick
+ * or a command it posts the whole state with every result and one-off event
+ * since the last post. At most one state is on its way: the next waits for
+ * the page's ack, and while it waits at most one more tick is computed, so no
+ * tick is ever skipped on screen; an overloaded page or worker slows the
+ * planet down instead. Runs in a Blob worker (simhost.ts) and, for tests, on
+ * any MessagePort.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    function simWorkerMain(port) {
+        const core = new SE.SimCore();
+        core.bind();
+        const queue = [];
+        const results = [];
+        const pool = new SE.TransferPool();
+        const tickMs = [];
+        let session = 0;
+        let seq = 0;
+        let busy = false;
+        let dead = false;
+        let inFlight = false;
+        let dirty = false;
+        let tickedSincePost = false;
+        /** The loop stopped without a clock (paused, held, loading): the next run does not count the time since. */
+        let idle = true;
+        let acc = 0;
+        let last = performance.now();
+        let timer = null;
+        let historyKey = '';
+        /** The landscape worker's port: one world on its way at a time, the newest when it asks for more. */
+        let feed = null;
+        let feedBusy = false;
+        let feedDirty = false;
+        const feedPost = () => {
+            if (!feed)
+                return;
+            if (feedBusy) {
+                feedDirty = true;
+                return;
+            }
+            feed.postMessage({ world: SE.captureSimState(core, false).world });
+            feedBusy = true;
+            feedDirty = false;
+        };
+        /** The command being applied, for the page to leave out when it takes over. */
+        let applying = -1;
+        const fail = (err) => {
+            dead = true;
+            port.postMessage({ t: 'fatal', message: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err), seq: applying });
+        };
+        const post = () => {
+            const h = core.history;
+            const key = `${h.years.length}|${h.years[h.years.length - 1] ?? ''}`;
+            const transfer = [];
+            const msg = {
+                t: 'state', session, seq,
+                state: SE.captureSimState(core, key !== historyKey, pool, transfer),
+                results: results.splice(0),
+                notes: core.notes.splice(0),
+                chronicle: core.evolution.pending.splice(0),
+                fauna: core.fauna.pending.splice(0),
+                tickMs: tickMs.splice(0),
+                at: performance.timeOrigin + performance.now(),
+            };
+            historyKey = key;
+            port.postMessage(msg, transfer);
+            inFlight = true;
+            dirty = false;
+            tickedSincePost = false;
+            feedPost();
+        };
+        const wake = (delay = 0) => {
+            if (timer !== null)
+                clearTimeout(timer);
+            timer = setTimeout(loop, delay);
+        };
+        const take = (m) => {
+            const cmd = m.cmd;
+            if (cmd.type === 'newPlanet')
+                session = m.session;
+            seq = m.seq;
+            if (cmd.type === 'saveText') {
+                // Serialized now, between two ticks; only the encoding runs on meanwhile.
+                core.saveText().then((result) => {
+                    results.push({ seq: m.seq, result });
+                    dirty = true;
+                    wake();
+                }, fail);
+                return;
+            }
+            if (cmd.type === 'loadText') {
+                // Decoding is async (gzip); nothing else runs meanwhile, so the order holds. Only a loaded planet is a new session.
+                busy = true;
+                core.loadText(cmd.text).then((result) => {
+                    if (result.ok)
+                        session = m.session;
+                    results.push({ seq: m.seq, result });
+                    dirty = true;
+                    busy = false;
+                    idle = true;
+                    wake();
+                }, fail);
+                return;
+            }
+            if (cmd.type === 'speed')
+                acc = core.speed === 0 ? 0 : Math.min(acc, core.tickMs(cmd.speed));
+            applying = m.seq;
+            results.push({ seq: m.seq, result: core.apply(cmd) });
+            applying = -1;
+            dirty = true;
+        };
+        function loop() {
+            timer = null;
+            if (dead)
+                return;
+            try {
+                while (queue.length > 0 && !busy)
+                    take(queue.shift());
+                const now = performance.now();
+                const ms = core.tickMs(core.speed);
+                // After a pause, a hold or a load the clock starts afresh: no burst of ticks for the time it stood.
+                if (idle)
+                    last = now;
+                idle = false;
+                if (ms > 0 && !busy)
+                    acc += now - last;
+                else
+                    acc = 0;
+                last = now;
+                // One tick ahead of the page at most: never two ticks in one post.
+                if (ms > 0 && !busy && acc >= ms && !tickedSincePost) {
+                    const t0 = performance.now();
+                    if (core.tick()) {
+                        tickMs.push(performance.now() - t0);
+                        dirty = true;
+                        tickedSincePost = true;
+                        acc = Math.min(acc - ms, ms * SE.SIM_BACKLOG_TICKS);
+                    }
+                    else {
+                        acc = 0; // the dinosaurs' fate holds the world until the page answers
+                    }
+                }
+                if (dirty && !inFlight)
+                    post();
+                if (busy || ms === 0 || SE.dinoEraHoldsTime(core.world)) {
+                    idle = true; // a message wakes it
+                    return;
+                }
+                if (tickedSincePost && inFlight)
+                    return; // the ack wakes it
+                wake(Math.max(0, ms - acc));
+            }
+            catch (err) {
+                fail(err);
+            }
+        }
+        port.onmessage = (e) => {
+            const m = e.data;
+            if (m.t === 'feed') {
+                feed = m.port;
+                feed.onmessage = () => {
+                    feedBusy = false;
+                    if (feedDirty)
+                        feedPost();
+                };
+                feedPost();
+                return;
+            }
+            if (m.t === 'ack') {
+                inFlight = false;
+                if (m.buffers)
+                    pool.give(m.buffers);
+            }
+            else
+                queue.push({ seq: m.seq, session: m.session, cmd: m.cmd });
+            if (!dead)
+                wake();
+        };
+    }
+    SE.simWorkerMain = simWorkerMain;
+})(SE || (SE = {}));
+/* =============================================================================
+ * SimEarth 2.0 — the page's side of the simulation
+ * -----------------------------------------------------------------------------
+ * The screen always reads `view`, a SimCore that lives as long as the page.
+ * In worker mode the planet runs in a classic Blob worker built from the
+ * bundle's own source (tools/wrap-bundle.js): `view` is a mirror that takes
+ * over each state the worker posts (simstate.ts), commands go out numbered
+ * and in order, and their results come back with the state that contains
+ * them. In direct mode — no worker possible, preview pages, `?sim=direct`, or
+ * after the worker failed — `view` itself is the planet and every command is
+ * applied at once. Rendering never waits for the worker: it draws the last
+ * complete state.
+ *
+ * A few commands are predicted (applied to the mirror at once and again over
+ * each newer state until the worker has them): the brush's dabs, so the
+ * ground moves under the pointer, and bookkeeping like `reported`.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Call a result's receiver; a fault in the screen's follow-up must not stop the answers after it. */
+    function answer(done, r) {
+        try {
+            done?.(r);
+        }
+        catch (err) {
+            console.error('SimEarth: handling a simulation result failed', err);
+        }
+    }
+    /** No word from a worker that owes answers for this long: it is taken for dead. */
+    const SIM_WATCHDOG_MS = 20000;
+    /**
+     * A classic worker running this very bundle and then `entry`, from a Blob of
+     * the bundle's own source (tools/wrap-bundle.js): over file:// a page can
+     * neither fetch its script nor start a worker from a file. Null for an
+     * unwrapped build or where no worker can start. Revoke `url` once the worker
+     * has spoken.
+     */
+    function bundleWorker(entry, name) {
+        const fn = globalThis.seBundle;
+        if (typeof fn !== 'function' || typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined')
+            return null;
+        let url = '';
+        try {
+            url = URL.createObjectURL(new Blob([`${fn.toString()}\nseBundle();\n${entry}\n`], { type: 'text/javascript' }));
+            return { worker: new Worker(url, { name }), url };
+        }
+        catch (err) {
+            if (url)
+                URL.revokeObjectURL(url);
+            console.warn(`SimEarth: no ${name} worker, its work stays on the page`, err);
+            return null;
+        }
+    }
+    SE.bundleWorker = bundleWorker;
+    class SimHost {
+        /** `port` runs the worker on a given MessagePort (tests); otherwise `mode` asks for a Blob worker if one can start. */
+        constructor(mode, port) {
+            this.view = new SE.SimCore();
+            this.port = null;
+            this.worker = null;
+            this.url = '';
+            this.seq = 0;
+            /** The planet shown; `sessions` counts the ones asked for (a load only becomes one when it worked). */
+            this.session = 0;
+            this.sessions = 0;
+            /** Last command the worker had applied in a state that arrived. */
+            this.applied = 0;
+            this.waiting = new Map();
+            this.predicted = [];
+            /** When the shown state was posted (performance.timeOrigin + now), and when one with a new tick arrived (page time). */
+            this.stateAt = 0;
+            this.tickedAt = 0;
+            this.lastTicks = -1;
+            this.heardAt = 0;
+            /** A command failed on the page as well after the worker had failed: the planet may be inconsistent, nothing more is applied or ticked. */
+            this.broken = false;
+            /** The worker failed and the page took over; the reason, for the player. */
+            this.onFailover = null;
+            if (port)
+                this.attach(port);
+            else if (mode === 'worker')
+                this.startWorker();
+            // The page's sinks: the drift map reads driftProbe; in worker mode the rest wait for a failover.
+            this.view.bind();
+        }
+        get mode() {
+            return this.port ? 'worker' : 'direct';
+        }
+        startWorker() {
+            const started = bundleWorker('SE.simWorkerMain(self);', 'simearth-sim');
+            if (!started)
+                return;
+            const w = started.worker;
+            this.url = started.url;
+            w.onerror = (e) => {
+                e.preventDefault();
+                this.failover(e.message || 'Fehler im Simulations-Worker');
+            };
+            w.onmessageerror = () => this.failover('unlesbare Nachricht vom Simulations-Worker');
+            this.worker = w;
+            this.attach(w);
+        }
+        attach(port) {
+            this.port = port;
+            this.heardAt = performance.now();
+            port.onmessage = (e) => this.receive(e.data);
+        }
+        /* ======================================================== commands === */
+        /** Apply a command (direct) or send it; `done` gets its result once the state that contains it is on screen. */
+        run(cmd, done, always = false) {
+            const fresh = cmd.type === 'newPlanet' || cmd.type === 'loadText';
+            if (this.broken) {
+                // Only a whole new planet (or a loaded one) gets out of it.
+                if (!fresh) {
+                    answer(done, { ok: false, reason: 'Die Simulation ist angehalten.' });
+                    return;
+                }
+                const then = done;
+                done = (r) => {
+                    if (r.ok)
+                        this.broken = false;
+                    then?.(r);
+                };
+            }
+            if (!this.port) {
+                this.runHere(cmd, done);
+                return;
+            }
+            const seq = ++this.seq;
+            if (this.waiting.size === 0)
+                this.heardAt = performance.now();
+            if (cmd.type === 'newPlanet') {
+                this.session = ++this.sessions;
+                this.predicted.length = 0;
+                this.waiting.set(seq, { cmd, done, always, session: this.session });
+                this.port.postMessage({ t: 'cmd', seq, session: this.session, cmd });
+                return;
+            }
+            // A load that fails leaves the planet, its session and its news as they were.
+            const load = cmd.type === 'loadText' ? ++this.sessions : undefined;
+            this.waiting.set(seq, { cmd, done, always: always || load !== undefined, session: this.session, load });
+            this.port.postMessage({ t: 'cmd', seq, session: load ?? this.session, cmd });
+        }
+        request(cmd, always = false) {
+            return new Promise((resolve) => this.run(cmd, resolve, always));
+        }
+        /** Apply to the screen's state at once; in worker mode the worker follows. */
+        predict(cmd) {
+            this.view.apply(cmd);
+            this.send(cmd);
+        }
+        /** The brush moved the view's ground already (terraformtool.ts): pay for it, and let the worker dab the same. */
+        brush(dabs, moved) {
+            this.view.chargeDabs(moved);
+            // A copy: the tool reuses its array next frame, and a prediction may be replayed after that.
+            this.send({ type: 'dabs', dabs: dabs.slice() });
+        }
+        send(cmd) {
+            if (!this.port)
+                return;
+            const seq = ++this.seq;
+            if (this.waiting.size === 0)
+                this.heardAt = performance.now();
+            this.predicted.push({ seq, cmd });
+            this.waiting.set(seq, { cmd, always: false, session: this.session });
+            this.port.postMessage({ t: 'cmd', seq, session: this.session, cmd });
+        }
+        runHere(cmd, done) {
+            const core = this.view;
+            if (cmd.type === 'saveText' || cmd.type === 'loadText') {
+                // Serialized now, between two ticks; only the encoding (or decoding) waits.
+                (cmd.type === 'saveText' ? core.saveText() : core.loadText(cmd.text)).then((r) => answer(done, r), () => answer(done, { ok: false, reason: '' }));
+                return;
+            }
+            const r = core.apply(cmd);
+            answer(done, r);
+        }
+        /* ========================================================== states === */
+        receive(m) {
+            // After a failover the page's planet is the planet: a late word from the old worker changes nothing.
+            if (!this.port)
+                return;
+            this.heardAt = performance.now();
+            if (m.t === 'fatal') {
+                this.failover(m.message, m.seq);
+                return;
+            }
+            if (this.url) {
+                URL.revokeObjectURL(this.url);
+                this.url = '';
+            }
+            try {
+                // A load that worked makes its planet the one shown, from this state on.
+                for (const { seq, result } of m.results) {
+                    const w = this.waiting.get(seq);
+                    if (w?.load !== undefined && result.ok) {
+                        this.session = w.load;
+                        this.predicted.length = 0;
+                    }
+                }
+                // A state from before the latest new planet or load belongs to a planet no longer shown.
+                if (m.session === this.session) {
+                    const view = this.view;
+                    SE.applySimState(view, m.state);
+                    this.stateAt = m.at;
+                    if (view.world.ticks !== this.lastTicks) {
+                        this.lastTicks = view.world.ticks;
+                        this.tickedAt = performance.now();
+                    }
+                    while (this.predicted.length > 0 && this.predicted[0].seq <= m.seq)
+                        this.predicted.shift();
+                    for (const p of this.predicted)
+                        view.apply(p.cmd);
+                    view.notes.push(...m.notes);
+                    view.evolution.pending.push(...m.chronicle);
+                    view.fauna.pending.push(...m.fauna);
+                    SE.perfHud.message(SE.simStateBytes(m.state));
+                }
+            }
+            catch (err) {
+                // The mirror is only the picture of the planet: the next state replaces it whole.
+                console.error('SimEarth: a simulation state could not be taken over', err);
+            }
+            finally {
+                // Taken over (or dropped): the worker may post the next state, in the buffers of this one.
+                const transfer = [];
+                const buffers = SE.pooledArrays(m.state, transfer);
+                this.port?.postMessage({ t: 'ack', buffers }, transfer);
+            }
+            this.applied = Math.max(this.applied, m.seq);
+            for (const ms of m.tickMs)
+                SE.perfHud.tick(ms);
+            for (const { seq, result } of m.results) {
+                const w = this.waiting.get(seq);
+                this.waiting.delete(seq);
+                if (w && (w.session === this.session || w.always))
+                    answer(w.done, result);
+            }
+        }
+        /**
+         * The worker is gone: the page takes over from the last complete state it
+         * shows and answers what was still open, in order. Dabs and bookkeeping it
+         * predicted are in that state already; the command the worker failed on
+         * (`culprit`) is answered as failed, not tried again. Should one still
+         * fail here, the planet may be half changed: `broken`, nothing more runs.
+         */
+        failover(why, culprit = -1) {
+            if (!this.port)
+                return;
+            console.warn(`SimEarth: the simulation worker failed (${why}); the planet runs on the page from its last complete state`);
+            this.worker?.terminate();
+            this.worker = null;
+            this.port = null;
+            if (this.url)
+                URL.revokeObjectURL(this.url);
+            this.url = '';
+            this.view.bind();
+            const predicted = new Set(this.predicted.map((p) => p.seq));
+            this.predicted.length = 0;
+            const open = [...this.waiting.entries()].sort((a, b) => a[0] - b[0]);
+            this.waiting.clear();
+            for (const [seq, w] of open) {
+                // Applied by the worker already (in the state shown), or predicted into it: never twice.
+                if (predicted.has(seq) || seq <= this.applied)
+                    continue;
+                if (w.session !== this.session && !w.always)
+                    continue;
+                if (seq === culprit) {
+                    answer(w.done, { ok: false, reason: 'Die Simulation konnte diesen Schritt nicht ausführen.' });
+                    continue;
+                }
+                try {
+                    this.runHere(w.cmd, w.done);
+                }
+                catch (err) {
+                    this.broken = true;
+                    console.error('SimEarth: a command failed on the page too; the simulation stops', err);
+                    break;
+                }
+            }
+            this.onFailover?.(why);
+        }
+        /** Every frame: a worker that owes answers and stays silent too long is taken for dead. */
+        watch(now) {
+            if (this.port && this.worker && this.waiting.size > 0 && now - this.heardAt > SIM_WATCHDOG_MS)
+                this.failover('keine Antwort');
+        }
+        /** How far the world is between its last tick and the next, 0..1, for effects that play between ticks. */
+        phase(now, tickMs) {
+            return tickMs > 0 ? SE.clamp((now - this.tickedAt) / tickMs, 0, 0.999) : 0;
+        }
+        /** Milliseconds since the shown state was posted. */
+        stateAge() {
+            return this.port ? performance.timeOrigin + performance.now() - this.stateAt : 0;
+        }
+        /** Worker mode: let the worker send each state's world to `port` too (the landscape worker's feed). False in direct mode. */
+        feed(port) {
+            if (!this.worker)
+                return false;
+            this.worker.postMessage({ t: 'feed', port }, [port]);
+            return true;
+        }
+        /** Commands sent and not yet answered. */
+        get pending() {
+            return this.waiting.size;
+        }
+        /** Resolves once every command sent so far is answered (benchmarks, tests). */
+        idle() {
+            return this.port ? this.request({ type: 'sync' }).then(() => undefined) : Promise.resolve();
+        }
+    }
+    SE.SimHost = SimHost;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — application wiring
  * -----------------------------------------------------------------------------
  * Builds the stage (the living map with its tool dock), the status bar, the
@@ -69559,9 +71480,8 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
+    /** Index-aligned with SPEED_TICK_MS (simcore.ts). */
     const SPEED_NAMES = ['Pause', 'Sehr langsam', 'Langsam', 'Mittel', 'Schnell'];
-    /** Wall-clock milliseconds per simulation tick, index-aligned with SPEED_NAMES. */
-    const SPEED_TICK_MS = [0, SE.SLOWEST_TICK_MS, 1000, 400, 150];
     /** Keyboard shortcut of each tool, index-aligned with TOOL_NAMES (wired in wireKeyboard). */
     const TOOL_KEYS = ['U', 'V', 'H', 'P', 'L', 'K'];
     /** The overview-map legend that matches a climate overlay's colours (winds and currents are arrows). */
@@ -69586,28 +71506,35 @@ var SE;
     const EVENT_RADIUS = [8, 8, 6, 4, 6, 6, 6, 8];
     /** The ping where the camera lands on a disaster, in the disaster tool's colour. */
     const HAZARD_PING = '#ff7a6b';
+    /** The overview map's ring over other news: the sun gold of the civilization badges. */
+    const NEWS_PING = '#f6c453';
     function prefersReducedMotion() {
         return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     }
     class App {
+        get world() { return this.sim.view.world; }
+        get params() { return this.sim.view.params; }
+        get geo() { return this.sim.view.geo; }
+        get flora() { return this.sim.view.flora; }
+        get life() { return this.sim.view.life; }
+        get evolution() { return this.sim.view.evolution; }
+        get civ() { return this.sim.view.civ; }
+        get hazards() { return this.sim.view.hazards; }
+        get fauna() { return this.sim.view.fauna; }
+        get history() { return this.sim.view.history; }
+        /** Model panels already paid for on this planet. */
+        get paidModels() { return this.sim.view.paidModels; }
         constructor() {
-            /* ---- simulation ---- */
-            this.world = new SE.WorldState();
-            this.params = new SE.ModelParams();
-            this.geo = new SE.GeoSystem();
-            this.climate = new SE.ClimateSystem();
-            this.flora = new SE.FloraSystem();
-            this.life = new SE.LifeSystem();
-            this.evolution = new SE.EvolutionSystem(this.life, this.flora);
-            this.civ = new SE.CivSystem();
-            this.events = new SE.EventSystem();
-            this.hazards = new SE.HazardSystem();
             /** Hazards that started without the player since the last report (nature, chains). */
             this.hazardNews = [];
             /** The latest disaster and the planet it belongs to, for "Zum letzten Ereignis springen". */
             this.lastHazard = null;
-            this.atmo = new SE.AtmosphereSystem();
-            this.history = new SE.HistoryRecorder();
+            /** Ticks of the state last seen on screen (worker mode: a new one means unsaved progress). */
+            this.seenTicks = -1;
+            /** The developer mode as the simulation last heard it. */
+            this.devModeSent = false;
+            /** The seed of the planet asked for last: in worker mode the state showing it may still be on its way. */
+            this.planetSeed = 0;
             this.graphs = new Map();
             this.sliderPanels = [];
             this.modelHeroes = new Map();
@@ -69652,14 +71579,12 @@ var SE;
             this.panKeys = new Set();
             this.panEase = 0;
             this.lastNudge = 0;
-            /** A finished stroke whose settling waits a frame, so releasing the brush never stalls the frame that shows it. */
+            /** Direct mode: a finished stroke whose settling (SimCore.beginSettle) runs a step a frame, so releasing the brush never stalls the frame that shows it. */
             this.settleDue = null;
             /** Progress made since the last save — guards New Planet and Load. */
             this.unsaved = false;
             this.savingNow = false;
             this.milestonePaused = false;
-            /** Model panels already paid for on this planet. */
-            this.paidModels = new Set();
             this.speedBeforeMilestone = 3;
             /** Speed to return to once the dinosaurs' fate is settled; null while it holds nothing (dinoera.ts). */
             this.fateResume = null;
@@ -69669,7 +71594,8 @@ var SE;
             this.cometShown = -1;
             /** The launch film on screen, until the closing dialog is answered. */
             this.launchFilm = null;
-            this.fauna = new SE.FaunaDex();
+            /** The launch is on its way to the simulation: a second click must not launch twice. */
+            this.launching = false;
             this.screenHeld = false;
             this.lastFrame = 0;
             this.accumulator = 0;
@@ -69683,9 +71609,24 @@ var SE;
                 const gap = now - this.lastFrame;
                 const delta = Math.min(250, gap);
                 this.lastFrame = now;
-                // A burning fire holds the game at the slowest speed: its sound is as long as the fire may burn (FIRE_MAX_TICKS).
-                const tickMs = this.speed > 0 && this.world.hazards.list.some((h) => (h.fire?.burning.length ?? 0) > 0) ? SE.SLOWEST_TICK_MS : SPEED_TICK_MS[this.speed];
-                if (tickMs > 0) {
+                // A burning fire holds the game at the slowest speed (SimCore.tickMs).
+                const tickMs = this.sim.view.tickMs(this.speed);
+                if (SE.devMode.on !== this.devModeSent) {
+                    this.devModeSent = SE.devMode.on;
+                    this.sim.predict({ type: 'devMode', on: SE.devMode.on });
+                }
+                if (this.sim.mode === 'worker') {
+                    // The worker ticks on its own clock; effects play between its ticks by the time since the last one arrived.
+                    if (tickMs > 0)
+                        this.editView.tickPhase = this.sim.phase(now, tickMs);
+                    this.sim.watch(now);
+                    SE.perfHud.stateAge(this.sim.stateAge());
+                    if (this.world.ticks !== this.seenTicks) {
+                        this.seenTicks = this.world.ticks;
+                        this.unsaved = true;
+                    }
+                }
+                else if (tickMs > 0) {
                     this.accumulator += delta;
                     let steps = 0;
                     // The first due tick always runs, more only within the frame's budget.
@@ -69712,6 +71653,7 @@ var SE;
                     this.touchPending = null;
                     this.beginStroke(held.x, held.y, false);
                 }
+                this.takeNotes();
                 this.tendDinoFate();
                 this.strokeFrame(delta);
                 this.panFrame(delta);
@@ -69729,7 +71671,7 @@ var SE;
                 this.bubbling.update(this.bubblingTarget, delta, now);
                 this.stormWind.update(this.stormWindTarget, delta, now);
                 if (this.windows.isVisible('map')) {
-                    if (this.mapView.globe) {
+                    if (this.mapView.globe || this.mapView.pulsing) {
                         if (now - this.lastMapRender > 50) {
                             this.mapView.render(this.world);
                             this.lastMapRender = now;
@@ -69754,6 +71696,10 @@ var SE;
                 SE.perfHud.frame(gap, performance.now() - start);
                 window.requestAnimationFrame(this.frame);
             };
+            // Preview pages and `?sim=direct` drive the planet on the page; everything else in a worker when one starts.
+            const direct = /[?&]sim=direct(&|$)/.test(location.search) || !!document.querySelector('script[src*="_preview"]');
+            this.sim = new SE.SimHost(direct ? 'direct' : 'worker');
+            this.sim.onFailover = () => this.simFailed();
             this.stage = SE.el('desktop');
             SE.Modal.attach(SE.el('modal-root'));
             this.loadSettings();
@@ -69770,7 +71716,7 @@ var SE;
             }, { capture: true });
             this.windows = new SE.WindowManager(this.stage);
             this.notifier = new SE.Notifier(SE.el('toasts'), SE.el('milestones'), {
-                reported: (key) => this.world.evo.reported.add(key),
+                reported: (key) => this.sim.predict({ type: 'reported', key }),
                 view: (id) => this.openTree(id),
                 milestone: (open) => { this.screenHeld = open; this.onMilestone(open); this.discoveries.setHeld(open); },
                 narrow: () => this.windows.narrow,
@@ -69791,13 +71737,23 @@ var SE;
                 open: (c, s) => { this.speciesInfo.show(c, s); this.windows.show('species'); },
                 openLexicon: () => this.windows.show('lexicon'),
                 held: () => this.screenHeld,
-                shown: (events) => { this.fauna.markAnnounced(events); SE.playDiscoveryChime(SE.SFX.volume()); },
+                shown: (events) => { this.sim.predict({ type: 'announced', events: events.map((e) => ({ c: e.c, stage: e.stage })) }); SE.playDiscoveryChime(SE.SFX.volume()); },
             });
             this.ripStamps = new SE.RipStamps(document.body, {
                 held: () => !!this.title || !!SE.activeIntro || this.screenHeld || SE.Modal.open || this.fateAsking || !!this.launchFilm,
                 reduced: () => this.settings.reduceEffects,
             });
             this.buildStage();
+            // Hidden, the page draws no frames and so never paused for a milestone or saved: the worker holds the planet meanwhile.
+            document.addEventListener('visibilitychange', () => {
+                if (this.sim.mode === 'worker')
+                    this.sim.predict({ type: 'speed', speed: document.hidden ? 0 : this.speed });
+            });
+            // Worker mode: the landscape worker refreshes the map's field from the simulation worker's states itself.
+            SE.PixelTerrain.shared().whenReady(() => {
+                if (this.sim.mode === 'worker')
+                    SE.PixelTerrain.shared().feedFrom((port) => this.sim.feed(port));
+            });
             this.buildMapWindow();
             this.buildInfoWindows();
             this.buildModelWindows();
@@ -69810,9 +71766,6 @@ var SE;
                 this.syncWindowButtons();
                 this.stage.classList.toggle('examining', this.windows.isVisible('examine'));
             };
-            SE.driftProbe = (y) => this.geo.plateVelocity(y);
-            SE.civEventSink = (kind, x, y) => this.events.trigger(this.world, kind, x, y);
-            SE.hazardSink = (kind, i, cause) => !!this.hazards.start(this.world, kind, i % SE.GRID_W, Math.floor(i / SE.GRID_W), cause);
             this.newPlanet();
             this.unsaved = false;
             // The overview map opens when play starts (not on a phone, where every
@@ -69828,7 +71781,6 @@ var SE;
             this.stage.appendChild(canvas);
             this.editView = new SE.EditView(canvas);
             this.editView.reduceEffects = this.settings.reduceEffects;
-            this.hazards.onStart = (h) => this.hazardNews.push(h);
             this.wireCanvas(canvas);
             /* ---- tool rail and the active tool's card ---- */
             const dock = SE.make('aside', 'dock');
@@ -70252,7 +72204,11 @@ var SE;
             this.refreshMapLegend();
         }
         refreshMapLegend() {
-            SE.renderMapLegend(this.mapLegendEl, this.world, this.mapView.mode, this.mapShowsInfo);
+            const mode = this.mapView.mode;
+            SE.renderMapLegend(this.mapLegendEl, this.world, mode, this.mapShowsInfo, this.mapView.hidden[mode], (bit) => {
+                this.mapView.hidden[mode] ^= 1 << bit;
+                this.refreshMapLegend();
+            });
         }
         buildInfoWindows() {
             // Gaia
@@ -70323,18 +72279,23 @@ var SE;
                 const hero = new SE.ModelHero(kind, this.params, () => this.world);
                 this.modelHeroes.set(id, hero);
                 win.body.append(hero.el, SE.make('p', 'model-intro', 'Die Marke auf jedem Regler zeigt den kalibrierten Ausgangswert. Änderungen wirken sofort – Doppelklick setzt einen Regler zurück.'));
-                for (const p of parts(() => hero.render())) {
+                // Only the group moved, as a copy: the command keeps these values while newer states overwrite the panel's.
+                const changed = (group) => () => {
+                    hero.render();
+                    this.sim.predict({ type: 'params', groups: { [group]: { ...this.params.groups()[group] } } });
+                };
+                for (const p of parts(changed)) {
                     win.body.appendChild(p.el);
                     this.sliderPanels.push(p);
                 }
                 hero.render();
             };
-            add('model-geo', 'Modell: Geosphäre', 'geo', 700, (onChange) => [SE.buildSliderPanel(this.params.geo, SE.GEO_SLIDERS, { onChange })]);
-            add('model-atmo', 'Modell: Atmosphäre', 'atmo', 700, (onChange) => [SE.buildSliderPanel(this.params.atmo, SE.ATMO_SLIDERS, { onChange })]);
-            add('model-bio', 'Modell: Biosphäre', 'bio', 640, (onChange) => [SE.buildSliderPanel(this.params.bio, SE.BIO_SLIDERS, { onChange })]);
+            add('model-geo', 'Modell: Geosphäre', 'geo', 700, (onChange) => [SE.buildSliderPanel(this.params.geo, SE.GEO_SLIDERS, { onChange: onChange('geo') })]);
+            add('model-atmo', 'Modell: Atmosphäre', 'atmo', 700, (onChange) => [SE.buildSliderPanel(this.params.atmo, SE.ATMO_SLIDERS, { onChange: onChange('atmo') })]);
+            add('model-bio', 'Modell: Biosphäre', 'bio', 640, (onChange) => [SE.buildSliderPanel(this.params.bio, SE.BIO_SLIDERS, { onChange: onChange('bio') })]);
             add('model-civ', 'Modell: Zivilisation', 'civ', 760, (onChange) => [
-                SE.buildSliderPanel(this.params.civEnergy, SE.CIV_ENERGY_SLIDERS, { heading: 'Energiequellen', share: true, onChange }),
-                SE.buildSliderPanel(this.params.civAlloc, SE.CIV_ALLOC_SLIDERS, { heading: 'Energieverwendung', onChange }),
+                SE.buildSliderPanel(this.params.civEnergy, SE.CIV_ENERGY_SLIDERS, { heading: 'Energiequellen', share: true, onChange: onChange('civEnergy') }),
+                SE.buildSliderPanel(this.params.civAlloc, SE.CIV_ALLOC_SLIDERS, { heading: 'Energieverwendung', onChange: onChange('civAlloc') }),
             ]);
         }
         buildGraphWindows() {
@@ -70358,7 +72319,7 @@ var SE;
                 onShow: () => { this.evolution.refresh(this.world, this.params, true); this.tree.update(true); this.tree.onShown(); },
             });
             this.tree = new SE.EvolutionTreeView({
-                develop: (id) => this.developNode(id),
+                develop: (id, done) => this.developNode(id, done),
                 showOnMap: (id) => this.showNodeOnMap(id),
                 placeTool: (id) => this.armToolFor(id),
                 world: () => this.world,
@@ -70496,12 +72457,20 @@ var SE;
                         this.windows.hide(id);
                         return;
                     }
-                    // Paid once per planet: closing it by accident must not cost again.
-                    if (!this.paidModels.has(id)) {
-                        if (!this.spend(SE.MODEL_PANEL_COST))
-                            return;
-                        this.paidModels.add(id);
+                    // Paid once per planet (simcore.ts): closing it by accident must not cost again.
+                    const cmd = { type: 'model', id };
+                    const why = this.sim.view.check(cmd);
+                    if (why) {
+                        this.notifier.message(why, 'warn');
+                        return;
                     }
+                    this.sim.run(cmd, (r) => {
+                        if (r.ok)
+                            return;
+                        this.windows.hide(id);
+                        if (r.reason)
+                            this.notifier.message(r.reason, 'warn');
+                    });
                     this.sliderPanels.forEach((p) => p.sync());
                     this.windows.show(id);
                 },
@@ -70965,16 +72934,28 @@ var SE;
             this.windows.hide('evolution');
             this.notifier.message(`${SE.TOOL_NAMES[this.selection.tool]}: ${n.name} – tippe auf einen geeigneten Ort.`);
         }
-        /** Charge the Ω pool, reporting failure. */
-        spend(cost) {
-            if (SE.isDevMode())
-                return true; // DEVMODE
-            if (this.world.omega < cost) {
-                this.notifier.message(`Zu wenig Energie – ${SE.fmt.int(cost)} Ω benötigt, ${SE.fmt.int(this.world.omega)} Ω vorhanden.`, 'warn');
-                return false;
+        /**
+         * A player action: checked against what the screen shows, then applied by
+         * the simulation, which checks it again against its state; the result is
+         * told when the state that contains it is on screen.
+         */
+        act(cmd, then) {
+            const why = this.sim.view.check(cmd);
+            if (why) {
+                this.notifier.message(why, 'warn');
+                return;
             }
-            this.world.omega -= cost;
-            return true;
+            this.sim.run(cmd, (r) => {
+                if (!r.ok) {
+                    if (r.reason)
+                        this.notifier.message(r.reason, 'warn');
+                    return;
+                }
+                this.afterEdit();
+                if (r.text)
+                    this.notifier.message(r.text, r.tone ?? 'ok');
+                then?.(r);
+            });
         }
         static isSingleShot(tool) {
             return tool === SE.Tool.Examine || tool === SE.Tool.PlaceLife || tool === SE.Tool.TriggerEvent;
@@ -71011,11 +72992,11 @@ var SE;
                 return;
             }
             const dt = perSecond > 0 ? Math.min(deltaMs / 1000, w.omega / perSecond) : deltaMs / 1000;
+            // The ground moves on screen at once; in worker mode the worker dabs the same (SimHost.brush).
             const s = t.step(w, tile.x, tile.y, dt);
             if (s.moved === 0)
                 return;
-            // ponytail: the first dab of a stroke is paid after the fact (no rate known yet), so it can overdraw by one frame; clamped at 0.
-            w.omega = Math.max(0, w.omega - s.moved * SE.TERRAFORM_COST_PER_UNIT);
+            this.sim.brush(t.dabs, s.moved);
             this.editView.markDirtyTiles(s.x0, s.y0, s.x1, s.y1);
             const now = performance.now();
             if ((s.emerged > 0 || s.flooded > 0) && now - this.lastNudge > 900) {
@@ -71040,51 +73021,53 @@ var SE;
                     this.notifier.message(this.terraform.sign > 0 ? 'Hier ist bereits die größte Höhe erreicht.' : 'Hier ist bereits die größte Tiefe erreicht.', 'warn');
                 return;
             }
-            const w = this.world;
-            const steps = SE.terraformSettleSteps(w, tiles);
-            // What afterEdit does, spread over frames too: the evolution statuses
-            // alone cost a frame, and while the world runs its tick rebuilds them
-            // a few times a second anyway, so only a paused world pays for them here.
-            steps.push(() => { this.civ.sync(w, this.params); w.refreshDerived(); }, () => {
-                this.examinePanel.invalidate();
-                if (this.speed === 0)
-                    this.evolution.refresh(w, this.params, true);
-                this.unsaved = true;
-                this.civNews();
-            });
-            this.settleDue = { world: w, steps, phase: 0 };
+            if (this.sim.mode === 'worker') {
+                // The worker settles it in one go before its next tick; the screen follows with that state.
+                this.sim.run({ type: 'settle', tiles: [...tiles] }, () => {
+                    this.examinePanel.invalidate();
+                    this.unsaved = true;
+                    this.takeNotes();
+                    this.editView.warm(this.world);
+                    this.editView.markDirty();
+                    this.editView.holdWorld = this.terraform.active;
+                });
+                return;
+            }
+            this.sim.view.beginSettle(tiles);
+            this.settleDue = { phase: 0 };
         }
         /**
-         * Settle a finished stroke one step per frame, so its costs never pile
-         * onto one frame: the frame that shows the release, then the settling,
-         * then re-reading the map's field, then (next render) the full redraw.
-         * `all` does what is left at once, before a new stroke starts.
+         * Direct mode: settle a finished stroke one step per frame, so its costs
+         * never pile onto one frame: the frame that shows the release, then the
+         * settling, then re-reading the map's field, then (next render) the full
+         * redraw. `all` does what is left at once, before a new stroke starts. A
+         * tick due meanwhile finishes the settling first (SimCore.tick).
          */
         settle(all = false) {
             const due = this.settleDue;
             if (!due)
                 return;
-            const w = this.world;
-            if (due.world === w) {
-                if (due.phase === 0 && !all) {
-                    due.phase = 1;
-                    return;
-                }
-                if (due.phase <= 1) {
-                    // One settle step a frame (terraformSettleSteps: none stalls a frame alone).
-                    while (due.steps.length > 0) {
-                        due.steps.shift()();
-                        if (!all)
-                            return;
-                    }
-                    due.phase = 2;
-                    if (!all)
-                        return;
-                }
-                if (!all)
-                    this.editView.warm(w);
-                this.editView.markDirty();
+            const core = this.sim.view;
+            if (due.phase === 0 && !all) {
+                due.phase = 1;
+                return;
             }
+            if (due.phase <= 1) {
+                // One settle step a frame (terraformSettleSteps: none stalls a frame alone).
+                if (all)
+                    core.finishSettle();
+                else if (core.settlePending && core.settleStep())
+                    return;
+                due.phase = 2;
+                this.examinePanel.invalidate();
+                this.unsaved = true;
+                this.takeNotes();
+                if (!all)
+                    return;
+            }
+            if (!all)
+                this.editView.warm(this.world);
+            this.editView.markDirty();
             this.settleDue = null;
             this.editView.holdWorld = this.terraform.active;
         }
@@ -71092,14 +73075,12 @@ var SE;
             this.terraform.resize(dir);
             this.buildToolOptions();
         }
-        /** After any edit: derived state, map, open panels and tree all at once. */
+        /** After any edit (the simulation refreshed its derived state and the tree): map, open panels, news. */
         afterEdit() {
-            const w = this.world;
-            w.refreshDerived();
             this.editView.markDirty();
             this.examinePanel.invalidate();
-            this.evolution.refresh(w, this.params, true);
             this.unsaved = true;
+            this.takeNotes();
         }
         applyAt(clientX, clientY) {
             const tile = this.editView.tileAt(clientX, clientY);
@@ -71121,8 +73102,14 @@ var SE;
                     }
                     // The open window already follows its tile live: clicking it again buys nothing, but may catch a migration.
                     if (!this.examineTile || this.examineTile.x !== x || this.examineTile.y !== y || !this.windows.isVisible('examine')) {
-                        if (!this.spend(SE.EXAMINE_COST))
+                        const why = this.sim.view.check({ type: 'examine' });
+                        if (why) {
+                            this.notifier.message(why, 'warn');
                             return;
+                        }
+                        // The window opens at once; the charge follows with the simulation, which checks it again.
+                        this.sim.run({ type: 'examine' }, (r) => { if (!r.ok && r.reason)
+                            this.notifier.message(r.reason, 'warn'); });
                         this.examineTile = { x, y };
                         this.examinePanel.invalidate();
                         this.examinePanel.update(w, x, y);
@@ -71147,15 +73134,7 @@ var SE;
                         this.raiseHazard(s.event, x, y);
                         break;
                     }
-                    if (!this.spend(SE.EVENT_COST))
-                        return;
-                    this.events.trigger(w, s.event, x, y);
-                    if (w.terrainDirty)
-                        SE.RiverSystem.rebuild(w);
-                    this.civ.sync(w, this.params);
-                    this.afterEdit();
-                    this.notifier.message(`${SE.EVENT_NAMES[s.event]} ausgelöst.`);
-                    this.civNews();
+                    this.act({ type: 'event', kind: s.event, x, y });
                     break;
                 case SE.Tool.Move:
                     break;
@@ -71167,230 +73146,75 @@ var SE;
         /**
          * A disaster on exactly one tile (docs/ereignisse-spec.md §2.1): checked
          * and paid for now, started in the simulation once its omen has played.
+         * In worker mode the show picks the hazard up when its state arrives
+         * (FxShow.build: a fresh hazard in view plays its main animation).
          */
         raiseHazard(kind, x, y) {
-            const w = this.world;
-            const why = this.hazards.refusal(w, kind, x, y);
+            const pay = { type: 'payHazard', kind, x, y };
+            const why = this.sim.view.check(pay);
             if (why) {
                 this.notifier.message(why, 'warn');
                 return;
             }
-            if (!this.spend(SE.EVENT_COST))
-                return;
-            this.editView.fx.show.stage(w, kind, x, y, () => {
-                const h = this.hazards.start(w, kind, x, y, 'player');
-                if (!h) {
-                    // The tile changed during the omen (another hazard took it): the energy comes back.
-                    w.omega = Math.min(SE.omegaCap(w), w.omega + SE.EVENT_COST);
-                    this.notifier.message(this.hazards.refusal(w, kind, x, y) || `${SE.EVENT_NAMES[kind]} ist hier nicht mehr möglich.`, 'warn');
-                    return null;
-                }
-                if (w.terrainDirty)
-                    SE.RiverSystem.rebuild(w);
-                this.civ.sync(w, this.params);
-                this.afterEdit();
-                this.lastHazard = { h, generation: w.hazards.generation };
-                this.reportHazards(`${SE.EVENT_NAMES[kind]}!`);
-                this.civNews();
-                return h;
+            this.sim.run(pay, (r) => { if (!r.ok && r.reason)
+                this.notifier.message(r.reason, 'warn'); });
+            this.editView.fx.show.stage(this.world, kind, x, y, () => {
+                let started = null;
+                this.sim.run({ type: 'startHazard', kind, x, y }, (r) => {
+                    if (!r.ok) {
+                        if (r.reason)
+                            this.notifier.message(r.reason, 'warn');
+                        return;
+                    }
+                    const w = this.world;
+                    started = w.hazards.hazard(r.hazard ?? -1) ?? null;
+                    // The worker's hazard: its show starts here, a one-step meteor may be over before any state shows it.
+                    if (this.sim.mode === 'worker' && r.started)
+                        this.editView.fx.show.begin(r.started, performance.now());
+                    this.lastHazard = { id: r.hazard ?? -1, x, y, generation: w.hazards.generation };
+                    this.editView.markDirty();
+                    this.examinePanel.invalidate();
+                    this.unsaved = true;
+                    this.takeNotes(`${SE.EVENT_NAMES[kind]}!`);
+                });
+                // Direct mode answers at once; the worker's hazard arrives with its state.
+                return this.sim.mode === 'direct' ? started : null;
             });
         }
         /** Plant a developed group (or clear) over a 5x5 brush. */
-        plantAt(cx, cy) {
-            const w = this.world;
+        plantAt(x, y) {
             const s = this.selection;
-            this.flora.prepare(w, this.params, true);
-            const tiles = [];
-            for (let dy = -2; dy <= 2; dy++) {
-                const y = cy + dy;
-                if (y < 0 || y >= SE.GRID_H)
-                    continue;
-                for (let dx = -2; dx <= 2; dx++)
-                    tiles.push(SE.idx(SE.wrapX(cx + dx), y));
-            }
-            if (s.clearing) {
-                const targets = tiles.filter((j) => !w.isWater(j) && (w.flora[j] !== 0 || w.vegetation[j] > 0));
-                if (targets.length === 0) {
-                    this.notifier.message('Hier wächst nichts, was gerodet werden könnte.', 'warn');
-                    return;
-                }
-                if (!this.spend(SE.BIOME_COST))
-                    return;
-                for (const j of targets)
-                    this.flora.clear(w, j);
-                SE.BiomeSystem.step(w, false);
-                this.afterEdit();
-                return;
-            }
-            const n = SE.nodeForFlora(s.flora);
-            if (!n || !(SE.isDevMode() || w.evo.isDeveloped(n.id))) { // DEVMODE
-                this.notifier.message('Diese Pflanzengruppe ist noch nicht entwickelt.', 'warn');
-                return;
-            }
-            const suitable = tiles.filter((j) => this.flora.suit(w, s.flora, j) >= 0.15);
-            if (suitable.length === 0) {
-                const why = this.flora.problem(w, s.flora, SE.idx(cx, cy)) ?? 'die Bedingungen sind dort zu ungünstig';
-                this.notifier.message(`${n.name}: ${why}.`, 'warn');
-                return;
-            }
-            // Charge only for a stroke that adds something.
-            const targets = suitable.filter((j) => this.flora.wouldPlant(w, s.flora, j, 0.7));
-            if (targets.length === 0) {
-                this.notifier.message(`${n.name} wachsen hier bereits so dicht, wie es der Standort erlaubt.`, 'warn');
-                return;
-            }
-            if (!this.spend(SE.BIOME_COST))
-                return;
-            let changed = 0;
-            for (const j of targets)
-                if (this.flora.plant(w, s.flora, j, 0.7))
-                    changed++;
-            SE.BiomeSystem.step(w, false);
-            this.afterEdit();
-            this.notifier.message(`${n.name} auf ${changed} ${changed === 1 ? 'Feld' : 'Feldern'} angesiedelt.`, 'ok');
+            this.act({ type: 'plant', flora: s.flora, clearing: s.clearing, x, y });
         }
         placeLife(x, y) {
-            const w = this.world;
             const s = this.selection;
-            const i = SE.idx(x, y);
-            if (s.lifeMode === 'life') {
-                const def = SE.LIFE[s.life];
-                const node = SE.nodeForLife(s.life);
-                const bar = SE.dinoEraLifeBar(w, s.life);
-                if (bar) {
-                    this.notifier.message(bar, 'warn');
-                    return;
-                }
-                if (!node || !(SE.isDevMode() || w.evo.isDeveloped(node.id))) { // DEVMODE
-                    this.notifier.message(`${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`, 'warn');
-                    return;
-                }
-                const problem = this.life.habitabilityProblem(w, this.params, i, s.life);
-                if (problem) {
-                    this.notifier.message(`${def.name} ${problem}.`, 'warn');
-                    return;
-                }
-                if (w.lifeDensity[SE.lifeIdx(i, s.life)] >= SE.LifeSystem.FOUNDER_DENSITY) {
-                    this.notifier.message(`${def.name} leben hier bereits.`, 'warn');
-                    return;
-                }
-                if (!this.spend(def.cost))
-                    return;
-                SE.LifeSystem.seed(w, s.life, x, y);
-                this.afterEdit();
-                this.notifier.message(`${def.name} angesiedelt.`, 'ok');
-                return;
-            }
-            if (s.lifeMode === 'city') {
-                if (w.isWater(i)) {
-                    this.notifier.message('Städte brauchen festes Land.', 'warn');
-                    return;
-                }
-                // A city implies someone to live in it: a species that has woken up.
-                // Waking one is the Monolith's job (civ.ts has the rule).
-                const founder = w.sentientClass;
-                if (founder === SE.Life.None) {
-                    this.notifier.message('Städte brauchen eine intelligente Art. Erwecke eine mit dem Monolithen.', 'warn');
-                    return;
-                }
-                if (w.tech[i] >= s.tech && w.cityPop[i] >= 0.3) {
-                    this.notifier.message('Hier steht bereits eine solche Stadt.', 'warn');
-                    return;
-                }
-                // A shrunken city may be revived, but never knocked back to an older age (and charged for it).
-                if (w.tech[i] > s.tech) {
-                    this.notifier.message(`Hier steht bereits eine weiter entwickelte Stadt (${SE.TECH_NAMES[w.tech[i]]}).`, 'warn');
-                    return;
-                }
-                const upgrade = w.tech[i] !== SE.Tech.None;
-                const problem = upgrade ? '' : SE.citySiteProblem(w, i, founder);
-                if (problem) {
-                    this.notifier.message(problem, 'warn');
-                    return;
-                }
-                if (!this.spend(SE.TECH_COST[s.tech]))
-                    return;
-                w.tech[i] = s.tech;
-                w.cityPop[i] = Math.max(w.cityPop[i], 0.3);
-                this.civ.sync(w, this.params);
-                this.afterEdit();
-                this.civNews();
-                const name = w.civ.cityAt(i)?.name ?? 'Stadt';
-                this.notifier.message(upgrade ? `${name}: ${SE.TECH_NAMES[s.tech]}.` : `${name} gegründet (${SE.TECH_NAMES[s.tech]}).`, 'ok');
-                return;
-            }
-            // Terraformers: every validity check before the charge.
-            const tf = s.terraformer;
-            if (tf === SE.Terraformer.Monolith && w.isWater(i)) {
-                this.notifier.message('Der Monolith braucht festes Land.', 'warn');
-                return;
-            }
-            // One sentient species per world: the Monolith only awakens the first.
-            if (tf === SE.Terraformer.Monolith && w.sentientClass !== SE.Life.None) {
-                this.notifier.message(`${SE.LIFE[w.sentientClass].name} sind bereits intelligent. Neue Städte gründest du mit dem Städte-Werkzeug.`, 'warn');
-                return;
-            }
-            if (tf === SE.Terraformer.Monolith && this.sentientResident(i) === SE.Life.None) {
-                this.notifier.message('Der Monolith braucht eine heimische Tiergruppe, die Intelligenz entwickeln kann – etwa Säugetiere, Reptilien, Insekten oder Vögel.', 'warn');
-                return;
-            }
-            const siteProblem = tf === SE.Terraformer.Monolith ? SE.citySiteProblem(w, i, this.sentientResident(i)) : '';
-            if (siteProblem) {
-                this.notifier.message(siteProblem, 'warn');
-                return;
-            }
-            if (!this.spend(SE.TERRAFORMER_COST[tf]))
-                return;
-            switch (tf) {
-                case SE.Terraformer.OxygenGenerator:
-                    w.o2 = SE.clamp(w.o2 + 1.5, 0, 40);
-                    this.notifier.message('Sauerstoff-Generator: +1,5 % Sauerstoff.', 'ok');
-                    break;
-                case SE.Terraformer.CO2Generator:
-                    w.co2 = SE.clamp(w.co2 + 120, 0, 5000);
-                    this.notifier.message('CO₂-Generator: +120 ppm CO₂.', 'ok');
-                    break;
-                case SE.Terraformer.VaporGenerator:
-                    w.vapor = SE.clamp(w.vapor + 0.08, 0, 1);
-                    for (let dy = -2; dy <= 2; dy++) {
-                        const yy = y + dy;
-                        if (yy < 0 || yy >= SE.GRID_H)
-                            continue;
-                        for (let dx = -2; dx <= 2; dx++) {
-                            const j = SE.idx(SE.wrapX(x + dx), yy);
-                            w.moisture[j] = SE.clamp(w.moisture[j] + 0.4, 0, 1);
-                        }
-                    }
-                    this.notifier.message('Wasserdampf-Generator: mehr Feuchtigkeit.', 'ok');
-                    break;
-                case SE.Terraformer.Monolith: {
-                    const species = this.sentientResident(i);
-                    this.civ.sync(w, this.params);
-                    w.sentientClass = species;
-                    SE.spawnBands(w, i);
-                    this.civNews();
-                    this.notifier.message(`Monolith: ${SE.mindName(w)} erlangen Intelligenz. Kleine Gruppen ziehen umher und schlagen Lager auf.`, 'ok');
-                    break;
-                }
-            }
-            this.afterEdit();
+            if (s.lifeMode === 'life')
+                this.act({ type: 'placeLife', life: s.life, x, y });
+            else if (s.lifeMode === 'city')
+                this.act({ type: 'placeCity', tech: s.tech, x, y });
+            else
+                this.act({ type: 'terraformer', tf: s.terraformer, x, y });
         }
-        /** The most abundant land class on a tile that can become sentient. */
-        sentientResident(i) {
-            const w = this.world;
-            let best = SE.Life.None;
-            let bestD = 0;
-            for (let c = 1; c < SE.LIFE_COUNT; c++) {
-                const def = SE.LIFE[c];
-                if (!def.sentient || def.realm !== 'land')
+        /**
+         * What the simulation had to say since the last look (SimCore.notes):
+         * disasters into one line, with the player's own (`first`) leading, then
+         * its messages.
+         */
+        takeNotes(first = '') {
+            const notes = this.sim.view.notes.splice(0);
+            for (const n of notes)
+                if (n.kind === 'hazard')
+                    this.hazardNews.push(n);
+            for (const n of this.hazardNews)
+                this.mapView.ping(n.x, n.y, HAZARD_PING);
+            this.reportHazards(first);
+            for (const n of notes) {
+                if (n.kind !== 'message')
                     continue;
-                const d = w.lifeDensity[i * SE.LIFE_COUNT + c];
-                if (d > bestD) {
-                    bestD = d;
-                    best = c;
-                }
+                this.notifier.message(n.text, n.tone, n.spaceport ? { label: 'Zum Raumhafen', run: () => this.openSpaceport() } : undefined);
+                if (n.at !== undefined)
+                    this.mapView.ping(n.at % SE.GRID_W, Math.floor(n.at / SE.GRID_W), n.tone === 'warn' ? HAZARD_PING : NEWS_PING);
             }
-            return best;
         }
         /**
          * One line for the disasters that just started: the player's own (`first`)
@@ -71405,12 +73229,12 @@ var SE;
             }
             const parts = first ? [first] : [];
             for (const h of news) {
-                parts.push(h.cause === 'chain' ? `Folge: ${SE.EVENT_NAMES[h.kind]}.`
-                    : h.cause === 'natural' && h.kind === SE.EventKind.Fire ? `Blitzeinschlag: ${SE.EVENT_NAMES[h.kind]}!` : `${SE.EVENT_NAMES[h.kind]}!`);
+                parts.push(h.cause === 'chain' ? `Folge: ${SE.EVENT_NAMES[h.event]}.`
+                    : h.cause === 'natural' && h.event === SE.EventKind.Fire ? `Blitzeinschlag: ${SE.EVENT_NAMES[h.event]}!` : `${SE.EVENT_NAMES[h.event]}!`);
             }
             const target = news[news.length - 1];
-            this.lastHazard = { h: target, generation: this.world.hazards.generation };
-            this.notifier.message(parts.join(' '), 'info', { label: 'Zum Ereignis springen', run: () => this.flyToHazard(target) });
+            this.lastHazard = { id: target.id, x: target.x, y: target.y, generation: this.world.hazards.generation };
+            this.notifier.message(parts.join(' '), 'info', { label: 'Zum Ereignis springen', run: () => this.flyToHazard(this.world.hazards.hazard(target.id) ?? target) });
         }
         /** Fly to a disaster; a hurricane is found where its eye is now. */
         flyToHazard(h) {
@@ -71421,7 +73245,7 @@ var SE;
         }
         gotoEvent() {
             const w = this.world;
-            const last = this.lastHazard && this.lastHazard.generation === w.hazards.generation ? this.lastHazard.h : null;
+            const last = this.lastHazard && this.lastHazard.generation === w.hazards.generation ? w.hazards.hazard(this.lastHazard.id) ?? this.lastHazard : null;
             const running = w.hazards.list[w.hazards.list.length - 1] ?? last;
             if (running) {
                 this.flyToHazard(running);
@@ -71442,16 +73266,19 @@ var SE;
             this.editView.centerOn(best % SE.GRID_W, Math.floor(best / SE.GRID_W));
         }
         /* ====================================================== evolution === */
-        developNode(id) {
-            const res = this.evolution.develop(this.world, this.params, id);
-            if (!res.ok) {
-                this.notifier.message(res.reason, 'warn');
-                return res;
-            }
-            this.afterEdit();
-            this.buildToolOptions();
-            this.flushChronicle();
-            return res;
+        /** Develop a step; `done` hears whether it worked (at once in direct mode, which preview pages rely on). */
+        developNode(id, done) {
+            this.sim.run({ type: 'develop', id }, (r) => {
+                const res = { ok: r.ok, reason: r.reason ?? '' };
+                if (!res.ok)
+                    this.notifier.message(res.reason, 'warn');
+                else {
+                    this.afterEdit();
+                    this.buildToolOptions();
+                    this.flushChronicle();
+                }
+                done?.(res);
+            });
         }
         /** Centre the map on the densest population of a node. */
         /** Centre the map on where a step was founded, and mark the spot. */
@@ -71528,15 +73355,22 @@ var SE;
             const entry = (kind && SE.migrationMilestone(this.world, kind, i)) || SE.termiteMilestone(this.world, i);
             if (!entry)
                 return;
-            this.evolution.record(this.world, entry);
-            this.flushChronicle();
-            this.unsaved = true;
+            this.sim.run({ type: 'record', entry }, () => {
+                this.flushChronicle();
+                this.unsaved = true;
+            });
         }
         /** Hand new chronicle entries to the notifier. */
         flushChronicle() {
             if (this.evolution.pending.length === 0)
                 return;
             const entries = this.evolution.pending.splice(0);
+            for (const e of entries) {
+                if (e.at === undefined || e.at < 0 || this.world.evo.reported.has(e.key))
+                    continue;
+                const n = e.nodeId ? SE.EVO_BY_ID.get(e.nodeId) : undefined;
+                this.mapView.ping(e.at % SE.GRID_W, Math.floor(e.at / SE.GRID_W), n ? SE.KINGDOM_COLOR[n.kingdom] : NEWS_PING);
+            }
             this.notifier.push(entries, this.world.evo.reported);
         }
         /** Fly the map to the creature standing for a sub-species; false if none lives. */
@@ -71591,17 +73425,23 @@ var SE;
             void SE.askDinoFate().then((choice) => {
                 if (choice === null)
                     return;
-                this.fateAsking = false;
                 // A choice made for this planet only, and only while it is asked.
-                if (w.hazards.generation !== generation || !SE.chooseDinoFate(w, this.evolution, choice))
+                if (w.hazards.generation !== generation) {
+                    this.fateAsking = false;
                     return;
-                this.unsaved = true;
-                this.flushChronicle();
-                this.tree.update(true);
-                if (choice === 'survive')
-                    this.releaseDinoFate();
-                else
-                    this.showComet();
+                }
+                this.sim.run({ type: 'dinoFate', choice }, (r) => {
+                    this.fateAsking = false;
+                    if (!r.ok || w.hazards.generation !== generation)
+                        return;
+                    this.unsaved = true;
+                    this.flushChronicle();
+                    this.tree.update(true);
+                    if (choice === 'survive')
+                        this.releaseDinoFate();
+                    else
+                        this.showComet();
+                });
             });
         }
         /**
@@ -71635,41 +73475,43 @@ var SE;
             SE.flyTo(this.editView, x + 1, y + 1, stage);
             window.setTimeout(stage, SE.COMET_FLY_FALLBACK_MS);
         }
+        /** The strike (SimCore 'comet'); direct mode returns its hazard for the show, the worker's arrives with its state. */
         commitComet(generation) {
             const w = this.world;
             if (w.hazards.generation !== generation)
                 return null;
-            const h = SE.applyComet(w, this.params, this.life, this.hazards, this.evolution);
-            if (!h)
-                return null;
-            if (w.terrainDirty)
-                SE.RiverSystem.rebuild(w);
-            this.civ.sync(w, this.params);
-            this.fauna.step(w);
-            this.afterEdit();
-            this.buildToolOptions();
-            this.lastHazard = { h, generation };
-            this.reportHazards('Der Komet schlägt ein!');
-            this.civNews();
-            // Its cards would cover the impact: once it has played out the news
-            // tells what they would (the rest come after), and then time runs again.
-            const news = this.evolution.pending.splice(0);
-            this.unsaved = true;
-            window.setTimeout(() => {
-                if (w.hazards.generation !== generation)
+            let started = null;
+            this.sim.run({ type: 'comet' }, (r) => {
+                if (!r.ok || w.hazards.generation !== generation)
                     return;
-                for (const e of news)
-                    if (e.key === 'comet:impact' || e.key === 'extinct:dinosaurs:comet')
-                        w.evo.reported.add(e.key);
-                void SE.showCometNews().then(() => {
+                started = w.hazards.hazard(r.hazard ?? -1) ?? null;
+                if (this.sim.mode === 'worker' && r.started)
+                    this.editView.fx.show.begin(r.started, performance.now());
+                this.editView.markDirty();
+                this.examinePanel.invalidate();
+                this.buildToolOptions();
+                this.lastHazard = { id: r.hazard ?? -1, x: started?.x ?? 0, y: started?.y ?? 0, generation };
+                this.takeNotes('Der Komet schlägt ein!');
+                // Its cards would cover the impact: once it has played out the news
+                // tells what they would (the rest come after), and then time runs again.
+                const news = this.evolution.pending.splice(0);
+                this.unsaved = true;
+                window.setTimeout(() => {
                     if (w.hazards.generation !== generation)
                         return;
-                    this.evolution.pending.unshift(...news);
-                    this.flushChronicle();
-                    this.releaseDinoFate();
-                });
-            }, SE.COMET_MAIN_MS);
-            return h;
+                    for (const e of news)
+                        if (e.key === 'comet:impact' || e.key === 'extinct:dinosaurs:comet')
+                            this.sim.predict({ type: 'reported', key: e.key });
+                    void SE.showCometNews().then(() => {
+                        if (w.hazards.generation !== generation)
+                            return;
+                        this.evolution.pending.unshift(...news);
+                        this.flushChronicle();
+                        this.releaseDinoFate();
+                    });
+                }, SE.COMET_MAIN_MS);
+            });
+            return this.sim.mode === 'direct' ? started : null;
         }
         /** The fate is settled: the world runs again at the speed it had, a paused one stays paused. */
         releaseDinoFate() {
@@ -71724,47 +73566,49 @@ var SE;
          */
         launchRocket() {
             const w = this.world;
-            if (this.launchFilm || this.title || SE.activeIntro || SE.Modal.open)
+            if (this.launchFilm || this.launching || this.title || SE.activeIntro || SE.Modal.open)
                 return;
             const problem = SE.spaceLaunchProblem(w);
             if (problem) {
                 this.notifier.message(problem, 'warn');
                 return;
             }
-            if (!SE.commitLaunch(w))
-                return;
-            this.evolution.record(w, {
-                key: SE.SPACE_KEY_LAUNCHED, kind: 'civ', title: 'Start in neue Welten',
-                text: `Die Rakete der ${SE.mindName(w)} hebt ab und lässt ihre Heimatwelt hinter sich.`,
-                change: 'Terraforming auf Mars, Venus und weiteren Welten wird in der Vollversion verfügbar sein. Dein Planet bleibt spielbar.',
-                icon: SE.eventIcon('spaceport'), tick: w.ticks, years: w.absoluteYears, major: true, at: w.space.site,
-            });
-            // The closing dialog tells it: no card over the film.
-            w.evo.reported.add(SE.SPACE_KEY_LAUNCHED);
-            this.flushChronicle();
-            this.unsaved = true;
-            this.spaceportPanel.update(w);
+            // Time stands still before the simulation commits it (SimCore 'launch' asks again).
+            this.launching = true;
             const resume = this.milestonePaused ? this.speedBeforeMilestone : this.speed;
             this.milestonePaused = false;
             this.setSpeed(0, true);
-            this.music.setEnabled(false);
-            const generation = w.hazards.generation;
-            try {
-                this.launchFilm = new SE.LaunchFilm(document.body, {
-                    world: () => this.world,
-                    reduceEffects: () => this.settings.reduceEffects,
-                    volume: () => SE.SFX.volume(),
-                    done: () => void this.endLaunch(resume, generation),
-                });
-            }
-            catch (err) {
-                // Launched all the same: without its film the closing dialog follows at once.
-                console.warn('SimEarth: the launch film could not start', err);
-                document.querySelectorAll('.launchfilm').forEach((n) => n.remove());
-                SE.setGameInert(false);
-                this.launchFilm = null;
-                void this.endLaunch(resume, generation);
-            }
+            this.sim.run({ type: 'launch' }, (r) => {
+                this.launching = false;
+                if (!r.ok) {
+                    if (r.reason)
+                        this.notifier.message(r.reason, 'warn');
+                    if (resume > 0)
+                        this.setSpeed(resume, true);
+                    return;
+                }
+                this.flushChronicle();
+                this.unsaved = true;
+                this.spaceportPanel.update(w);
+                this.music.setEnabled(false);
+                const generation = w.hazards.generation;
+                try {
+                    this.launchFilm = new SE.LaunchFilm(document.body, {
+                        world: () => this.world,
+                        reduceEffects: () => this.settings.reduceEffects,
+                        volume: () => SE.SFX.volume(),
+                        done: () => void this.endLaunch(resume, generation),
+                    });
+                }
+                catch (err) {
+                    // Launched all the same: without its film the closing dialog follows at once.
+                    console.warn('SimEarth: the launch film could not start', err);
+                    document.querySelectorAll('.launchfilm').forEach((n) => n.remove());
+                    SE.setGameInert(false);
+                    this.launchFilm = null;
+                    void this.endLaunch(resume, generation);
+                }
+            });
         }
         /** The film is over or skipped: the closing dialog, then this planet goes on, or the main menu opens. */
         async endLaunch(resume, generation) {
@@ -71812,36 +73656,41 @@ var SE;
             this.discoveries.clear();
             this.ripStamps.clear();
             this.goalNotice.reset();
-            this.fauna.reset();
-            this.paidModels.clear();
-            const seed = opts.seed !== undefined ? opts.seed >>> 0 : opts.keepSeed ? this.world.seed : (Math.random() * 0xffffffff) >>> 0;
-            this.world.reset(seed, this.settings.oceanShare, this.settings.epoch);
-            this.omegaStageSeen = SE.omegaStage(this.world);
-            this.params.reset();
-            SE.applyEpochParams(this.params, this.settings.epoch);
-            this.geo.resetDrift();
-            this.history.reset();
-            this.sliderPanels.forEach((p) => p.sync());
+            // What the old planet still had to say goes with it.
+            const view = this.sim.view;
+            view.notes.length = 0;
+            view.evolution.pending.length = 0;
+            view.fauna.pending.length = 0;
+            this.hazardNews.length = 0;
+            this.editView.holdWorld = false;
+            this.launching = false;
+            this.fateAsking = false;
+            const seed = opts.seed !== undefined ? opts.seed >>> 0 : opts.keepSeed ? this.currentSeed : (Math.random() * 0xffffffff) >>> 0;
+            this.planetSeed = seed;
             this.accumulator = 0;
             this.editView.tickPhase = 0;
             this.milestonePaused = false;
+            this.settleDue = null;
             // A new planet always starts paused.
             this.fateResume = null;
             this.setSpeed(0, true);
             this.examineTile = null;
             this.windows.hide('examine');
-            this.evolution.pending.length = 0;
-            this.evolution.refresh(this.world, this.params, true);
-            this.centerOnLand();
-            this.editView.markDirty();
-            this.examinePanel.invalidate();
-            this.chroniclePanel.update(this.world, true);
-            this.tree.update(true);
-            this.buildToolOptions();
-            this.refreshMapLegend();
-            this.unsaved = false;
-            if (!opts.quiet)
-                this.notifier.message(`${SE.epochOf(this.settings.epoch).greeting} Öffne den Evolutionsbaum, um das Leben zu beginnen.`);
+            this.sim.run({ type: 'newPlanet', seed, ocean: this.settings.oceanShare, epoch: this.settings.epoch }, () => {
+                this.seenTicks = this.world.ticks;
+                this.omegaStageSeen = SE.omegaStage(this.world);
+                this.sliderPanels.forEach((p) => p.sync());
+                this.centerOnLand();
+                this.editView.markDirty();
+                this.examinePanel.invalidate();
+                this.chroniclePanel.update(this.world, true);
+                this.tree.update(true);
+                this.buildToolOptions();
+                this.refreshMapLegend();
+                this.unsaved = false;
+                if (!opts.quiet)
+                    this.notifier.message(`${SE.epochOf(this.settings.epoch).greeting} Öffne den Evolutionsbaum, um das Leben zu beginnen.`);
+            });
         }
         async confirmNewPlanet() {
             const risky = this.unsaved && this.world.evo.developed.size > 0;
@@ -71919,8 +73768,9 @@ var SE;
             if (i > 0)
                 this.lastRunningSpeed = i;
             this.speed = i;
+            this.sim.predict({ type: 'speed', speed: i });
             // Keep the phase, so a speed change never throws a moving effect back.
-            this.accumulator = this.editView.tickPhase * SPEED_TICK_MS[i];
+            this.accumulator = this.editView.tickPhase * SE.SPEED_TICK_MS[i];
             if (i !== 0)
                 this.milestonePaused = false;
             this.syncSpeedButtons();
@@ -71929,6 +73779,10 @@ var SE;
         }
         togglePause() {
             this.setSpeed(this.speed === 0 ? this.lastRunningSpeed : 0);
+        }
+        /** The waiting planet's seed: as asked for in worker mode; on the page the world's own (preview pages set it there). */
+        get currentSeed() {
+            return this.sim.mode === 'direct' ? this.world.seed : this.planetSeed;
         }
         /** `relativeDate` picks the Earth date with its era over the planet age. */
         dateText() {
@@ -71939,117 +73793,26 @@ var SE;
             return `${SE.formatEarthDate(age, true)} · ${this.windows.narrow ? era.short : era.name}`;
         }
         /* =========================================================== tick === */
+        /** One tick on the page (direct mode; preview pages call it to fast-forward). The worker ticks on its own. */
         tick() {
-            const w = this.world;
-            const p = this.params;
-            // The world waits for the dinosaurs' fate and for its comet (dinoera.ts).
-            if (SE.dinoEraHoldsTime(w))
+            if (this.sim.mode !== 'direct' || this.sim.broken)
                 return;
-            this.geo.step(w, p);
-            this.events.step(w, p);
-            this.hazards.step(w);
-            this.reportHazards();
-            // Rivers before the climate: their corridors are an input to it.
-            SE.RiverSystem.maybeRebuild(w);
-            this.climate.step(w, p);
-            this.flora.step(w, p);
-            SE.BiomeSystem.step(w);
-            SE.CoalSystem.step(w);
-            SE.OilSystem.step(w);
-            this.life.stepLife(w, p, this.atmo); // also refreshes derived aggregates
-            SE.placeTermiteMound(w);
-            this.fauna.step(w);
-            this.evolution.step(w, p);
-            this.civ.step(w, p, this.atmo);
-            this.atmo.step(w, p);
-            SE.regenOmega(w);
-            w.ticks++;
-            w.absoluteYears += w.yearsPerTick;
-            w.scaleYears += w.yearsPerTick;
-            this.unsaved = true;
-            this.advanceTimeScale();
-            this.history.sample(w);
-            this.recordCiv();
-            // First reef and first white beach: from the map's own derivation (reefs.ts), not from the simulation.
-            for (const e of SE.reefMilestones(w))
-                this.evolution.record(w, e);
+            if (this.sim.view.tick())
+                this.unsaved = true;
         }
-        /** Hand the civilization's news to the chronicle, or else to the message bar. */
-        civNews() {
-            const w = this.world;
-            for (const n of w.civ.news) {
-                if (!n.chronicle) {
-                    this.notifier.message(n.text, n.tone, n.space ? { label: 'Zum Raumhafen', run: () => this.openSpaceport() } : undefined);
-                    continue;
-                }
-                this.evolution.record(w, {
-                    key: n.chronicle.key, kind: 'civ', title: n.chronicle.title, text: n.text, change: n.chronicle.change,
-                    icon: SE.eventIcon(n.space ? 'spaceport' : 'civilization'), tick: w.ticks, years: w.absoluteYears, major: !!n.chronicle.major, at: n.at,
+        /** The worker failed; the page carries on from the last complete state (SimHost.failover), paused so the player can save. */
+        simFailed() {
+            SE.PixelTerrain.shared().fieldHere();
+            this.setSpeed(0, true);
+            if (this.sim.broken) {
+                void SE.Modal.show({
+                    title: 'Simulation angehalten', icon: SE.eventIcon('error'),
+                    body: 'In der Simulation ist ein Fehler aufgetreten. Damit kein beschädigter Planet weiterläuft, steht sie still. Lade deinen letzten Spielstand oder die automatische Sicherung, oder erschaffe einen neuen Planeten. Hilft das nicht, lade die Seite neu.',
+                    actions: [{ label: 'Verstanden', value: 'ok', kind: 'primary' }],
                 });
-            }
-            w.civ.news.length = 0;
-        }
-        recordCiv() {
-            this.civNews();
-            const civ = this.civ;
-            if (!civ.lastKind)
                 return;
-            const w = this.world;
-            if (civ.lastKind === 'sentience' && w.sentientClass !== SE.Life.None) {
-                this.evolution.record(w, {
-                    key: 'civ:sentience', kind: 'civ', title: 'Intelligenz erwacht',
-                    text: civ.lastNotice,
-                    change: 'Das Zeitalter der Zivilisation beginnt: Ein Zeitschritt umfasst nur noch 100 Jahre. Werden die Gruppen sesshaft, entstehen die ersten Dörfer.',
-                    icon: SE.eventIcon('sentience'), tick: w.ticks, years: w.absoluteYears, major: true,
-                });
             }
-            else if (civ.lastKind === 'tech') {
-                const t = civ.lastTech;
-                this.evolution.record(w, {
-                    key: `civ:tech:${t}`, kind: 'civ', title: SE.TECH_NAMES[t],
-                    text: civ.lastNotice,
-                    change: t === SE.Tech.Industrial
-                        ? 'Fossile Energie setzt nun spürbar CO₂ frei. Den Energiemix steuerst du im Modell „Zivilisation“.'
-                        : t === SE.Tech.Atomic ? 'Mit Atomwaffen wächst die Kriegsgefahr – Philosophie und Kunst dämpfen sie.'
-                            : 'Städte entwickeln sich weiter und verbrauchen mehr Energie.',
-                    icon: SE.eventIcon('civilization'), tick: w.ticks, years: w.absoluteYears, major: false,
-                });
-            }
-            else if (civ.lastKind === 'war') {
-                this.notifier.message(civ.lastNotice, 'warn');
-            }
-        }
-        /** Move up a time scale as the planet reaches each milestone. */
-        advanceTimeScale() {
-            const w = this.world;
-            let next = w.timeScale;
-            if (w.timeScale === SE.TimeScale.Geologic && w.totalBiomass > 0) {
-                next = SE.TimeScale.Evolution;
-            }
-            else if (w.timeScale === SE.TimeScale.Evolution && w.sentientClass !== SE.Life.None) {
-                next = SE.TimeScale.Civilized;
-            }
-            else if (w.timeScale === SE.TimeScale.Civilized) {
-                let industrial = 0;
-                for (let t = SE.Tech.Industrial; t < SE.TECH_COUNT; t++)
-                    industrial += w.techCounts[t];
-                if (industrial > 0)
-                    next = SE.TimeScale.Technology;
-            }
-            if (next !== w.timeScale) {
-                w.timeScale = next;
-                w.scaleYears = 0;
-                this.evolution.record(w, {
-                    key: `timescale:${next}`, kind: 'milestone', title: `Zeitalter: ${SE.TIMESCALE_NAMES[next]}`,
-                    text: next === SE.TimeScale.Evolution ? 'Mit dem ersten Leben beginnt das Zeitalter der Evolution.'
-                        : next === SE.TimeScale.Civilized ? 'Eine intelligente Art prägt nun den Planeten.'
-                            : 'Die Industrialisierung verändert Atmosphäre und Klima.',
-                    change: next === SE.TimeScale.Evolution
-                        ? 'Die Zeit folgt dem Kalender der Erde: in der Urzeit große Schritte, ab dem Kambrium feine.'
-                        : `Ein Zeitschritt umfasst jetzt ${SE.fmt.int(SE.YEARS_PER_TICK[next])} Jahre.`,
-                    icon: SE.eventIcon('timescale'), tick: w.ticks, years: w.absoluteYears, major: false,
-                });
-            }
+            this.notifier.message('Die Simulation im Hintergrund ist ausgefallen. Der Planet läuft ab jetzt im Hauptfenster weiter (vom letzten vollständigen Zeitschritt an) – am besten jetzt speichern.', 'warn');
         }
         /* ========================================================== frame === */
         /** DOM writes, throttled to about 10 Hz. */
@@ -72104,7 +73867,7 @@ var SE;
                 this.lexicon.update();
             if (this.windows.isVisible('species'))
                 this.speciesInfo.update();
-            if (this.mapShowsInfo || this.mapView.mode === SE.MapMode.LifeMap || this.mapView.mode === SE.MapMode.Biomes) {
+            if (this.mapShowsInfo || this.mapView.mode === SE.MapMode.LifeMap || this.mapView.mode === SE.MapMode.Biomes || this.mapView.mode === SE.MapMode.Technology) {
                 if ((w.ticks & 15) === 0 || this.mapShowsInfo)
                     this.refreshMapLegend();
             }
@@ -72212,10 +73975,12 @@ var SE;
             }
             this.savingNow = true;
             try {
-                const doc = SE.SaveSystem.serialize({ world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna, paidModels: this.paidModels });
-                const text = await SE.SaveSystem.encode(doc);
-                const meta = { ...SE.SaveSystem.meta(doc), thumb: SE.planetThumbnail(this.world) };
-                window.localStorage.setItem(key, text);
+                // Serialized between two ticks where the planet lives, and encoded there (in worker mode off this thread).
+                const r = await this.sim.request({ type: 'saveText' }, true);
+                if (!r.ok || r.text === undefined || !r.meta)
+                    throw new Error(r.reason || 'Speichern fehlgeschlagen');
+                const meta = { ...r.meta, thumb: SE.planetThumbnail(this.world) };
+                window.localStorage.setItem(key, r.text);
                 try {
                     window.localStorage.setItem(`${key}.meta`, JSON.stringify(meta));
                 }
@@ -72261,20 +74026,15 @@ var SE;
                 this.notifier.message('Dieser Speicherplatz ist leer.', 'warn');
                 return false;
             }
-            try {
-                const doc = await SE.SaveSystem.decode(raw);
-                const { notes } = SE.SaveSystem.load(doc, { world: this.world, params: this.params, geo: this.geo, history: this.history, fauna: this.fauna, paidModels: this.paidModels }, this.life, this.flora);
-                // Cities, peoples and names are derived from the grid; a city carpet thins out here.
-                this.civ.sync(this.world, this.params);
-                this.world.refreshDerived();
-                const civNote = this.world.civ.news.length > 0 ? this.world.civ.news[0].text : '';
-                this.world.civ.news.length = 0;
-                this.afterLoad();
-                this.notifier.message(notes.length > 0 ? notes[0] : civNote || 'Planet geladen.', 'ok');
-                return true;
-            }
-            catch (err) {
-                const reason = err instanceof SE.SaveIncompatible || err instanceof SE.SaveCorrupt ? err.message : 'Der Spielstand ist unlesbar.';
+            // Paused before the planet is taken over, so the worker never ticks it unasked.
+            const speed = this.speed;
+            this.setSpeed(0, true);
+            // Decoded, validated and taken over where the planet lives (SimCore.load).
+            const r = await this.sim.request({ type: 'loadText', text: raw });
+            if (!r.ok) {
+                if (speed > 0)
+                    this.setSpeed(speed, true);
+                const reason = r.reason || 'Der Spielstand ist unlesbar.';
                 // A failed load deserves more than a passing toast: say what happened
                 // and that nothing was lost.
                 void SE.Modal.show({
@@ -72284,6 +74044,9 @@ var SE;
                 });
                 return false;
             }
+            this.afterLoad();
+            this.notifier.message(r.text ?? 'Planet geladen.', 'ok');
+            return true;
         }
         afterLoad() {
             SE.PixelTerrain.shared().field.forget();
@@ -72292,6 +74055,15 @@ var SE;
             this.ripStamps.clear();
             this.goalNotice.reset();
             this.evolution.pending.length = 0;
+            this.sim.view.notes.length = 0;
+            this.fauna.pending.length = 0;
+            this.hazardNews.length = 0;
+            this.editView.holdWorld = false;
+            this.launching = false;
+            this.fateAsking = false;
+            this.seenTicks = this.world.ticks;
+            this.planetSeed = this.world.seed;
+            this.settleDue = null;
             this.omegaStageSeen = SE.omegaStage(this.world);
             this.milestonePaused = false;
             // A loaded planet always starts paused.
@@ -72302,12 +74074,6 @@ var SE;
             this.examineTile = null;
             this.windows.hide('examine');
             this.sliderPanels.forEach((p) => p.sync());
-            this.evolution.refresh(this.world, this.params, true);
-            // Reefs and white beaches the planet already has are history, not news.
-            for (const e of SE.reefMilestones(this.world, true)) {
-                this.world.evo.chronicle.push(e);
-                this.world.evo.reported.add(e.key);
-            }
             this.editView.markDirty();
             this.examinePanel.invalidate();
             this.chroniclePanel.update(this.world, true);
@@ -72416,6 +74182,7 @@ var SE;
             this.music.play('title');
             this.title = new SE.TitleScreen(document.body, {
                 world: () => this.world,
+                seed: () => this.currentSeed,
                 autosave: meta,
                 continueGame: () => this.loadFrom(SE.AUTOSAVE_KEY),
                 reroll: () => this.newPlanet(),
@@ -72531,3 +74298,7 @@ var SE;
             boot(); });
     }
 })(SE || (SE = {}));
+
+globalThis.SE = SE;
+}
+seBundle();

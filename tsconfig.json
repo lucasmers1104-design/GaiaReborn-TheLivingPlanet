@@ -181,6 +181,7 @@
     "src/landfade.ts",
     "src/landice.ts",
     "src/landview.ts",
+    "src/landworker.ts",
     "src/examinetile.ts",
     "src/examineview.ts",
     "src/artdraw.ts",
@@ -328,6 +329,10 @@
     "src/launchsky.ts",
     "src/launchspace.ts",
     "src/launchfilm.ts",
+    "src/simcore.ts",
+    "src/simstate.ts",
+    "src/simworker.ts",
+    "src/simhost.ts",
     "src/app.ts"
   ]
 }

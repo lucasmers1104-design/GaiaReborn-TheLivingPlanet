@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <title>Informationszeitalter</title>
+  <defs>
+    <linearGradient id="era-information-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a2f0c"/>
+      <stop offset="1" stop-color="#a8852a"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="44" height="44" rx="12" fill="url(#era-information-bg)"/>
+  <!-- Anschlussbeinchen -->
+  <g stroke="#f6f1df" stroke-width="2.2" stroke-linecap="round">
+    <path d="M18 8 V13 M24 8 V13 M30 8 V13"/>
+    <path d="M18 35 V40 M24 35 V40 M30 35 V40"/>
+    <path d="M8 18 H13 M8 24 H13 M8 30 H13"/>
+    <path d="M35 18 H40 M35 24 H40 M35 30 H40"/>
+  </g>
+  <!-- Chip -->
+  <rect x="12.5" y="12.5" width="23" height="23" rx="3" fill="#17222a" stroke="#f6f1df" stroke-width="1.6"/>
+  <rect x="18" y="18" width="12" height="12" rx="1.5" fill="#f6c453"/>
+  <g stroke="#17222a" stroke-width="1.2" stroke-linecap="round">
+    <path d="M21 21.5 H27 M21 24 H25 M21 26.5 H27"/>
+  </g>
+  <circle cx="15.8" cy="15.8" r="1.1" fill="#8ff0e4"/>
+  <rect x="2.6" y="2.6" width="42.8" height="42.8" rx="11.4" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.2"/>
+</svg>

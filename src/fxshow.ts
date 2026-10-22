@@ -215,7 +215,8 @@ namespace SE {
       for (const st of this.staged.splice(0)) if (st.generation === world.hazards.generation) st.commit();
     }
 
-    begin(h: Hazard, now: number): void {
+    begin(h: Pick<Hazard, 'id' | 'kind' | 'x' | 'y' | 'strength'>, now: number): void {
+      if (this.known.has(h.id)) return;
       this.known.add(h.id);
       if (FX_SCRIPTS[h.kind]) this.started.push({ id: h.id, kind: h.kind, x: h.x, y: h.y, born: now, strength: h.strength });
     }

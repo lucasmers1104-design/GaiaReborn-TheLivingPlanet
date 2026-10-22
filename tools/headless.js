@@ -70,19 +70,8 @@ let EPOCH = 'random';
 let DINO_FATE = '';
 
 function makePlanet(SE, seed, withLife) {
-  const p = {
-    world: new SE.WorldState(),
-    params: new SE.ModelParams(),
-    geo: new SE.GeoSystem(),
-    climate: new SE.ClimateSystem(),
-    flora: new SE.FloraSystem(),
-    life: new SE.LifeSystem(),
-    civ: new SE.CivSystem(),
-    events: new SE.EventSystem(),
-    atmo: new SE.AtmosphereSystem(),
-  };
-  p.evo = new SE.EvolutionSystem(p.life, p.flora);
-  p.hazards = new SE.HazardSystem();
+  const core = new SE.SimCore();
+  const p = { core, world: core.world, params: core.params, life: core.life, events: core.events, evo: core.evolution, hazards: core.hazards };
   SE.civEventSink = (k, x, y) => p.events.trigger(p.world, k, x, y);
   p.world.reset(seed, SE.OCEAN_FRACTION, EPOCH);
   SE.applyEpochParams(p.params, EPOCH);
@@ -90,29 +79,18 @@ function makePlanet(SE, seed, withLife) {
   return p;
 }
 
-/** One tick, in exactly the order of `App.tick`, plus the time bookkeeping. */
+/**
+ * One tick of the app's core in the harness order the probe was tuned to
+ * (SimCore.harnessTick: no disasters, lexicon or time scales, and here no
+ * termite mounds), plus the time bookkeeping.
+ */
 function step(SE, p, withLife) {
   const { world, params } = p;
   // The app holds the world until the player answers; the probe answers as told.
   if (DINO_FATE && world.dinoEra.fate === 'deciding' && SE.chooseDinoFate(world, p.evo, DINO_FATE) && DINO_FATE === 'comet') {
     SE.applyComet(world, params, p.life, p.hazards, p.evo);
   }
-  p.geo.step(world, params);
-  p.events.step(world, params);
-  SE.RiverSystem.maybeRebuild(world);
-  p.climate.step(world, params);
-  p.flora.step(world, params);
-  SE.BiomeSystem.step(world);
-  SE.CoalSystem.step(world);
-  SE.OilSystem.step(world);
-  p.life.stepLife(world, params, p.atmo);
-  p.evo.step(world, params);
-  p.civ.step(world, params, p.atmo);
-  p.atmo.step(world, params);
-  SE.regenOmega(world);
-  world.ticks++;
-  world.absoluteYears += world.yearsPerTick;
-  world.scaleYears += world.yearsPerTick;
+  p.core.harnessTick(false);
   if (withLife && world.ticks % 5 === 0) {
     p.evo.refresh(world, params, true);
     const ids = p.evo.availableIds().sort((a, b) => SE.evoNode(a).cost - SE.evoNode(b).cost);

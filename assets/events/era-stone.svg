@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <title>Steinzeit</title>
+  <defs>
+    <linearGradient id="era-stone-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a2315"/>
+      <stop offset="1" stop-color="#8a5432"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="44" height="44" rx="12" fill="url(#era-stone-bg)"/>
+  <!-- Faustkeil -->
+  <path d="M24 6.5 C31 13 35 22.5 34 30.5 C33 37.5 28.5 41.5 24 41.5 C19.5 41.5 15 37.5 14 30.5 C13 22.5 17 13 24 6.5 Z"
+        fill="#c4b18c" stroke="#0c1a14" stroke-opacity="0.55" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M24 6.5 C17 13 13 22.5 14 30.5 C15 37.5 19.5 41.5 24 41.5 L22.6 34 L26 26.5 L22 18.5 Z" fill="#f6f1df"/>
+  <g fill="none" stroke="#8c7754" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 6.5 L22 18.5 L26 26.5 L22.6 34 L24 41.5"/>
+    <path d="M17.2 21 L22 18.5"/>
+    <path d="M30.6 23.5 L26 26.5"/>
+    <path d="M16.4 33 L22.6 34"/>
+  </g>
+  <rect x="2.6" y="2.6" width="42.8" height="42.8" rx="11.4" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1.2"/>
+</svg>

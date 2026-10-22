@@ -19,7 +19,7 @@ namespace SE {
     }
   }
 
-  const PERF_KEYS = ['frame', 'gap', 'tick', 'steps', 'base', 'chunks', 'pending', 'field', 'tiles', 'full'] as const;
+  const PERF_KEYS = ['frame', 'gap', 'tick', 'steps', 'base', 'chunks', 'pending', 'field', 'tiles', 'full', 'age', 'msg'] as const;
   type PerfWindow = Record<(typeof PERF_KEYS)[number], PerfStat>;
   const perfWindow = (): PerfWindow => Object.fromEntries(PERF_KEYS.map((k) => [k, new PerfStat()])) as PerfWindow;
   /** Half a second per window; the display joins the last two. */
@@ -66,6 +66,16 @@ namespace SE {
       if (this.on) this.cur.steps.add(n);
     }
 
+    /** Worker mode: how old the state on screen is, ms. */
+    stateAge(ms: number): void {
+      if (this.on) this.cur.age.add(ms);
+    }
+
+    /** Worker mode: a state arrived carrying this many bytes of typed arrays. */
+    message(bytes: number): void {
+      if (this.on) this.cur.msg.add(bytes);
+    }
+
     drawBase(ms: number): void {
       if (this.on) this.cur.base.add(ms);
     }
@@ -104,12 +114,15 @@ namespace SE {
       const chunks = joined('chunks');
       const field = joined('field');
       const tiles = joined('tiles');
+      const age = joined('age');
+      const msg = joined('msg');
       this.el.textContent = [
         `Bilder ${(frame.n / span).toFixed(0)}/s  Bild Ø ${mean(frame)} max ${frame.max.toFixed(1)} ms  Abstand max ${joined('gap').max.toFixed(0)} ms`,
         `Ticks ${(tick.n / span).toFixed(1)}/s  Ø ${mean(tick)} max ${tick.max.toFixed(1)} ms  je Bild Ø ${(steps.n > 0 ? steps.sum / steps.n : 0).toFixed(2)} max ${steps.max}`,
         `drawBase ${(base.n / span).toFixed(1)}/s  Ø ${mean(base)} max ${base.max.toFixed(1)} ms`,
         `Chunks je Bild Ø ${(frame.n > 0 ? chunks.sum / frame.n : 0).toFixed(2)} max ${chunks.max}  pending ${joined('pending').sum}×`,
         `Feld ${(field.n / span).toFixed(1)}/s  Ø ${mean(field)} max ${field.max.toFixed(1)} ms  Kacheln Ø ${tiles.n > 0 ? Math.round(tiles.sum / tiles.n) : '–'} max ${tiles.max}  voll ${joined('full').n}×`,
+        age.n > 0 ? `Worker: Zustand Ø ${mean(age)} max ${age.max.toFixed(0)} ms alt  Nachrichten ${(msg.n / span).toFixed(1)}/s ${(msg.sum / 1048576 / span).toFixed(1)} MB/s` : 'Simulation im Hauptthread',
       ].join('\n');
     }
   }

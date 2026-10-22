@@ -75,7 +75,8 @@ namespace SE {
   }
 
   export interface TreeHooks {
-    develop(id: string): { ok: boolean; reason: string };
+    /** Develop the step; `done` hears the outcome once the simulation has it. */
+    develop(id: string, done: (res: { ok: boolean; reason: string }) => void): void;
     showOnMap(id: string): boolean;
     placeTool(id: string): void;
     world(): WorldState;
@@ -675,8 +676,8 @@ namespace SE {
     private justDeveloped: string | null = null;
 
     private tryDevelop(id: string): void {
-      const res = this.hooks.develop(id);
-      if (res.ok) {
+      this.hooks.develop(id, (res) => {
+        if (!res.ok) return;
         this.justDeveloped = id;
         this.detailSig = '';
         this.update(true);
@@ -687,7 +688,7 @@ namespace SE {
           void card.offsetWidth;
           card.classList.add('just-developed');
         }
-      }
+      });
     }
 
     private renderDetail(): void {

@@ -273,7 +273,7 @@ test('sea depth in metres: the inverse of the Earth map, land stays linear', () 
 });
 
 test('map legend: metre marks from the same conversion', () => {
-  const node = () => ({ style: {}, children: [], append(...n) { this.children.push(...n); }, appendChild(n) { this.children.push(n); } });
+  const node = () => ({ style: {}, dataset: {}, classList: { remove() {} }, children: [], append(...n) { this.children.push(...n); }, appendChild(n) { this.children.push(n); } });
   globalThis.document = { createElement: node };
   const marks = (mode) => {
     const host = node();
