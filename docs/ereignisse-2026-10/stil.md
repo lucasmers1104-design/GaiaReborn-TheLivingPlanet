@@ -140,6 +140,18 @@ Kacheln nach Osten und Westen); im kühleren Wasser, an der Küste und bei „Ef
 - **Schule:** 3–5 Tiere in lockerer Staffel, je zwei Sprünge hintereinander, die Folgenden einen Takt nach dem
   Anführer; Runde 6–10 s, davon etwa 3,4 s sichtbar. Eine Schule springt nur, wenn daneben gerade keine springt.
 
+## Haie
+
+Sobald Haie (Fisch-Unterart 5) im Meer leben, tauchen ab 16 px pro Kachel ab und zu auf einer ihrer Kacheln im
+Bild zwei Rückenflossen auf, ziehen vier Runden und tauchen wieder ab (`src/sharklayer.ts`); höchstens zwei Kreise
+gleichzeitig, der nächste frühestens 4–20 s nach dem letzten. Nur auf offenem, eisfreiem Wasser (Kachel und
+Nachbarn im Osten und Westen Wasser, ≥ 5 °C) und nie neben einem Tiersymbol; bei „Effekte reduzieren“ keine Flossen.
+
+- **Sprite** `shark_fins` (32×24, `tools/fx/sharks.js`): 0–3 Auftauchen, 4–27 eine Runde in 24 Schritten (von der
+  Laufzeit wiederholt), 28–31 Abtauchen; die Flossen rücken in jedem Frame einen Schritt weiter, Ein- und Ausstieg
+  schließen nahtlos an. Gegen den Uhrzeigersinn auf einer Ellipse in der 3/4-Ansicht: vorn und hinten im Profil,
+  an den Enden von der Kante. Nur Flossen, Bugschaum und aufgewühltes Wasser, das Meer bleibt durchsichtig.
+
 ## Lachse
 
 Lachse springen ab Echten Knochenfischen (Fisch-Unterart 6) flussaufwärts, ab 16 px pro Kachel und nicht bei „Effekte

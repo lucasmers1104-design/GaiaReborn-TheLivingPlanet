@@ -37,7 +37,7 @@ namespace SE {
   export const INTRO_CUES = {
     /** "DreamStudios präsentiert" fades in softly with the music (it rises from 0.45 s to about 2.5 s). */
     studio: 0.6,
-    /** The SimEarth 2 logo lands on the first big hit (a swell from 6.15 s, the hit at 6.6 s, +11 dB). */
+    /** The Gaia Reborn logo lands on the first big hit (a swell from 6.15 s, the hit at 6.6 s, +11 dB). */
     logo: 6.6,
     /** The Big Bang behind the logo: the music breathes in at 12.0–12.5 s and swells again from here. */
     bang: 12.55,

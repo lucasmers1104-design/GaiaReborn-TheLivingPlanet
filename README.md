@@ -1,6 +1,6 @@
-# earthsim – SimEarth 2.0
+# Gaia Reborn – The Living Planet²
 
-Eine Natur- und Evolutions-Sandbox im Browser, als moderner Nachfolger von *SimEarth: The Living Planet* (Maxis, 1990). Du begleitest einen Planeten von den ersten Zellen bis zur Gegenwart: Klima, Meere, Pflanzen, Tiere und schließlich Zivilisationen.
+*Gaia Reborn – The Living Planet²* (früher: SimEarth 2.0, Arbeitstitel earthsim) ist eine Natur- und Evolutions-Sandbox im Browser, als moderner Nachfolger von *SimEarth: The Living Planet* (Maxis, 1990). Du begleitest einen Planeten von den ersten Zellen bis zur Gegenwart: Klima, Meere, Pflanzen, Tiere und schließlich Zivilisationen.
 
 ## Starten
 

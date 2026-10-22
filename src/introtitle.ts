@@ -4,8 +4,8 @@
  * "DreamStudios präsentiert" in white pixel type on black, gathering softly
  * pixel by pixel with the music and dissolving again. Then the logo lands on
  * the first hit: a small living planet with the Gaia sprout and an orbit
- * ring, rising behind the SimEarth wordmark with its "2" badge, and "Der
- * lebende Planet" between two waves. The Big Bang behind it lights its rim
+ * ring, rising behind the Gaia Reborn wordmark with its "2" badge, and "The
+ * Living Planet" between two waves. The Big Bang behind it lights its rim
  * at INTRO_CUES.bang; it dissolves into sparks as the planets form.
  *
  * Everything is painted at art resolution into an ImageData, one pixel per
@@ -168,9 +168,9 @@ namespace SE {
   }
 
   function buildLogo(): LogoArt {
-    const word = rasterText('SimEarth', 700, 28);
+    const word = rasterText('Gaia Reborn', 700, 28);
     const digit = rasterText('2', 700, 20);
-    const tag = rasterText('DER LEBENDE PLANET', 400, 10, 2);
+    const tag = rasterText('THE LIVING PLANET', 400, 10, 2);
     const bw = digit.w + 6;
     const bh = digit.h + 4;
     const rowW = word.w + 4 + bw;
@@ -283,7 +283,7 @@ namespace SE {
   }
 
   export function introTitles(stage: IntroStage): IntroScene {
-    const said = make('p', 'sr-only', 'DreamStudios präsentiert: SimEarth 2 – Der lebende Planet');
+    const said = make('p', 'sr-only', 'DreamStudios präsentiert: Gaia Reborn – The Living Planet²');
     stage.layer.appendChild(said);
     const buf = document.createElement('canvas');
     let studio: { art: StudioArt; px: Pixels } | null = null;

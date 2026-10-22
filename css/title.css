@@ -60,7 +60,7 @@
 @media (min-height: 860px) { .title-panel { gap: 24px; } }
 @media (max-height: 800px) { .title-frame { padding-top: 16px; padding-bottom: 16px; } }
 
-.title-logo { position: relative; padding: 0.16em 0 0 0.12em; font-size: clamp(56px, 10vh, 120px); }
+.title-logo { position: relative; padding: 0.16em 0 0 0.12em; font-size: clamp(44px, min(8vh, 4.6vw), 96px); }
 .title-name {
   position: relative;
   display: flex;
@@ -71,6 +71,7 @@
   letter-spacing: 0.01em;
 }
 .title-word {
+  white-space: nowrap;
   /* Hard stops: the gradient falls in pixel bands, like the art. */
   background: linear-gradient(180deg, #fff7da 0 30%, #ecf8d4 30% 44%, #bdf3d4 44% 57%, #84e9da 57% 70%, #4fd6e0 70% 84%, #2db4cf 84%);
   -webkit-background-clip: text;

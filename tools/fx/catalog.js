@@ -26,7 +26,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna', 'ice', 'offshore', 'oilfield', 'spaceport', 'reeffish', 'termites'];
+const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna', 'ice', 'offshore', 'oilfield', 'spaceport', 'reeffish', 'termites', 'sharks'];
 
 const SPRITES = [
   { id: 'smoke_puff', name: 'Rauchwölkchen', family: 'smoke', w: 8, h: 8, frames: 4, fps: 8, anchor: 'center', layer: 'top' },
@@ -110,6 +110,15 @@ const SPRITES = [
   // map: east 0–15, west 16–31, played once per leap. The whole arc is in the box; `mouth` is where the body
   // leaves the water, on the waterline, in the east frames (west: w − 1 − x).
   { id: 'dolphin_leap', name: 'Delfinsprung: 2 Richtungen × 16 Frames', family: 'fauna', w: 32, h: 24, frames: 32, fps: 12, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [6, 18] },
+  // Sharks circling, now and then where sharks (fish sub-species 5) live (src/sharklayer.ts): two dorsal fins, a big
+  // and a smaller one about 140° behind it, run counter-clockwise seen from above (east end northwards, near side
+  // eastwards) round an ellipse on the water in the map's 3/4 view (from the south at 45°), the path about 24 × 14
+  // px and centred in the box. On the near and far side a fin shows its profile (leading edge sloping, trailing edge
+  // steep), at the east and west ends it turns edge-on. Frames 0–3 the fins break the surface and rise, 4–27 one lap
+  // of 24 steps (looped by the runtime), 28–31 they sink and the water settles; the fins move on one step every
+  // frame throughout (0–3 are steps 20–23, 28–31 steps 0–3), so in and out join the lap seamlessly. The sea stays
+  // transparent: only the fins, their foam wake and the stirred water along the path are drawn.
+  { id: 'shark_fins', name: 'Kreisende Haiflossen: 4 Auftauchen, 24 Runde, 4 Abtauchen', family: 'sharks', w: 32, h: 24, frames: 32, loop: 24, fps: 10, anchor: 'center', layer: 'object' },
   // A salmon leaping upstream out of a river (src/salmonlayer.ts), from the side: east 0–9, west 10–19, played once
   // per leap. A short steep arc, so it fits a river running any way: waterline row 12, `mouth` is where the fish
   // leaves the water (east frames), it dives back in 6 px further on (x 10).

@@ -1,6 +1,6 @@
 # Steam-Achievements
 
-Stand: 2026-10-20 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob sie hier ein Achievement verdienen.
+Stand: 2026-10-22 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob sie hier ein Achievement verdienen.
 
 **Steamworks-Hinweise:** Jedes Achievement braucht einen API-Namen (Spalte „API“), Anzeigename, Beschreibung und **zwei Icons** (256 × 256 px, JPG/PNG): freigeschaltet (farbig) und gesperrt (Graustufen-Version desselben Bildes). „Versteckt“ = Beschreibung erst nach dem Freischalten sichtbar.
 
@@ -23,6 +23,7 @@ Stand: 2026-10-20 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 10 | `ACH_FILM` | Logenplatz der Evolution | Einen Evolutionsfilm komplett ansehen | Filmrolle mit DNA-Strang |
 | 39 | `ACH_GLOBETROTTER` | Weltreisender | In der Übersichtskarte (Globus-Ansicht) per Klick ans andere Ende der Welt springen | Globus mit gestrichelter Flugbahn und Ortsmarke |
 | 45 | `ACH_GAIA_COUGH` | Dicke Luft | Gaia hustet zum ersten Mal (Luft so verschmutzt, dass Smog um sie kreist: `gaiaFactors().clean < 0.5`, `src/gaia.ts`) | Pixel-Planetengesicht mit zugekniffenen Augen hustet ein graues Smogwölkchen aus |
+| 53 | `ACH_SHARK_FINS` | Haie in Sicht! | Zum ersten Mal kreisende Haiflossen auf der Karte sehen (Zoom ≥ 16 px; erscheinen ab und zu, sobald Haie im Meer leben: `SharkLayer`, `src/sharklayer.ts`) | Zwei dunkle Haiflossen ziehen einen Kreis durch blaues Wasser |
 
 ## Mittel (mehrere Stunden, ein Ziel verfolgen)
 
@@ -170,13 +171,14 @@ Border: items 38, 40, 41, 42, 43, 44 and 47 get a thin SILVER ring, items 39 and
 ### Prompt 6 — Nr. 48–
 
 ```
-Create 4 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
-Shared style for all: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, a thin SILVER ring as the border, light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
+Create 5 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
+Shared style for all: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, a thin SILVER ring as the border (item 53: a thin BRONZE ring), light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
 
 48. A nodding horsehead pumpjack and a tall steel lattice oil derrick standing on golden desert sand under an orange evening sky, a big glossy black oil drop shining in the foreground.
 50. A tall red-orange clay termite mound with several chimney spires standing in golden savanna grass, a flat-topped acacia tree in the background, a thin trail of tiny pale termites at its foot, the glint of a magnifying glass lens catching the scene.
 51. Two orange clownfish with three bright white bands each slipping out of a violet sea anemone between pastel coral heads, seen slightly from above through clear turquoise reef water with soft light ripples, the glint of a magnifying glass lens catching the scene.
 52. A dark atomic bomb with yellow warning stripes broken cleanly into two halves lying on cracked grey ground, a fresh green olive branch growing up through the gap between the halves, a pale mushroom cloud fading away in the background.
+53. Two dark slate-grey shark dorsal fins, a big one and a smaller one, cutting through deep blue sea in a circle, seen slightly from above, white foam at the front of each fin and a curved trail of lighter, stirred water marking the circle.
 ```
 
 ## Ideen für später (wenn das Feature kommt)

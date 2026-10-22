@@ -16,3 +16,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-21 v0.10.0 feat(game): space project, dinosaur comet, extinction, bands, living planet
 - 2026-10-22 v0.10.1 perf(sim): simulation in web workers, perf bench and era icons
 - 2026-10-22 v0.10.2 perf(map): look-ahead chunk loading and worker zoom pictures
+- 2026-10-22 v0.10.3 feat(game): sharks and rename to Gaia Reborn – The Living Planet²

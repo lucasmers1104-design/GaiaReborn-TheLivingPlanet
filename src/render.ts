@@ -374,6 +374,7 @@ namespace SE {
     private readonly herds = new HerdLayer();
     private readonly whales = new WhaleLayer();
     private readonly dolphins = new DolphinLayer();
+    private readonly sharks = new SharkLayer();
     /** The oil platform and the desert derrick of the Industrial age (oillayer.ts). */
     private readonly oilRigs = new OilRigLayer();
     private readonly spaceport = new SpaceportLayer();
@@ -450,6 +451,7 @@ namespace SE {
       this.clownfish.still = on;
       this.whales.still = on;
       this.dolphins.still = on;
+      this.sharks.still = on;
       this.oilRigs.still = on;
       this.spaceport.still = on;
       this.termites.still = on;
@@ -732,6 +734,7 @@ namespace SE {
         this.bubbles.draw(ctx, cam, this.cols, this.rows, world, now);
         this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
         this.dolphins.draw(ctx, cam, this.herds.markers, world, now);
+        this.sharks.draw(ctx, cam, this.herds.markers, world, now);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.herds.draw(ctx, this, world, now, this.tiles, this.regions,
           (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));

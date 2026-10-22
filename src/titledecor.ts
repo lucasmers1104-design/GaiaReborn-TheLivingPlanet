@@ -137,7 +137,7 @@ namespace SE {
     card.setAttribute('aria-label', 'Über das Spiel');
     const text = make('div', 'title-info-text');
     text.append(
-      make('strong', undefined, 'SimEarth 2'),
+      make('strong', undefined, 'Gaia Reborn'),
       make('span', undefined, 'Planetensimulation'),
       make('span', 'title-info-ver', /^\d/.test(APP_VERSION) ? `v${APP_VERSION}` : 'Entwicklungsstand'),
       make('span', undefined, 'Eine lebende Welt'),

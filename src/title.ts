@@ -87,9 +87,9 @@ namespace SE {
 
       const name = make('h1', 'title-name');
       name.id = 'title-name';
-      name.append(make('span', 'title-word', 'SimEarth'), make('span', 'title-two', '2'));
+      name.append(make('span', 'title-word', 'Gaia Reborn'), make('span', 'title-two', '2'));
       const logo = make('div', 'title-logo');
-      logo.append(logoOrbit(), name, make('p', 'title-tag', 'Der lebende Planet'));
+      logo.append(logoOrbit(), name, make('p', 'title-tag', 'The Living Planet'));
 
       const resume = hooks.autosave ? this.continueCard(hooks.autosave) : null;
       const planet = buildTitlePlanet({

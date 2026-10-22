@@ -230,6 +230,7 @@
     "src/fxlayer.ts",
     "src/whalelayer.ts",
     "src/dolphinlayer.ts",
+    "src/sharklayer.ts",
     "src/oillayer.ts",
     "src/termitelayer.ts",
     "src/spaceportlayer.ts",
