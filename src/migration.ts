@@ -14,6 +14,8 @@ namespace SE {
     readonly path: number[];
     /** The site cannot be reached over land: the group crosses to another shore. */
     readonly crossed: boolean;
+    /** Colonists' way over the open sea to the discovered continent (discovery.ts). */
+    readonly colony?: boolean;
   }
 
   /** Water-run states per tile the search tells apart: up to the highest limit below open sea. */
@@ -240,9 +242,20 @@ namespace SE {
       const stuck = loneCity(civ, c) || civ.cities.length < TECH_CITIES_MIN[tech];
       if (pop < SETTLER_DEPART_POP && (pop < SETTLER_POP + CITY_ABANDON_POP || !stuck)) continue;
       if (settlersOf(civ, c.tribe) >= SETTLERS_PER_TRIBE) continue;
-      const route = findSettlerRoute(world, c.tile, tech);
+      // After the discovery colonists sail for the new continent (discovery.ts).
+      const sail = colonyFirst(world, c);
+      // undefined: no search at home, the colonists sailed first.
+      let home: SettlerRoute | null | undefined;
+      let route = sail ? colonyRoute(world, c.tile, tech) : null;
+      if (!route) {
+        home = findSettlerRoute(world, c.tile, tech);
+        route = home ?? (sail ? null : colonyRoute(world, c.tile, tech));
+      }
       c.settleAfter = world.ticks + (route ? SETTLER_COOLDOWN[tech] : SETTLER_RETRY);
-      c.cramped = route === null;
+      // A city whose only way out is the sea to the new continent is still short of land at home: without this
+      // no coastal city counted as cramped while the new continent had room, and scarcity, epidemics and
+      // conflicts stopped for centuries.
+      c.cramped = home === null || route === null;
       const tribe = civ.tribe(c.tribe);
       if (tribe) {
         tribe.landShort = route === null;
@@ -252,7 +265,7 @@ namespace SE {
       world.cityPop[c.tile] = pop - SETTLER_POP;
       civ.settlers.push({
         id: civ.nextId++, tribe: c.tribe, from: c.id, tech, path: route.path, step: 0, pop: SETTLER_POP,
-        crossed: route.crossed,
+        crossed: route.crossed, colony: route.colony,
       });
     }
   }
@@ -261,7 +274,7 @@ namespace SE {
   function passable(world: WorldState, s: Settler): boolean {
     const goal = s.path[s.path.length - 1];
     if (world.isWater(goal)) return false;
-    const max = SETTLER_WATER[s.tech];
+    const max = s.colony ? OPEN_SEA : SETTLER_WATER[s.tech];
     if (max >= OPEN_SEA) return true;
     let run = 0;
     for (let k = s.step + 1; k < s.path.length; k++) {
@@ -272,11 +285,14 @@ namespace SE {
   }
 
   function replan(world: WorldState, s: Settler): boolean {
-    const route = findSettlerRoute(world, s.path[s.step], s.tech, s, s.path[s.path.length - 1]);
+    const goal = s.path[s.path.length - 1];
+    const route = (s.colony ? colonyRoute(world, s.path[s.step], s.tech, s, goal) : null) ??
+      findSettlerRoute(world, s.path[s.step], s.tech, s, goal);
     if (!route) return false;
     s.path = route.path;
     s.step = 0;
     s.crossed = s.crossed || route.crossed;
+    s.colony = route.colony;
     return true;
   }
 
@@ -318,6 +334,8 @@ namespace SE {
   export function moveSettlers(world: WorldState, params: ModelParams, drifted: boolean): void {
     const civ = world.civ;
     for (const s of civ.settlers.slice()) {
+      // The voyage of discovery keeps its own pace (discovery.ts).
+      if (s.voyage) continue;
       if ((drifted || !passable(world, s)) && !replan(world, s)) {
         disband(civ, s);
         continue;

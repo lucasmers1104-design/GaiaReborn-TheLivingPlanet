@@ -658,7 +658,7 @@ namespace SE {
       const w = this.world;
       const cost = this.toolCost();
       const parts = [`${BIOME_NAMES[w.biome[i]]} · ${fmt.int(w.temperature[i])} °C`];
-      const city = cityLabel(w, i) ?? bandLabel(w, i);
+      const city = cityLabel(w, i) ?? bandLabel(w, i) ?? wonderLabel(w, i);
       if (city) parts.unshift(city);
       if (cost > 0) parts.push(`${TOOL_NAMES[this.selection.tool]} · ${cost} Ω`);
       const text = parts.join('  ·  ');
@@ -1794,10 +1794,10 @@ namespace SE {
       return { id: null, title: 'Lebensräume schaffen', text: 'Lass die Zeit laufen: Sauerstoff, Klima und Pflanzen öffnen neue Wege.' };
     }
 
-    /** The first salmon run, stork flight, clownfish or termite mound caught with the Examine tool goes into the chronicle, with its card. */
+    /** The first salmon run, stork flight, clownfish, termite mound or kapok tree caught with the Examine tool goes into the chronicle, with its card. */
     private watchMigration(i: number): void {
       const kind = this.editView.migrationOn(this.world, i);
-      const entry = (kind && migrationMilestone(this.world, kind, i)) || termiteMilestone(this.world, i);
+      const entry = (kind && migrationMilestone(this.world, kind, i)) || termiteMilestone(this.world, i) || kapokMilestone(this.world, i);
       if (!entry) return;
       this.sim.run({ type: 'record', entry }, () => {
         this.flushChronicle();

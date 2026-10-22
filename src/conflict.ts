@@ -146,6 +146,7 @@ namespace SE {
     const a = civ.city(k.a);
     const b = civ.city(k.b);
     if (!a || !b || a.tribe === b.tribe) {
+      k.winner = -1;
       const near = b ?? a;
       civ.news.push({
         text: `${title}.`, tone: 'info', at: near ? near.tile : -1,
@@ -158,6 +159,7 @@ namespace SE {
     const aWins = sa + sb > 0 ? roll * (sa + sb) < sa : roll < 0.5;
     const [w, l, sw, sl] = aWins ? [a, b, sa, sb] : [b, a, sb, sa];
     const tw = aWins ? ta : tb;
+    k.winner = tw.id;
     world.cityPop[w.tile] *= 1 - CONFLICT_WIN_LOSS;
     const rest = world.cityPop[l.tile] * (1 - CONFLICT_LOSS);
     let end: ConflictEnd = 'held';
@@ -232,6 +234,7 @@ namespace SE {
     const by = civ.tribe(from.tribe);
     const on = civ.tribe(target.tribe);
     if (!by || !on) return null;
+    k.winner = by.id;
     const at = civ.conflicts.indexOf(k);
     if (at >= 0) civ.conflicts.splice(at, 1);
     civ.news.push({

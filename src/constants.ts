@@ -1007,6 +1007,87 @@ namespace SE {
   export const BAND_RELAX_CAPACITY = 0.15;
   export const BAND_SETTLE_MAX = 240;
 
+  /* ---------------------------------------------- fields round the cities -- */
+  // src/fields.ts (docs/bewegung-2026-10): only drawn, derived from city, era and ground.
+
+  /**
+   * The look of a field, the LAND_USE_FIELD bits (civstate.ts); each is a
+   * terrain material (tools/terrain/fields.js, FIELD_MATERIALS in fields.ts).
+   * Garden: hoe gardens of the Stone Age. Strips, DryStrips: strip fields of
+   * grain, of millet on dry land (Bronze and Iron Age). Paddy: rice in warm,
+   * wet lowland, Terrace: on slopes (both from the Bronze Age on). Hedgerows:
+   * a patchwork with hedges (Industrial age). Large: big regular fields (Atomic
+   * age on; dry land from the Industrial age).
+   */
+  export const enum FieldLook { None = 0, Garden = 1, Strips = 2, DryStrips = 3, Paddy = 4, Terrace = 5, Hedgerows = 6, Large = 7 }
+  /** Fields of a village, a town and a metropolis per tech level; every other city (by tile hash) has one more. */
+  export const FIELD_COUNT: readonly (readonly number[])[] = [
+    [0, 0, 0], [1, 2, 3], [2, 4, 5], [2, 4, 6], [3, 5, 7], [3, 6, 8], [3, 6, 8], [3, 6, 8],
+  ];
+  /** Squared distance in tiles a village's, a town's and a metropolis's fields lie within (at most CITY_UMLAND²). */
+  export const FIELD_REACH2: readonly number[] = [4, 5, 9];
+  /** Ticks after which a city lays its fields again for its changed ground (each city on its own tick). */
+  export const FIELD_REFRESH = 40;
+  /** Fertility (cityGround) a tile needs to carry a field. */
+  export const FIELD_FERTILITY_MIN = 0.3;
+  /**
+   * No field above this slope (cityGround.slope), terraces from
+   * FIELD_TERRACE_SLOPE on: of the land round the cities about the steepest
+   * 10 % carries none and the next 15 % terraces (seed 12345 with cities:
+   * median 0.07, 90 % below 0.23).
+   */
+  export const FIELD_SLOPE_MAX = 0.25;
+  export const FIELD_TERRACE_SLOPE = 0.15;
+  /** Paddies: from this temperature in °C, with this moisture (or marsh), below this elevation. */
+  export const FIELD_PADDY_TEMP = 21;
+  export const FIELD_PADDY_MOISTURE = 0.55;
+  export const FIELD_PADDY_HEIGHT = 0.25;
+  /** Below this moisture land counts as dry (millet, large fields), as do steppe, savanna and semidesert. */
+  export const FIELD_DRY_MOISTURE = 0.25;
+  /**
+   * Site score of a field: fertility, plus these for a river beside it,
+   * cleared land (logged or a light forest), the city or a field already laid
+   * on one of its four sides (so they cluster), minus per tile further out
+   * than the first ring, plus at most FIELD_JITTER by tile hash (so no two
+   * cities look alike).
+   */
+  export const FIELD_RIVER_NEAR = 0.3;
+  export const FIELD_CLEARED = 0.3;
+  export const FIELD_TOUCH = 0.25;
+  export const FIELD_DISTANCE = 0.15;
+  export const FIELD_JITTER = 0.4;
+
+  /* ------------------------------------------------ wood and logging -- */
+  // src/wood.ts (docs/bewegung-2026-10): cities log the woodland round them, and it grows back.
+
+  /** Squared reach of a city's logging in tiles (about 4.5): its Umland and a little beyond, 68 tiles. */
+  export const WOOD_REACH2 = 20;
+  /**
+   * Woodland tiles a city of full population (cityPop 1) keeps cut, per tech
+   * level: little in the Stone Age (firewood, huts), much in the Bronze Age
+   * (smelting, ships, building), most in the Iron Age (charcoal for the
+   * furnaces, fleets, timber), less in the Industrial age as coal replaces
+   * charcoal, little from the Atomic age on, so the forests visibly grow back.
+   */
+  export const WOOD_DEMAND: readonly number[] = [0, 3, 16, 28, 12, 4, 3, 2];
+  /** Most of the woodland in its reach a city cuts at all: the far share always stands. */
+  export const WOOD_MAX_SHARE = 0.5;
+  /** Share of a city's cut tiles, the nearest, it clears outright; the others it thins. */
+  export const WOOD_CLEAR_SHARE = 0.6;
+  /** Plant cover a cleared tile keeps (grass, brush), above BARE_COVER so its soil holds; and a thinned one (a light forest). */
+  export const WOOD_CLEAR_COVER = 0.35;
+  export const WOOD_THIN_COVER = 0.5;
+  /** Distance jitter in tiles by tile hash, so the edge of the cut is ragged, not a circle. */
+  export const WOOD_JITTER = 1.5;
+  /** Years a cleared tile needs to grow back to untouched forest once nobody cuts it. */
+  export const WOOD_REGROW_YEARS = 400;
+  /** Standing wood of a tile at full cover, Gt dry matter: ~15,600 km² of forest at ~200 t/ha. */
+  export const WOOD_GT_PER_TILE = 0.3;
+  /** Shrubland counts with this share of its cover as wood. */
+  export const WOOD_SHRUB = 0.3;
+  /** Ticks between two sums of the standing wood (a full grid scan, for the statistics only). */
+  export const WOOD_STAT_EVERY = 10;
+
   /* ------------------------------------------- giant clubmosses and coal -- */
   // src/lycopsids.ts and src/coal.ts.
 
@@ -1058,6 +1139,82 @@ namespace SE {
   /** Reserve built per year since the first sea animals: estimate for saves without an oil field. */
   export const OIL_EST_YEAR = 3e-6;
 
+  /* -------------------------------------------------- voyage of discovery -- */
+  // src/discovery.ts (docs/bewegung-2026-10): three ships open the Industrial age.
+
+  /** Fewest land tiles of an undiscovered continent, and fewest city sites on it, CITY_MIN_DIST apart. */
+  export const DISCOVERY_MIN_LAND = 150;
+  export const DISCOVERY_MIN_SITES = 3;
+  /** Tiles the ships sail a tick, and the fewest and most ticks a crossing takes: a strait and an ocean both read as sailing. */
+  export const DISCOVERY_VOYAGE_SPEED = 1.5;
+  export const DISCOVERY_VOYAGE_TICKS: readonly [number, number] = [10, 30];
+  /** Ticks a held invention waits for a port with a way to the continent before the gate lapses. */
+  export const DISCOVERY_WAIT = 150;
+  /** Ticks between two looks for a port while the invention waits. */
+  export const DISCOVERY_EVERY = 10;
+  /**
+   * Steps over the sea colonists of the Iron Age and later sail to a coast of
+   * the discovered continent, and the share of a full coastal city's groups
+   * that try it first; the others go only when they find no site at home.
+   */
+  export const DISCOVERY_COLONY_RANGE = 160;
+  export const DISCOVERY_COLONY_SHARE = 0.5;
+
+  /* -------------------------------------------------------------- railway -- */
+  // src/railway.ts (docs/bewegung-2026-10): one line per planet, west to east, from the Industrial age.
+
+  /** Cities of the Industrial age or later a landmass needs for the line, and tiles from its westernmost to its easternmost (x wraps). */
+  export const RAIL_CITIES_MIN = 3;
+  export const RAIL_SPAN_MIN = 20;
+  /**
+   * Stations of the line, at most; cities between its two ends that lie at
+   * most RAIL_CORRIDOR tiles off the straight line between them and
+   * RAIL_STATION_GAP tiles or more apart along it may be stations.
+   */
+  export const RAIL_STATIONS_MAX = 6;
+  export const RAIL_CORRIDOR = 6;
+  export const RAIL_STATION_GAP = 8;
+  /**
+   * Tiles before and after a station that must lie at least RAIL_FOLD_SHARE
+   * of the way between them apart, or the line passes the station by: it
+   * would fold into a spur or a hairpin to reach it.
+   */
+  export const RAIL_FOLD_REACH = 6;
+  export const RAIL_FOLD_SHARE = 0.6;
+  /** Ticks after the Industrial age began that the line waits for the newly found continent before another landmass takes it. */
+  export const RAIL_FOUND_WAIT = 150;
+  /** Ticks between two looks for a landmass that can carry the line, while there is none; the same cities are looked at again only after RAIL_RECHECK. */
+  export const RAIL_CHECK_EVERY = 10;
+  export const RAIL_RECHECK = 200;
+  /**
+   * Costs of a step in the route search, on top of its length (1, or √2
+   * diagonally): (gradient / RAIL_SLOPE_REF)² per tile of length, so a steep
+   * flank is worth a long detour; RAIL_HEIGHT_COST per unit of elevation, so
+   * the line keeps to the valleys; RAIL_MOUNTAIN_COST above the tree line or
+   * on ice; RAIL_BRIDGE_COST onto a river tile, so the line crosses rivers
+   * rather than running along them; RAIL_STRAIT_COST for a diagonal step
+   * between two water tiles (a bridge over the sea); RAIL_WONDER_COST onto a
+   * world wonder's tile, which the line passes by but may cross (a wall);
+   * RAIL_CITY_COST onto a city's tile, so the line keeps the cities in sight.
+   */
+  export const RAIL_SLOPE_REF = 0.03;
+  export const RAIL_HEIGHT_COST = 4;
+  export const RAIL_MOUNTAIN_COST = 40;
+  export const RAIL_BRIDGE_COST = 4;
+  export const RAIL_STRAIT_COST = 30;
+  export const RAIL_WONDER_COST = 40;
+  export const RAIL_CITY_COST = 40;
+  /**
+   * The route search counts its estimate of the way left (octile distance)
+   * this many times: it finds a way a little dearer than the cheapest, about
+   * twice as fast (measured on the bench save: 14 ms instead of 25–80).
+   */
+  export const RAIL_SEARCH_GREED = 2;
+  /** Tiles a route search settles before it gives up (a station the sea cuts off). */
+  export const RAIL_SEARCH_MAX = 30000;
+  /** Tiles along its row a station city may have drifted from the line, as a city record follows it. */
+  export const RAIL_DRIFT_REACH = 2;
+
   /* -------------------------------------------------------- space project -- */
   // src/spaceport.ts: once a city reaches the Nanotech age, a launch site in the desert builds a rocket.
 
@@ -1085,6 +1242,100 @@ namespace SE {
   export const SPACE_SLOPE_MAX = 0.08;
   /** Ticks until a search that found no site is tried again. */
   export const SPACE_SITE_RETRY = 20;
+
+  /* ---------------------------------------------------------------- ships -- */
+  // src/fleets.ts (docs/bewegung-2026-10): ships of the coastal cities, liners between continents, sea battles.
+
+  /** Ships a coastal city keeps from the Bronze age on, by CitySize: village, town, metropolis. */
+  export const SHIPS_PER_CITY: readonly number[] = [0, 1, 2];
+  /** Ships on the planet at most, liners included, and the liners among them. */
+  export const SHIPS_MAX = 16;
+  export const LINERS_MAX = 3;
+  /** No new ship while its city's wood (`cityWood`, 0..1) is below this. */
+  export const SHIP_WOOD_MIN = 0.5;
+  /** Water tiles a harbour's sea must hold at least, so a lake keeps no ships (a tile is ~150 km across). */
+  export const SHIP_SEA_MIN = 60;
+  /**
+   * Ships plan their ways over water at least SHIP_ICE_FREE °C warm (the map
+   * never draws pack ice there: landfield.ts ICE_TEMP + ICE_WOBBLE) and keep
+   * a way while it stays at SHIP_ICE_HOLD or warmer, so a sea near the edge
+   * does not break and mend a route tick by tick.
+   */
+  export const SHIP_ICE_FREE = 5;
+  export const SHIP_ICE_HOLD = 2;
+  /**
+   * A ship sails and waits only where its whole hull lies over water: open
+   * water SHIP_HULL_REACH tiles east and west of its tile (hulls are up to 2.5
+   * tiles long), and no city, railway or wonder in the rows above and below
+   * (city pictures reach up into the row above them, masts into the row above
+   * the ship).
+   */
+  export const SHIP_HULL_REACH = 1;
+  /** Steps over water from the harbour (the water beside the city) a ship's mooring may lie, and for a liner from its port. */
+  export const SHIP_MOOR_REACH = 4;
+  /** Two waiting ships (moorings, route ends, battle stations) keep at least this many columns or rows apart. */
+  export const SHIP_GAP_X = 3;
+  export const SHIP_GAP_Y = 2;
+  /** Steps a coastal ship's route may take at most and must take at least, and the length of a loop along its own coast. */
+  export const SHIP_ROUTE_MAX = 30;
+  export const SHIP_ROUTE_MIN = 4;
+  export const SHIP_LOOP = 10;
+  /** A coastal ship keeps within this many tiles of land: before the Industrial age, and from it on. */
+  export const SHIP_COAST_REACH = 2;
+  export const SHIP_COAST_REACH_MODERN = 3;
+  /** Ticks before a city that found no mooring or route for a new ship looks again. */
+  export const SHIP_RETRY = 40;
+  /** Liners: ticks between two looks for a new one (one port each), fewest and most steps across the open sea, most tiles searched. */
+  export const LINER_EVERY = 50;
+  export const LINER_ROUTE_MIN = 16;
+  export const LINER_ROUTE_MAX = 160;
+  export const LINER_SEARCH_MAX = 8000;
+  /** Steps the way between the two harbours of a sea battle may take, and how far from its middle the ships take their stations. */
+  export const SHIP_BATTLE_RANGE = 40;
+  export const SHIP_STATION_REACH = 6;
+  /** Ticks a ship sunk in battle stays on record, so the map can show it go down. */
+  export const SHIP_SUNK_TICKS = 30;
+
+  /* -------------------------------------------------------- world wonders -- */
+  // src/wonders.ts (docs/bewegung-2026-10): the Pyramids and the Great Wall, on sites that echo the real ones.
+
+  /** Chance per tick that a people meeting a wonder's conditions begins it (a hash roll of seed and tick). */
+  export const WONDER_CHANCE = 0.02;
+  /**
+   * Fewest cities in the wonder's age or the next a people needs, and the
+   * fewest people in them (summed cityPop). The next age counts as well: the
+   * Bronze Age of seed 12345 lasted 103 ticks with 3 cities in 3 peoples.
+   */
+  export const WONDER_CITIES_MIN = 2;
+  export const WONDER_POP_MIN = 0.6;
+  /** Tiles from a city of the builder within which a wonder is begun; it is built on while any city stands this close. */
+  export const WONDER_REACH = 8;
+  /** On today's Earth a site this close to the real place beats every other. */
+  export const WONDER_REAL_NEAR = 6;
+  /** Fewest tiles between two wonders. */
+  export const WONDER_GAP = 5;
+  /** Share of five land rows that must match EARTH_MAP for the planet to count as today's Earth. */
+  export const WONDER_EARTH_MATCH = 0.85;
+  /** Ticks of building, long enough to watch: about 1 and 1.5 minutes at "Mittel" (400 ms per tick). */
+  export const PYRAMIDS_BUILD_TICKS = 160;
+  export const WALL_BUILD_TICKS = 240;
+  /** Largest elevation spread over the pyramids' 3 × 2 tiles, and tiles from them within which a river must run. */
+  export const PYRAMIDS_FLAT = 0.04;
+  export const PYRAMIDS_RIVER_NEAR = 2;
+  /** Fewest and most tiles of the wall; a watchtower on every WALL_TOWER_EVERY-th piece and on the last. */
+  export const WALL_LENGTH: readonly [number, number] = [8, 16];
+  export const WALL_TOWER_EVERY = 4;
+  /** A foreign city this close makes the frontier; the wall stands at most WALL_FRONT_DIST from the city towards it. */
+  export const WALL_FRONT_MAX = 30;
+  export const WALL_FRONT_DIST = 5;
+  /**
+   * Fewest tiles between the wall and a city; worth lost per tile the chain
+   * strays from its line (worth: steepness in elevation units), and the most
+   * tiles it strays, so it follows a mountain edge but stays on the frontier.
+   */
+  export const WALL_CITY_GAP = 2;
+  export const WALL_STRAY = 0.01;
+  export const WALL_BAND = 3;
 
   /* ---------------------------------------------------------------- cacti -- */
   // src/cacti.ts: the flowering plants' desert form.

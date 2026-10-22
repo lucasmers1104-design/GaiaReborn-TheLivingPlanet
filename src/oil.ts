@@ -85,7 +85,8 @@ namespace SE {
           sea = i;
           seaDist = d;
         }
-      } else if (world.tech[i] === Tech.None && world.landscape[i] !== Landscape.Ice && world.landscape[i] !== Landscape.Snow && !spaceportTooClose(world, i)) {
+      } else if (world.tech[i] === Tech.None && world.landscape[i] !== Landscape.Ice && world.landscape[i] !== Landscape.Snow && !spaceportTooClose(world, i) &&
+        (world.landUse[i] & LAND_USE_WONDER) === 0) {
         const ls = world.landscape[i];
         // A desert beats any other land; among either, the nearest wins.
         const score = (ls === Landscape.Desert || ls === Landscape.Semidesert ? 0 : 1 + world.moisture[i]) * 1e9 + d;

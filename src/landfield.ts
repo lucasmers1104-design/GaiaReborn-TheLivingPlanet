@@ -234,6 +234,8 @@ namespace SE {
     readonly savannaTree = new Uint8Array(TILE_COUNT);
     /** Coconut palms on a beach tile or a sand cay, 0..2 (reefs.ts). */
     readonly palm = new Uint8Array(TILE_COUNT);
+    /** The railway: directions to the line's neighbours and the track's look (landrail.ts readRailPart); 0 off the line. */
+    readonly rail = new Uint16Array(TILE_COUNT);
     private readonly reach = new SavannaReach();
     readonly sig = new Uint32Array(TILE_COUNT);
     private readonly rank = new Uint8Array(TILE_COUNT);
@@ -245,7 +247,7 @@ namespace SE {
      * copies from the last refresh (inputs()):
      *   world: elevation (also through the four neighbours' relief; on water
      *   only its depth classes), landscape, landscapeDensity, substrate, flora,
-     *   floraTop, riverLevel, tech, hazards.scar (scarShowsGround reads it and
+     *   floraTop, riverLevel, tech, landUse, hazards.scar (scarShowsGround reads it and
      *   the landscape); on water only biome, temperature (pack ice) and
      *   vegetation (kelp density), on bare rock only upliftKind, soil and
      *   landscapeZone, both as `partIn`;
@@ -300,6 +302,7 @@ namespace SE {
       this.volcanoes(world);
       this.paths.build(world);
       this.ridges.build(world, this.volcano);
+      readRailPart(world, this.rail, null);
       this.sign(0, 0, GRID_W, GRID_H);
       if (this.seen.length !== inputs.length) this.seen = inputs.map((a) => a.slice());
       else inputs.forEach((a, k) => this.seen[k].set(a));
@@ -329,7 +332,7 @@ namespace SE {
       }
       const reefs = reefMap(world);
       return [e, world.landscape, world.landscapeDensity, world.substrate, world.flora, world.floraTop, world.riverLevel,
-        world.tech, world.hazards.scar, part, reefs.coral, reefs.lagoon, reefs.beach, reefs.corals, reefs.sands,
+        world.tech, world.landUse, world.hazards.scar, part, reefs.coral, reefs.lagoon, reefs.beach, reefs.corals, reefs.sands,
         reefs.cay, reefs.palms, this.reach.toDry, this.reach.toForest];
     }
 
@@ -361,6 +364,8 @@ namespace SE {
       }
       const changed = new Set<TileArray>();
       for (let k = 1; k < inputs.length; k++) if (diffTiles(inputs[k], this.seen[k], reread) > 0) changed.add(inputs[k]);
+      // The track's tiles: the line laid anew, or its age changed.
+      readRailPart(world, this.rail, reread);
       const tiles: number[] = [];
       for (let i = 0; i < TILE_COUNT; i++) if (reread[i] !== 0) tiles.push(i);
       if (tiles.length > INCREMENTAL_MAX) return false;
@@ -468,7 +473,7 @@ namespace SE {
     /** Reads tile i of `world` into the field. */
     private reader(world: WorldState): (i: number) => void {
       const T = LandTables.shared();
-      const { elevation: e, biome, landscape, landscapeDensity, substrate, flora, floraTop, vegetation, riverLevel, tech } = world;
+      const { elevation: e, biome, landscape, landscapeDensity, substrate, flora, floraTop, vegetation, riverLevel, tech, landUse } = world;
       const algae = floraBit(Flora.FreshwaterAlgae);
       const kelp = floraBit(Flora.MarineAlgae);
       const scars = world.hazards.scar;
@@ -525,7 +530,8 @@ namespace SE {
           shade = this.relief(e, i) + MACRO[i];
           rugged = Math.round(clamp((h - CRAG_START) / MOUNTAIN_SPAN, 0, 1) * CRAG_STEPS * 4) / 4;
           if (riverLevel[i] > 0) river = 1;
-          if (river === 0 && tech[i] === Tech.None) {
+          // Fields, the railway and the wonders take the tile from the wild plants (civstate.ts LAND_USE_*).
+          if (river === 0 && tech[i] === Tech.None && (landUse[i] & LAND_USE_CLEARS) === 0) {
             scene = ls;
             groups = flora[i] & T.showable[ls] & shown;
             // On desert ground the flowering plants show only as cacti, on some tiles, once cacti exist.
@@ -537,6 +543,9 @@ namespace SE {
               landHash(i % GRID_W, (i / GRID_W) | 0, 830) < savannaTreeShare(this.reach.toDry[i], this.reach.toForest[i])) tree = 1;
             palm = reefs.palms[i];
           }
+          // A field round a city replaces the ground with its own (fields.ts).
+          const look = landUse[i] & LAND_USE_FIELD;
+          if (look !== 0) key = T.materialKey(FIELD_MATERIALS[look]) || key;
           // A disaster's scar replaces the ground while it is fresh (docs/ereignisse-spec.md §4).
           const scar = scars[i];
           // A vent is a cone (volcanoes()): nothing grows on it.
@@ -590,6 +599,7 @@ namespace SE {
       const shore = this.sea[i] | (this.lagoon[i] << 1) | (this.reef[i] << 3) | (this.corals[i] << 5) | (this.sands[i] << 8) | (this.beach[i] << 10) | (this.palm[i] << 12) | (this.cay[i] << 14);
       s ^= Math.imul(shore ^ (((this.shade[i] + LAND_SHIFT_MAX) * QUANT) << 16), 0xc2b2ae3d);
       s ^= Math.imul(ridges[i] ^ (this.rugged[i] * 4) ^ (this.volcano[i] << 5), 0x27d4eb2d);
+      s ^= Math.imul(this.rail[i], 0x165667b1);
       this.sig[i] = (s ^ (s >>> 15)) >>> 0;
     }
 

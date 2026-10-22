@@ -601,21 +601,24 @@ Jede der 14 Pflanzengruppen hat mindestens ein eigenes, erkennbares Objekt oder 
 | Urbäume | Urbaum (Archaeopteris) | gemäßigt |
 | Samenpflanzen | Palmfarn (warm); Samenfarn-Busch (gemäßigt) | warm, gemäßigt |
 | Nadelbäume | Fichte, Wacholder (kalt); Sumpfzypresse (nass) | kalt, nass |
-| Blütenpflanzen | Blumen, Blütenstrauch (gemäßigt); Zwergstrauch/Heide (kalt); Säulen-, Kugel-, Feigenkaktus (warm, nur Wüste und Halbwüste); Affenbrotbaum, dazu der Schirmbaum als Savannenbaum (warm, nur Savanne) | gemäßigt, kalt, warm |
+| Blütenpflanzen | Blumen, Blütenstrauch (gemäßigt); Zwergstrauch/Heide (kalt); Säulen-, Kugel-, Feigenkaktus (warm, nur Wüste und Halbwüste); Affenbrotbaum, dazu der Schirmbaum als Savannenbaum (warm, nur Savanne); Urwaldpalme (warm, Unterholz von Regen- und Bergregenwald) | gemäßigt, kalt, warm |
 | Laubbäume | Laubbaum, Laubstrauch (gemäßigt); Tropenriese, Schirmbaum, Dornbusch (warm) | gemäßigt, warm |
 | Gräser | Grasbüschel (gemäßigt); Hochgras (warm); Schilf (nass) | gemäßigt, warm, nass |
 | Fleischfressende Pflanzen | Sonnentau | nass |
 | ohne Gruppe | Felsbrocken (3), Geröll (2), Eisbrocken (2) | kalt |
 
-Zählung: 9 Baumarten × 6 = 54, 18 Busch- und Kleinpflanzen-Arten × 3 = 54, 3 Kakteen × 3 = 9, Felsen und Eis 7. Summe 124.
+Zählung: 9 Baumarten × 6 = 54, 19 Busch- und Kleinpflanzen-Arten × 3 = 57, 3 Kakteen × 3 = 9, Felsen und Eis 7. Summe 127.
 
 **Welches Objekt eine Gruppe zeigt**, hängt von der Landschaft ab. Die Zuordnung steht als `where` im Katalog, z. B.:
 - Laubbäume: in der Savanne Schirmbaum, im Regenwald Tropenriese, sonst Laubbaum
+- Regen- und Bergregenwald haben eine Strauchschicht: Baumfarne (Farne) und Urwaldpalmen (Blütenpflanzen) unter den Tropenriesen
 - Blütenpflanzen: in der Tundra Heide, im Gebüsch Blütenstrauch
 
 Kakteen sind keine eigene Gruppe, sondern die Form der Blütenpflanzen auf Wüsten- und Halbwüstenfeldern (`src/cacti.ts`). Sie erscheinen 95 Mio. Jahre nach den Blütenpflanzen. Vorher zeigen diese Felder keine Blütenpflanzen-Objekte. Danach steht auf jeder zweiten solchen Kachel (Kachel-Hash) ein Kaktus, als eigenes Objekt neben den Plätzen der Landschaft.
 
 Savannenbäume sind ebenso die Form der Blütenpflanzen auf Savannenfeldern (`src/savannatrees.ts`), sobald es auf dem Planeten Laubbäume gibt. Ein Kachel-Hash setzt einen Schirmbaum, etwa jeder achte ein Affenbrotbaum. Der Anteil steigt mit der Lage von 8 % am Wüstenrand auf 35 % am Waldrand. Die Lage ergibt sich aus dem Abstand zur nächsten Wüste bzw. Halbwüste und zum nächsten Wald, höchstens 6 Kacheln weit. Die Abstände werden nur neu berechnet, wenn sich eine Landschaft ändert. Schilf erscheint nur mit Gräsern.
+
+Der Kapokbaum ist ein Wahrzeichen, kein Objekt der Landschaft (`src/kapok.ts`, `src/kapoklayer.ts`). Einmal pro Planet steht er im Herzen des größten Regenwalds: auf der Regenwaldkachel, die am weitesten von jeder anderen Landschaft entfernt ist, mindestens 3 Kacheln tief (ein geschlossener Block von 5 × 5 Kacheln). Kacheln mit Fluss, Stadt, Feld oder Holzeinschlag scheiden aus. Er bleibt, solange seine Kachel passt, sonst wächst er im tiefsten verbliebenen Regenwald neu. Gezeichnet wird er als Sprite aus dem Effekt-Atlas (20 × 24 px) über den Bäumen des Regenwalds. Die Lupe zeigt auf seiner Kachel und auf der Kachel darüber, die seine Krone füllt, seine Karte. Beim ersten Fund kommt er in die Chronik („Urwaldriese entdeckt“).
 
 Schatten zeichnet der Compositor, nicht das Sprite.
 

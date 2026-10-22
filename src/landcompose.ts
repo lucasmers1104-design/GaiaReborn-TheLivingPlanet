@@ -185,6 +185,8 @@ namespace SE {
         rows.h = th * 16 + 2 * PAD + Math.max(0, below) * 16;
         paintRivers(f.paths, rows, this.art, ox, oy);
       }
+      // The railway over the ground and the rivers it bridges; the ranges lift it with them (landrail.ts).
+      paintRail(f, b, this.art, ox, oy, th * 16 + 2 * PAD + Math.max(0, below) * 16);
       const lines = f.paths.sig;
       let rise: LandRise | null = null;
       if (lifted) {
@@ -239,6 +241,8 @@ namespace SE {
           for (let dx = -1; dx <= 1; dx++) if (lines[row + wrapX(tx + dx)] !== 0) { river = true; break; }
         }
         if (river && f.paths.near(p.fx + 0.5, p.fy + 0.5, RIVER_CLEARANCE)) continue;
+        // Nor over the railway: the line runs through a cut in the forest (landrail.ts).
+        if (railCovered(p, ox, oy)) continue;
         // With the Oceans layer off no beach is drawn, so nothing is kept off it.
         if (!seaColor && landObjectOnBeach(f, this.art, p)) continue;
         lifts[n] = z;

@@ -34,7 +34,8 @@ namespace SE {
       const reef = reefNotes(world, i);
       const migration = this.migrationOn?.(world, i) ?? null;
       const mound = i === world.termiteMound;
-      const sig = [tileSig, fmt.pct(world.vegetation[i]), city, river, event, scar, migration ?? '', mound, ...reef,
+      const kapok = onKapok(world, i);
+      const sig = [tileSig, fmt.pct(world.vegetation[i]), city, river, event, scar, migration ?? '', mound, kapok, ...reef,
         species.map(c => `${c}:${world.stage(i, c)}:${fmt.int(world.density(i, c) * 100)}:${LifeSystem.habitatLabel(world.density(i, c))}:${fmt.pct(world.lifeCounts[c] / TILE_COUNT)}:${examineAge(world, world.lifeFirstSeen[c])}`).join(','),
         plants.map(g => `${g}:${fmt.pct(world.floraCounts[g] / TILE_COUNT)}:${examineAge(world, world.evo.developed.get(FLORA[g].id)?.years ?? -1)}`).join(','),
         world.floraTop[i], growsAsCacti(world, i) ? 'cacti' : '',
@@ -83,6 +84,7 @@ namespace SE {
       this.host.replaceChildren(this.hero, flora, animals);
       if (migration) this.hero.after(ExaminePanel.sightCard(MIGRATION_INFO[migration]));
       if (mound) this.hero.after(ExaminePanel.sightCard(TERMITE_INFO));
+      if (kapok) this.hero.after(ExaminePanel.sightCard(KAPOK_INFO));
       if (notes.childElementCount) this.host.append(notes);
       if (focusKey) this.host.querySelector<HTMLElement>(`[data-focus-key="${focusKey}"]`)?.focus({ preventScroll: true });
       if (scroller) scroller.scrollTop = scrollTop;

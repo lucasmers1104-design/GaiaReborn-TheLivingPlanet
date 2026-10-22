@@ -126,6 +126,7 @@ namespace SE {
           this.rollU8(world.soil, y, shift);
           this.rollU16(world.landscapeZone, y, shift);
           this.rollU8(world.terraformed, y, shift);
+          this.rollU8(world.logged, y, shift);
           this.rollLife(world, y, shift);
         }
         world.terrainDirty = true;

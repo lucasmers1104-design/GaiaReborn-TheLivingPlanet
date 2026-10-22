@@ -118,6 +118,9 @@ Abstand überlappen sich die Umländer nicht.
   anderswo schon bekannte Stufe holt es mit voller Rate nach. Städte lernen von ihrem Volk und von weiter
   entwickelten Nachbarn; Tochterstädte erben das Zeitalter der Mutterstadt.
   Einzelne Zeitalter streuen trotzdem stark (13–600 Ticks), weil jede Erfindung ein Zufall ohne Gedächtnis ist.
+- **Entdeckerfahrt (22. 10. 2026):** Solange ein Kontinent ohne Stadt wartet, wird die erste Erfindung des
+  Industriezeitalters zurückgehalten, bis drei Segelschiffe ihn erreicht haben (`src/discovery.ts`,
+  `docs/bewegung-2026-10/bericht.md` §4).
 
 ### 2.5 Wanderung (`src/migration.ts`)
 
@@ -147,6 +150,8 @@ Abstand überlappen sich die Umländer nicht.
 - **Weicher Deckel** (Entscheidung 15. 10.): Belegen Städte 0,6 % der Landfelder (`CITY_LAND_CAP`), bricht niemand
   mehr auf; Städte wachsen dann nur noch in die Größe. Das gilt als Sättigung, nicht als Knappheit.
 - Ab der Industrie ist die Abklingzeit je Stadt lang (500–800 Ticks): Städte wachsen eher in die Größe als in die Zahl.
+- **Kolonisten (22. 10. 2026):** Nach der Entdeckung eines neuen Kontinents fahren Siedler ab der Eisenzeit bis 160
+  Felder über das offene Meer zu seinen Küstenplätzen (`docs/bewegung-2026-10/bericht.md` §4).
 - Gilt für **alle landlebenden** intelligenten Arten. Zufall nur aus `world.rng`.
 
 ### 2.6 Völker
@@ -158,7 +163,9 @@ Abstand überlappen sich die Umländer nicht.
     mit 1 % Chance je 10 Ticks ab und nimmt die Städte ihres Volkes mit, die ihr näher sind als der Hauptstadt.
 - **Höchstens 8 Völker,** 8 feste Volksfarben. Die Farbe eines ausgestorbenen Volkes wird wieder frei. Die
   15-Felder-Regel gründet nur, solange weniger als 6 Völker leben (`TRIBE_FAR_MAX`, Entscheidung 15. 10.); die
-  letzten beiden Farben bleiben für Überfahrten und Abspaltungen.
+  letzten beiden Farben bleiben für Überfahrten und Abspaltungen. Solange ein unentdeckter Kontinent wartet, lassen
+  Überfahrten und Abspaltungen zusätzlich die letzte Farbe frei, damit die erste Kolonie ein eigenes Volk wird
+  (22. 10. 2026).
 - **Hauptstadt** ist die älteste Stadt des Volkes, nach ihrem Fall die größte.
 - **Namen** für Völker und Städte kommen deterministisch aus Seed und Position, über einen Silbengenerator. Er
   verbraucht kein `world.rng`.

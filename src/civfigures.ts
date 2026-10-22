@@ -144,6 +144,8 @@ namespace SE {
     draw(ctx: CanvasRenderingContext2D, view: AmbientView, world: WorldState, now: number, dpr: number, frame: number, still: boolean): void {
       const civ = world.civ;
       for (const k of civ.conflicts) {
+        // Fought at sea, it shows as the fleets' battle of pixel ships instead (shiplayer.ts).
+        if (seaBattleShown(k, view.tilePx)) continue;
         const key = `${k.a}:${k.b}:${k.started}`;
         let bt = this.battles.get(key);
         const a = civ.city(k.a);
@@ -188,12 +190,15 @@ namespace SE {
   }
 
   export class SettlerLayer {
+    /** "Effekte reduzieren": the pixel boats ride still, on frame 0 without a wake. */
+    still = false;
     private readonly battles = new BattleMarks();
     private readonly glide = new FigureGlide();
     private readonly pictures = new Map<string, HTMLCanvasElement>();
     private picturePx = 0;
 
-    draw(ctx: CanvasRenderingContext2D, view: AmbientView, world: WorldState, now: number, dpr: number): void {
+    /** `cities` supplies the civ atlas for the pixel boats' pennants. */
+    draw(ctx: CanvasRenderingContext2D, view: AmbientView, world: WorldState, now: number, dpr: number, cities: CityLayer | null = null): void {
       this.glide.begin(world.ticks, now);
       const size = view.tilePx;
       const big = size * SHADOW_SPAN;
@@ -213,6 +218,17 @@ namespace SE {
         const { rx, ry } = spot;
         if (rx >= view.cols || ry <= -SHADOW_SPAN || ry >= view.rows) continue;
         const kind: SettlerKind = world.isWater(spot.rest > 0.5 ? spot.from : tile) ? 'water' : human ? 'land' : 'bundle';
+        const boat = kind === 'water' ? settlerBoatSprite(s.tech, !!s.voyage, size) : null;
+        if (boat) {
+          // On the water from SHIP_MIN_TILE on: the pixel ship of its era (shiplayer.ts), in device pixels.
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          const cam: LandCamera = { scrollX: view.scrollX, scrollY: view.scrollY, tilePx: size, dpr };
+          drawSettlerBoat(ctx, cam, cities, boat, !!s.voyage, (view.scrollX + rx + 0.5) * 16, (view.scrollY + ry + 0.5) * 16,
+            spot.flip, spot.rest > 0, world.civ.tribe(s.tribe)?.color ?? -1, s.id, now, this.still || this.glide.still);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.imageSmoothingEnabled = false;
+          continue;
+        }
         const flag = tribeArtColor(world.civ.tribe(s.tribe)?.color ?? -1);
         const key = `${kind}|${s.tech}|${flag}|${+spot.flip}|${c}|${stage}`;
         let pic = this.pictures.get(key);

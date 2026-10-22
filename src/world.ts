@@ -248,6 +248,8 @@ namespace SE {
     readonly lifeStage = new Uint8Array(TILE_COUNT * LIFE_COUNT);
     readonly tech = new Uint8Array(TILE_COUNT);            // Tech (0 = no city)
     readonly cityPop = new Float32Array(TILE_COUNT);       // 0 .. 1
+    /** What a civilization made of a tile beside its cities, by LAND_USE_* bits (civstate.ts). Derived, never saved. */
+    readonly landUse = new Uint8Array(TILE_COUNT);
     readonly magma = new Float32Array(TILE_COUNT);         // mantle upwelling
     /**
      * Strength of the orogenic belt under each tile, 0..1. Laid down once with
@@ -305,6 +307,17 @@ namespace SE {
     coalPeat = 0;
     /** Coal civilizations have mined so far, Gt. */
     coalMined = 0;
+    /* ---- wood (see wood.ts) ---- */
+    /** Standing wood in the woodland of the whole planet, Gt; derived from the cover every tick. */
+    wood = 0;
+    /** Wood cities have cut so far, Gt. */
+    woodCut = 0;
+    /**
+     * How deep a city's logging has cut each tile: its plant cover may reach
+     * at most 1 − logged/255 (flora.ts) until it grows back. Rides the
+     * plates; saved in the optional `wood` field.
+     */
+    readonly logged = new Uint8Array(TILE_COUNT);
     /* ---- oil from dead sea animals (see OilSystem) ---- */
     /** Usable oil in the crust of the whole planet, Gt. */
     oil = 0;
@@ -317,6 +330,8 @@ namespace SE {
     oilRigLand = -1;
     /** Tile of the termite mound on the savanna, −1 for none (termites.ts). */
     termiteMound = -1;
+    /** Tile of the kapok tree in the largest rainforest, −1 for none (kapok.ts). */
+    kapokTree = -1;
     /** A bit per plant group whose era is over for good (lycopsids.ts). */
     floraEnded = 0;
     /** Set for good once conifer and broadleaf forests have displaced the giant clubmosses. */
@@ -421,12 +436,16 @@ namespace SE {
       this.coal = 0;
       this.coalPeat = 0;
       this.coalMined = 0;
+      this.wood = 0;
+      this.woodCut = 0;
+      this.logged.fill(0);
       this.oil = 0;
       this.oilKerogen = 0;
       this.oilMined = 0;
       this.oilRigSea = -1;
       this.oilRigLand = -1;
       this.termiteMound = -1;
+      this.kapokTree = -1;
       this.floraEnded = 0;
       this.stageEnded.fill(0);
       this.fatesQuiet = false;
@@ -437,6 +456,7 @@ namespace SE {
       this.scaleYears = 0;
       this.sentientClass = Life.None;
       this.civ.clear();
+      this.civ.clearWorks();
       this.hazards.clear();
 
       this.vegetation.fill(0);
@@ -460,6 +480,7 @@ namespace SE {
       this.lifeFirstSeen.fill(-1);
       this.tech.fill(0);
       this.cityPop.fill(0);
+      this.landUse.fill(0);
       this.eventKind.fill(0);
       this.eventTtl.fill(0);
 
@@ -541,12 +562,16 @@ namespace SE {
       this.coal = o.coal;
       this.coalPeat = o.coalPeat;
       this.coalMined = o.coalMined;
+      this.wood = o.wood;
+      this.woodCut = o.woodCut;
+      this.logged.set(o.logged);
       this.oil = o.oil;
       this.oilKerogen = o.oilKerogen;
       this.oilMined = o.oilMined;
       this.oilRigSea = o.oilRigSea;
       this.oilRigLand = o.oilRigLand;
       this.termiteMound = o.termiteMound;
+      this.kapokTree = o.kapokTree;
       this.floraEnded = o.floraEnded;
       this.stageEnded.set(o.stageEnded);
       this.ticks = o.ticks;
@@ -559,6 +584,8 @@ namespace SE {
       this.scaleYears = o.scaleYears;
       this.sentientClass = o.sentientClass;
       this.civ.clear();
+      this.civ.clearWorks();
+      this.landUse.fill(0);
       this.hazards.copyFrom(o.hazards);
       this.dinoEra.copyFrom(o.dinoEra);
       this.space.copyFrom(o.space);

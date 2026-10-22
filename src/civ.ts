@@ -61,6 +61,8 @@ namespace SE {
       if (civ.cities.length === 0 && civ.settlers.length === 0) {
         // Peoples whose last city just fell go now, or a new city finds every colour taken.
         updateTribes(world);
+        // The last city's fields go with it.
+        stepFields(world, params);
         return;
       }
 
@@ -75,6 +77,13 @@ namespace SE {
       sendSettlers(world);
       spreadEpidemics(world, params);
       stepConflicts(world, params);
+      // What a civilization builds and changes round its cities (docs/bewegung-2026-10).
+      stepDiscovery(world, params);
+      stepFleets(world, params);
+      stepWonders(world, params);
+      stepRailway(world, params);
+      stepWood(world, params);
+      stepFields(world, params);
       this.consumeEnergy(world, params, atmo);
       mineCoal(world, coalDemand(world, params));
       pumpOil(world, oilDemand(world, params));
@@ -92,6 +101,8 @@ namespace SE {
       if (!world.civ.synced) deriveCities(world, params);
       else reconcileCities(world, params);
       updateTribes(world);
+      // Fields at once, so a loaded or edited planet shows them before its next tick.
+      stepFields(world, params);
     }
 
     /* --------------------------------------------------------- sentience -- */

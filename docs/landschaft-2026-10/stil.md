@@ -22,7 +22,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 | `rock` | Fels, Geröll, Felsbrocken, Gipfel |
 | `sand` | Sand, Wüste, Halbwüste |
 | `soil` | Erde, Waldboden, Tundraboden |
-| `laterite` | rote Tropenerde (Savanne, Regenwald) |
+| `laterite` | rote Tropenerde, nur als Akzent (rote Steine, Sonnentau, rote Ackerböden); nie als Fläche im Regenwald |
 | `mud` | Schlamm, Moor |
 | `straw` | trockenes Gras, Steppe, Savanne, Schilf |
 | `meadow` | Wiese, junges Grün (gelbgrün) |
@@ -66,6 +66,7 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 - **Untergrund bleibt erkennbar:** Flechten auf Fels zeigen grauen Stein mit Krusten, Moosteppich zeigt Erde mit Polstern, Halbwüste auf Sand ist hell und körnig, auf Fels steinig.
 - **Waldböden** sind vor allem zwischen den Bäumen zu sehen: dunkel, mit Streu, Moos und Farnflecken.
 - **Strandsand** (Overlay `beach_sand`) ist ruhiger, heller Sand (sand3/sand4) mit feinen Windrippeln und seltenen Muscheln, ohne Dünenbänder wie die Wüste. Kein Boden: Der Renderer legt ihn als 1–5 px schmalen Streifen an die Küste (`src/landshore.ts`).
+- **Regenwald** ist dunkler, feuchter Humus (`soil0`/`soil1`, wie der Waldboden) mit Streu und dichtem Unterwuchs aus breiten Blättern und Farnfächern in `jungle`-Tönen. Keine rote Erde: Zwischen den Bäumen wirkt er grün und dunkel. Der Bergregenwald ist dunkler und torfiger (`mud`) und dicht bemoost.
 - **Savanne** ist Grasland von Rand zu Rand: goldgelbes bis olivgrünes Gras mit Büscheln, kein offener roter Boden. Die spärliche Stufe ist trockener, mit dunkleren Trockenstellen im Gras, die dichte grüner und dichter mit Büscheln.
 
 ## Objekte
@@ -95,7 +96,9 @@ Spezifikation: `docs/biomes-spec.md`. Verbindliche IDs: `tools/terrain/catalog.j
 | Sumpfzypresse | Nadelbäume | schmale Säule, verbreiterter Stammfuß, im Wasser stehend |
 | Wacholder | Nadelbäume | niedriger, dunkler Kegelbusch |
 | Laubbaum | Laubbäume | runde, gewölbte Krone, mittelgrün, sichtbarer Stamm |
-| Tropenriese | Laubbäume | breite, flache Schirmkuppel, Brettwurzeln |
+| Tropenriese | Laubbäume | Form 1: breite, flache Schirmkuppel aus dunklen `jungle`-Büscheln, heller Stamm, Brettwurzeln; Form 2: höhere, runde Etagenkrone in `leaf` mit sonnigen Spitzen, brauner Stamm. Zusammen ein Mosaik verschiedener Grüntöne im Kronendach |
+| Urwaldpalme | Blütenpflanzen (Unterholz im Regenwald) | gebogene, gefiederte Wedel mit hängenden Fiedern über einem dünnen, geringelten Stamm; jung ein stammloser Federball. Anders als Palmfarn (dicker Stamm, steife Wedel) und Baumfarn (spitzenartiger Schirm) |
+| Kapokbaum | Laubbäume (Wahrzeichen, Effekt-Atlas `kapok_tree`, einmal pro Planet) | 20 × 24 px: flache, gestufte Schirmkrone hoch über dem Kronendach, gerader, glatter grauer Stamm, mächtige Brettwurzeln |
 | Schirmbaum | Laubbäume, auch Savannenbaum der Blütenpflanzen | flache Schirmkrone auf dünnem, schrägem Stamm (Akazie) |
 | Affenbrotbaum | Blütenpflanzen (Savannenbaum, selten) | grauer Flaschenstamm, kurze Äste, flache Krone aus Blattbüscheln; Form 2 lichter, mit weißen Blüten |
 | Kokospalme | Blütenpflanzen (am Strand) | schlanker, gebogener, geringelter Stamm (Form 1 nach links, Form 2 nach rechts), Krone aus hängenden, gefiederten Wedeln, kleine Traube Kokosnüsse darunter; anders als der Palmfarn hoch und dünn |
@@ -138,7 +141,7 @@ Bei Zweifeln gilt `docs/ueberarbeitung-2026-10/quellenpruefung.md`.
 
 ## Arbeitsablauf für Asset-Agenten
 
-1. **Datei:** Ausschließlich die eigene Familien-Datei ändern: `cold.js`, `temperate.js`, `warm.js`, `wet.js`, `mountain.js` oder `coast.js`. `catalog.js`, `palette.js`, `kit.js` und `masks.js` sind fest. Eigene Hilfsfunktionen gehören lokal in die Familien-Datei.
+1. **Datei:** Ausschließlich die eigene Familien-Datei ändern: `cold.js`, `temperate.js`, `warm.js`, `wet.js`, `mountain.js`, `coast.js` oder `fields.js` (Felder um die Städte). `catalog.js`, `palette.js`, `kit.js` und `masks.js` sind fest. Eigene Hilfsfunktionen gehören lokal in die Familien-Datei.
 2. **Eigene Familie prüfen:** `node tools/terrain-atlas.js --family <familie> --sheet <ordner>` erzeugt die Kontaktblätter `materials.png`, `objects.png` und `objects-light.png`.
 3. **Im Zusammenspiel prüfen:** `node tools/terrain-atlas.js --check --sheet <ordner> --part transitions,scenes,rivers` zeigt Übergänge, Szenen und Flüsse mit allen Familien.
 4. **Ziel:** 0 `PROBLEM`-Zeilen. Kontaktblätter landen im eigenen Scratchpad oder im OS-Temp-Ordner, nicht im Repo.

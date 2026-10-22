@@ -139,7 +139,8 @@ namespace SE {
 
   /** A new city may be founded here (spec §2.2). */
   export function citySiteAllowed(world: WorldState, i: number, except?: Settler, species: Life = world.sentientClass): boolean {
-    return cityGroundFits(world, i, species) && cityTooClose(world, i) < 0 && !goalTooClose(world, i, except) && !spaceportTooClose(world, i);
+    return cityGroundFits(world, i, species) && cityTooClose(world, i) < 0 && !goalTooClose(world, i, except) && !spaceportTooClose(world, i) &&
+      (world.landUse[i] & LAND_USE_WONDER) === 0;
   }
 
   /** Why the player may not found a city of `species` on tile `i`, or '' if they may (spec §2.10). */

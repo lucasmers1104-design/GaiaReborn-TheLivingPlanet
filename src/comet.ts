@@ -175,6 +175,8 @@ namespace SE {
   function endDinosaurCivilization(world: WorldState): boolean {
     for (let i = 0; i < TILE_COUNT; i++) hazardHitCity(world, i, 1);
     world.civ.clear();
+    world.civ.clearWorks();
+    world.landUse.fill(0);
     world.sentientClass = Life.None;
     if (world.timeScale > TimeScale.Evolution) {
       world.timeScale = TimeScale.Evolution;

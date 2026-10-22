@@ -213,7 +213,9 @@ namespace SE {
       }
       const coal = `${fmt.int(world.coal)} Gt`;
       const oil = `${fmt.int(world.oil)} Gt`;
-      const civSig = `${world.sentientClass}|${top}|${cities}|${fmt.one(world.totalCityPop)}|${coal}|${oil}`;
+      const wood = `${fmt.int(world.wood)} Gt`;
+      const cut = `${fmt.int(world.woodCut)} Gt`;
+      const civSig = `${world.sentientClass}|${top}|${cities}|${fmt.one(world.totalCityPop)}|${coal}|${oil}|${wood}|${cut}`;
       if (civSig === this.civSig) return;
       this.civSig = civSig;
       const civ = this.civHost;
@@ -234,6 +236,8 @@ namespace SE {
       stat(resIcon('population'), 'Bevölkerungsindex', fmt.one(world.totalCityPop));
       stat(uiIcon('coal'), 'Kohlevorrat', coal);
       stat(uiIcon('oil'), 'Ölvorrat', oil);
+      stat(evoIcon('broadleaf'), 'Holzvorrat', wood);
+      if (world.woodCut > 0) stat(evoIcon('broadleaf'), 'Geschlagenes Holz', cut);
       civ.appendChild(grid);
       if (top === Tech.Nanotech) {
         civ.appendChild(make('p', 'report-note', 'Deine Zivilisation hat die höchste Technologiestufe erreicht. Das Spiel geht frei weiter – halte den Planeten im Gleichgewicht.'));

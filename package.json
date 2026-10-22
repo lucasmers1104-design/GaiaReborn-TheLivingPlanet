@@ -1,6 +1,6 @@
 {
   "name": "gaia-reborn",
-  "version": "0.10.3",
+  "version": "0.11.0",
   "private": true,
   "description": "Ein Natur- und Evolutionsspiel als moderner Nachfolger von SimEarth: The Living Planet (Maxis, 1990).",
   "scripts": {

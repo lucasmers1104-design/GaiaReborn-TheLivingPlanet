@@ -26,7 +26,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna', 'ice', 'offshore', 'oilfield', 'spaceport', 'reeffish', 'termites', 'sharks'];
+const FAMILIES = ['smoke', 'volcano', 'fire', 'impact', 'water', 'storm', 'bolt', 'twister', 'earth', 'fauna', 'ice', 'offshore', 'oilfield', 'spaceport', 'reeffish', 'termites', 'sharks', 'ships', 'trains', 'wonders', 'kapok'];
 
 const SPRITES = [
   { id: 'smoke_puff', name: 'Rauchwölkchen', family: 'smoke', w: 8, h: 8, frames: 4, fps: 8, anchor: 'center', layer: 'top' },
@@ -141,6 +141,13 @@ const SPRITES = [
   // never changes. Frame 0 alone is the still picture. The trails to the neighbouring tiles are drawn by the runtime.
   { id: 'termite_mound', name: 'Termitenhügel in der Savanne: 8 Frames krabbelnde Termiten', family: 'termites', w: 24, h: 24, frames: 8, fps: 4, anchor: 'foot', layer: 'object' },
 
+  // The kapok tree (src/kapoklayer.ts, src/kapok.ts): one per planet, an emergent in the heart of the largest
+  // rainforest, fixed while its tile stays rainforest. Ceiba pentandra in the map's 3/4 view, lit from the upper left:
+  // a broad, flat, tiered umbrella crown high over the canopy, a tall straight pale grey trunk, plank buttress roots
+  // flaring at the foot. 20 px wide (columns 2–21) and 24 high: the foot on the tile's last row, the crown 8 px into
+  // the tile above and 2 px over the tiles left and right. It stands over the rainforest's own trees. Still: one frame.
+  { id: 'kapok_tree', name: 'Kapokbaum, Urwaldriese', family: 'kapok', w: 24, h: 24, frames: 1, fps: 0, anchor: 'foot', layer: 'object' },
+
   // Sea ice calving off the pack edge (src/icecalving.ts); the runtime picks every frame. Crack and slab come wide
   // (0–3, open water north or south) and tall (4–7, east or west), never rotated. The crack is drawn over the
   // edge tile's own ice, the slab on the water's half of it; splash, berg and melt sit on the water.
@@ -173,6 +180,75 @@ const SPRITES = [
   { id: 'spaceport_rocket', name: 'Raumhafen, Phase 3: vollständige Rakete am Startturm', family: 'spaceport', w: 48, h: 64, frames: 4, fps: 6, anchor: 'foot', layer: 'object' },
   { id: 'spaceport_ready', name: 'Raumhafen, Phase 4: startbereite Rakete auf der fertigen Rampe, Abdampf und Positionslichter', family: 'spaceport', w: 48, h: 64, frames: 8, fps: 8, anchor: 'foot', layer: 'object' },
   { id: 'spaceport_launched', name: 'Raumhafen nach dem Start: leere Rampe, versengter Beton', family: 'spaceport', w: 48, h: 64, frames: 1, fps: 0, anchor: 'foot', layer: 'object' },
+
+  // Ships on the sea (src/shiplayer.ts, src/fleets.ts; settlers on water in src/civfigures.ts), drawn from 16 px per
+  // tile on, in the map's 3/4 view: hull and deck seen from above and a little from the south, the side of the hull
+  // facing south, masts, sails and funnels standing up. Two directions (east, then west, generator-mirrored) x the
+  // frames each: a short loop of oars, sails, paddles or bobbing; the waterline is the sprite's lower third.
+  // `mouth` in the east frames (west: w − 1 − x): [pennantX, pennantY, funnelX, funnelY, sternX, sternY, waterY] —
+  // the topmost pixel of the mast or pole where the tribe's pennant flies (draw the pennant from there, the sprite
+  // has none); the topmost pixel of the funnel, where smoke rises (-1 where there is none); the stern on the water
+  // at the centre line, where ship_wake's `mouth` goes; the foam row under the middle of the hull: a sinking ship is
+  // cut off from this row down. Hull lengths grow with the era.
+  { id: 'ship_raft', name: 'Floß mit Paddler (Siedler der Steinzeit): 2 Richtungen × 4 Frames', family: 'ships', w: 16, h: 16, frames: 8, fps: 6, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [4, 3, -1, -1, 2, 10, 14] },
+  { id: 'ship_dugout', name: 'Einbaum mit Paddlern (Siedler der Bronzezeit): 2 Richtungen × 4 Frames', family: 'ships', w: 24, h: 16, frames: 8, fps: 6, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [5, 3, -1, -1, 1, 10, 13] },
+  { id: 'ship_galley', name: 'Galeere mit Rudern und Rahsegel (Bronzezeit): 2 Richtungen × 6 Frames Ruderschlag', family: 'ships', w: 32, h: 24, frames: 12, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [16, 2, -1, -1, 4, 15, 18] },
+  { id: 'ship_trireme', name: 'Trireme mit drei Ruderreihen, Rammsporn und Rahsegel (Eisenzeit): 2 Richtungen × 6 Frames', family: 'ships', w: 40, h: 24, frames: 12, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [20, 1, -1, -1, 2, 15, 18] },
+  { id: 'ship_sailer', name: 'Segelschiff, Karavelle mit drei Masten (Siedler der Eisenzeit, Entdeckerfahrt): 2 Richtungen × 4 Frames', family: 'ships', w: 32, h: 32, frames: 8, fps: 6, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [15, 1, -1, -1, 3, 23, 26] },
+  { id: 'ship_steamer', name: 'Dampfschiff mit Schaufelrad und Schlot (Industrie): 2 Richtungen × 4 Frames', family: 'ships', w: 32, h: 24, frames: 8, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [24, 2, 15, 3, 2, 16, 19] },
+  { id: 'ship_freighter', name: 'Containerschiff (ab dem Atomzeitalter): 2 Richtungen × 2 Frames', family: 'ships', w: 40, h: 24, frames: 4, fps: 3, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [6, 3, 3, 4, 1, 16, 19] },
+  { id: 'ship_warship', name: 'Kriegsschiff aus Stahl mit Geschütztürmen (Seeschlacht ab der Industrie): 2 Richtungen × 2 Frames', family: 'ships', w: 40, h: 24, frames: 4, fps: 3, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [20, 2, 15, 5, 2, 16, 20] },
+  // Drawn under a moving ship at its stern: the white wake fanning out behind it (east 0-3, west 4-7, looped);
+  // `mouth` (east) is its apex, set on the ship's stern point.
+  { id: 'ship_wake', name: 'Kielwasser: 2 Richtungen × 4 Frames', family: 'ships', w: 24, h: 8, frames: 8, fps: 8, anchor: 'center', layer: 'object', mirror: 'generator', directions: 2, mouth: [23, 3] },
+  // A sea battle (src/shiplayer.ts): what flies between the fleets and where it lands; the sinking ship itself sinks
+  // by its own sprite cut off from the waterline down, with ship_wreck over it, never by fading. ship_volley: 0–3 a
+  // looped hail of falling arrows, 4–7 a gun's flash and smoke, once. ship_wreck: 0–3 burning (looped while the hull
+  // sinks, flames on its deck line about row 14), 4–7 once when it has gone (foam, ring, smoke drifting off).
+  { id: 'ship_volley', name: 'Pfeilhagel und Brandpfeile (antik, 0–3), Mündungsfeuer mit Rauch (ab Industrie, 4–7)', family: 'ships', w: 16, h: 16, frames: 8, fps: 10, anchor: 'center', layer: 'object' },
+  { id: 'ship_splash', name: 'Einschlag im Wasser, Gischtsäule', family: 'ships', w: 8, h: 16, frames: 5, fps: 10, anchor: 'foot', layer: 'object' },
+  { id: 'ship_wreck', name: 'Sinkendes Wrack: Feuer, Rauch, Trümmer und Ring auf dem Wasser', family: 'ships', w: 32, h: 24, frames: 8, loop: 4, fps: 6, anchor: 'center', layer: 'object' },
+
+  // The railway (src/trainlayer.ts; the track is part of the composed landscape, src/landrail.ts): locomotive and
+  // cars of the era, each piece one track step long, in 8 directions (HAZARD_NX/NY order: NW N NE W E SW S SE) x its
+  // frames, the box centre on the track point. Solid bodies in the map's 3/4 view, every direction rendered and lit
+  // afresh (tools/fx/trains.js): going E or W a piece shows roof and south side (14 px body + couplings = 16 px),
+  // going N or S its roof and one end (about 20 px tall), on the diagonals it is stretched along the track to 16·√2
+  // px. So pieces on consecutive track tiles (one path step apart, in any direction) join with only their couplings
+  // between them; draw them back to front by the track point's y. Industrial: a black 4-4-0 steam engine with tender
+  // and wooden coaches; Atomic: a white and red streamlined express; from the Information age: a white maglev with a
+  // blue band, hovering over its own shadow. train_steam_loco: frames 0–3 of each direction turn the drivers a
+  // quarter (the rods show going E or W and on the diagonals); `mouth`: the opening of its stack, [x, y] for each
+  // direction in the same order, where a train_steam_puff starts (its box centre there, played once, drifting up
+  // and back).
+  { id: 'train_steam_loco', name: 'Dampflok: 8 Richtungen × 4 Frames Treibstangen', family: 'trains', w: 24, h: 32, frames: 32, fps: 10, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8, mouth: [6, 2, 12, 2, 17, 2, 6, 7, 17, 7, 6, 12, 12, 12, 17, 12] },
+  { id: 'train_steam_car', name: 'Personenwagen der Dampfbahn: 8 Richtungen', family: 'trains', w: 24, h: 32, frames: 8, fps: 0, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'train_express_head', name: 'Triebkopf des Schnellzugs: 8 Richtungen', family: 'trains', w: 24, h: 32, frames: 8, fps: 0, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'train_express_car', name: 'Mittelwagen des Schnellzugs: 8 Richtungen', family: 'trains', w: 24, h: 32, frames: 8, fps: 0, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'train_maglev_head', name: 'Kopf der Magnetschwebebahn: 8 Richtungen', family: 'trains', w: 24, h: 32, frames: 8, fps: 0, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'train_maglev_car', name: 'Mittelteil der Magnetschwebebahn: 8 Richtungen', family: 'trains', w: 24, h: 32, frames: 8, fps: 0, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'train_steam_puff', name: 'Dampfwolke über dem Schornstein der Lok', family: 'trains', w: 8, h: 8, frames: 5, fps: 8, anchor: 'center', layer: 'top' },
+
+  // World wonders (src/wonderlayer.ts, src/wonders.ts), built in stages the player watches: frames are build stages
+  // (fps 0), the last frame the finished wonder. In the 3/4 view of the cities and the space port, on their own
+  // ground (sand, stone), lit from the upper left; a stage must read apart from the next at 16 px per tile.
+  // wonder_pyramids: the three pyramids of Giza and their quarry ramps over 3 x 2 tiles, foot on the lower tile row,
+  // up to 16 px into the tile row above that: 0 marked ground and quarry, 1 the first courses of the great pyramid
+  // with a ramp, 2 half its height, 3 the great pyramid near its top and the second begun, 4 two done and the third
+  // in scaffolding, 5 all three with white casing and gilded tips.
+  { id: 'wonder_pyramids', name: 'Pyramiden: 6 Bauphasen', family: 'wonders', w: 48, h: 48, frames: 6, fps: 0, anchor: 'foot', layer: 'object' },
+  // wonder_wall: the Great Wall along a chain of tiles, one piece per tile. An arm runs from the tile's centre to its
+  // edge towards one neighbour (8 directions, HAZARD_NX/NY order) and a tile draws the arms towards both of its
+  // neighbours on the wall; 3 stages per direction (0 foundation and rubble, 1 half its height in scaffolding,
+  // 2 finished with walkway and crenellations). wonder_wall_tower: a watchtower over the centre of every few tiles,
+  // 3 stages. Both are centred on their tile, 16 x 32: the tile's ground on rows 8–23, up to 8 px into the tiles above
+  // and below (an arm runs on past its tile's edge, under the neighbour's arm drawn after it; one that does not run
+  // south leaves the last rows empty, so they are not foot sprites). Draw a tile's arms in direction order (northern
+  // first), its tower after them, and the tiles from north to south; a platform over every tile's centre joins the arms.
+  { id: 'wonder_wall', name: 'Chinesische Mauer, Mauerarm: 8 Richtungen × 3 Bauphasen', family: 'wonders', w: 16, h: 32, frames: 24, fps: 0, anchor: 'center', layer: 'object', mirror: 'generator', directions: 8 },
+  { id: 'wonder_wall_tower', name: 'Wachturm der Mauer: 3 Bauphasen', family: 'wonders', w: 16, h: 32, frames: 3, fps: 0, anchor: 'center', layer: 'object' },
+  // Builders at work beside a wonder under construction: tiny figures hauling a block on a sledge, looped.
+  { id: 'wonder_crew', name: 'Bauleute mit Steinblock auf dem Schlitten: 6 Frames', family: 'wonders', w: 16, h: 8, frames: 6, fps: 6, anchor: 'foot', layer: 'object', mirror: 'runtime' },
 ];
 
 /**

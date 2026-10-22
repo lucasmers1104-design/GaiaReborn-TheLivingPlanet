@@ -57,6 +57,11 @@ Stand: 2026-10-22 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 50 | `ACH_TERMITE_MOUND` | Baumeister der Savanne | Den Termitenhügel in der Savanne mit „Untersuchen“ (Lupe) entdecken (Chronik-Eintrag „Termitenhügel entdeckt“, Schlüssel `sight:termites`, `src/termites.ts`; der Hügel entsteht, sobald Ameisen in einer Savanne leben) | Rot-oranger Lehmhügel mit Schloten in goldener Savanne, Termitenspur am Fuß, Lupen-Glanz |
 | 51 | `ACH_CLOWNFISH` | Nemo gefunden | Clownfische, die aus einer Koralle schwimmen, mit „Untersuchen“ (Lupe) entdecken (Chronik-Eintrag „Clownfische entdeckt“, Schlüssel `sight:clownfish`, `src/migrations.ts`; auf jedem Riff, zu jeder Zeit, Zoom ≥ 24 Bildschirmpixel pro Feld) | Zwei orange-weiß gestreifte Clownfische schlüpfen aus einer violetten Seeanemone zwischen Korallen in türkisem Riffwasser, Lupen-Glanz |
 | 52 | `ACH_NEVER_AGAIN` *(versteckt)* | Nie wieder | Nach dem ersten Atomschlag einer Zivilisation ächten alle Völker die Atombombe (Chronik-Eintrag „Alle Völker ächten die Atombombe“, `world.civ.atomBan`, `src/conflict.ts`; meist beendet die Bombe einen Krieg eines Volkes im Atomzeitalter gegen eines ohne; ein vom Spieler ausgelöster Atomschlag zählt nicht) | Zerbrochene Atombombe in zwei Hälften, durch den Spalt wächst ein Olivenzweig, dahinter verblasst ein Atompilz |
+| 54 | `ACH_NEW_CONTINENT` | Land in Sicht! | Die Entdeckerfahrt mit drei Karavellen erreicht den neuen Kontinent; erst danach beginnt das Industriezeitalter (Chronik-Eintrag „Ein neuer Kontinent“, Schlüssel `civ:discovery`, `world.civ.discovery.state === 'found'`, `src/discovery.ts`; nur auf Planeten mit einem Kontinent ohne Stadt) | Drei Karavellen mit geblähten Segeln vor einer unbekannten grünen Küste, Möwen, Morgenlicht |
+| 55 | `ACH_WONDERS_BOTH` | Baumeister der Antike | Die Pyramiden und die Chinesische Mauer stehen fertig auf demselben Planeten (Chronik-Schlüssel `civ:wonder:pyramids` und `civ:wonder:wall`, `src/wonders.ts`) | Weiße Pyramide mit goldener Spitze neben einem Mauerstück mit Wachturm, Abendsonne dahinter |
+| 56 | `ACH_FIRST_RAILWAY` | Volldampf voraus | Die erste Eisenbahn des Planeten wird eröffnet (Chronik-Eintrag „Die erste Eisenbahn …“, Schlüssel `civ:rail:first`, `src/railway.ts`; ab dem Industriezeitalter, sobald ein Kontinent 3 Industriestädte hat) | Schwarze Dampflok mit rotem Kuhfänger und Dampfwolke auf einem Gleis, das sich durch eine Waldschneise zieht |
+| 57 | `ACH_SEA_BATTLE` | Seeschlacht | Ein Schiff sinkt in einer Seeschlacht im Bild (Zoom ≥ 16 px; zwei Küstenstädte im Krieg, `Ship.sunkAt`, `src/fleets.ts`, `src/shiplayer.ts`) | Zwei Triremen im Gefecht, Brandpfeile fliegen, eine sinkt brennend mit Rauchsäule |
+| 58 | `ACH_KAPOK` | Urwaldriese | Den Kapokbaum im Herzen des größten Regenwalds mit „Untersuchen“ (Lupe) entdecken (Chronik-Eintrag „Urwaldriese entdeckt“, Schlüssel `sight:kapok`, `src/kapok.ts`; der Baum entsteht, sobald ein Regenwald einen geschlossenen Kern von 5 × 5 Kacheln hat) | Riesiger Kapokbaum mit Schirmkrone und Brettwurzeln ragt über ein dunkelgrünes Kronendach, Lupen-Glanz |
 
 ## Schwer (Langzeitziele, Meisterschaft)
 
@@ -171,7 +176,7 @@ Border: items 38, 40, 41, 42, 43, 44 and 47 get a thin SILVER ring, items 39 and
 ### Prompt 6 — Nr. 48–
 
 ```
-Create 5 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
+Create 10 separate square images (1:1), one image per item below. Do not put them together in one grid. Each image is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
 Shared style for all: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, a thin SILVER ring as the border (item 53: a thin BRONZE ring), light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
 
 48. A nodding horsehead pumpjack and a tall steel lattice oil derrick standing on golden desert sand under an orange evening sky, a big glossy black oil drop shining in the foreground.
@@ -179,6 +184,11 @@ Shared style for all: detailed 16-bit pixel art, bold saturated colors, one cent
 51. Two orange clownfish with three bright white bands each slipping out of a violet sea anemone between pastel coral heads, seen slightly from above through clear turquoise reef water with soft light ripples, the glint of a magnifying glass lens catching the scene.
 52. A dark atomic bomb with yellow warning stripes broken cleanly into two halves lying on cracked grey ground, a fresh green olive branch growing up through the gap between the halves, a pale mushroom cloud fading away in the background.
 53. Two dark slate-grey shark dorsal fins, a big one and a smaller one, cutting through deep blue sea in a circle, seen slightly from above, white foam at the front of each fin and a curved trail of lighter, stirred water marking the circle.
+54. Three caravels with billowing cream square sails and a triangular lateen sail on the rear mast, sailing in a small formation towards an unknown green coastline with cliffs and palm trees, seagulls above, pale morning light on the sea.
+55. A white limestone pyramid with a shining gilded tip standing next to a grey stone wall section with crenellations and a square watchtower, both on warm sand, a low orange evening sun behind them.
+56. A black steam locomotive with a red cowcatcher, a funnel-shaped chimney and big red driving wheels, puffing a white steam cloud, running on a track with wooden sleepers through a cut in a dark green pine forest.
+57. Two black ancient warships with oars and square sails fighting at sea, flaming arrows flying between them, one ship sinking at the bow with fire on deck and a black smoke column, white foam and splashes around it.
+58. A gigantic kapok tree towering high above a dense dark-green rainforest canopy, its broad flat tiered umbrella crown lit golden-green by the sun, a tall smooth pale grey trunk with huge flared plank buttress roots, a tiny red bromeliad in the fork, a soft magnifying-glass glint in the upper corner.
 ```
 
 ## Ideen für später (wenn das Feature kommt)

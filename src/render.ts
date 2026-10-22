@@ -378,8 +378,14 @@ namespace SE {
     /** The oil platform and the desert derrick of the Industrial age (oillayer.ts). */
     private readonly oilRigs = new OilRigLayer();
     private readonly spaceport = new SpaceportLayer();
+    /** World wonders, the train and the ships of the civilization (docs/bewegung-2026-10). */
+    private readonly wonders = new WonderLayer();
+    private readonly trains = new TrainLayer();
+    private readonly ships = new ShipLayer();
     /** The termite mound on the savanna, once ants live there (termitelayer.ts). */
     private readonly termites = new TermiteLayer();
+    /** The kapok tree in the largest rainforest (kapoklayer.ts). */
+    private readonly kapok = new KapokLayer();
     private readonly salmon = new SalmonLayer();
     private readonly storks = new StorkLayer();
     private readonly bubbles = new OxygenBubbles();
@@ -454,6 +460,10 @@ namespace SE {
       this.sharks.still = on;
       this.oilRigs.still = on;
       this.spaceport.still = on;
+      this.wonders.still = on;
+      this.trains.still = on;
+      this.ships.still = on;
+      this.settlers.still = on;
       this.termites.still = on;
       this.salmon.still = on;
       this.storks.still = on;
@@ -718,6 +728,10 @@ namespace SE {
         if (!previewing) fx.drawShake(ctx, this.base, cam, now);
         fx.drawGround(ctx, world, cam, this.land, now, cities);
       }
+      if (this.pixelTerrain) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.kapok.draw(ctx, cam, world);
+      }
       // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
       if (this.layers.cities) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -725,6 +739,9 @@ namespace SE {
         this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, now);
         this.oilRigs.draw(ctx, cam, world, now);
         this.spaceport.draw(ctx, cam, world, now);
+        this.wonders.draw(ctx, cam, world, this.land.field, now);
+        this.trains.draw(ctx, cam, world, this.land.field, now);
+        this.ships.draw(ctx, cam, world, now, this.cities);
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (this.layers.life) {
@@ -740,7 +757,7 @@ namespace SE {
           (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
       }
       if (this.layers.cities) {
-        this.settlers.draw(ctx, this, world, now, dpr);
+        this.settlers.draw(ctx, this, world, now, dpr, this.cities);
         this.bands.draw(ctx, this, world, now, dpr);
       }
       if (fx) {

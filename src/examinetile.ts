@@ -12,7 +12,9 @@ namespace SE {
     readonly pixels: Uint32Array;
   }
 
-  export function composeExaminedTile(art: LandArt, field: TerrainField, x: number, y: number): ExaminedTile {
+  /** `extra`: a box (art px from the tile's top left) the picture must hold besides the tile's own objects. */
+  export function composeExaminedTile(art: LandArt, field: TerrainField, x: number, y: number,
+    extra: { left: number; top: number; right: number; bottom: number } | null = null): ExaminedTile {
     // Share terrain inputs, but suppress all objects while composing the field's ground.
     const bare = Object.assign(Object.create(TerrainField.prototype) as TerrainField, field, { scene: EMPTY_SCENE, volcano: EMPTY_VOLCANO, reef: EMPTY, palm: EMPTY });
     const ground = new Uint32Array(16 * 16);
@@ -29,6 +31,12 @@ namespace SE {
     }
     objects.sort((a, b) => a.fy - b.fy || a.fx - b.fx || a.seq - b.seq);
     let left = 0, top = 0, right = 16, bottom = 16;
+    if (extra) {
+      left = Math.min(left, extra.left);
+      top = Math.min(top, extra.top);
+      right = Math.max(right, extra.right);
+      bottom = Math.max(bottom, extra.bottom);
+    }
     for (const p of objects) {
       left = Math.min(left, p.fx - x * 16 - p.sprite.ax);
       top = Math.min(top, p.fy - y * 16 - p.sprite.ay);
@@ -56,7 +64,16 @@ namespace SE {
     const land = PixelTerrain.shared();
     if (TERRAIN_STYLE !== 'pixel' || !land.ready || !land.art) return null;
     land.ensure(world);
-    const tile = composeExaminedTile(land.art, land.field, x, y);
+    // The kapok tree's tile, and the one its crown fills, show the whole tree on its own tile.
+    const kapok = onKapok(world, idx(x, y)) ? FxArt.shared().frame(KAPOK_SPRITE, 0, 1) : null;
+    const sp = FX_MANIFEST.sprites[KAPOK_SPRITE];
+    let box: { left: number; top: number; right: number; bottom: number } | null = null;
+    if (kapok && sp) {
+      x = world.kapokTree % GRID_W;
+      y = (world.kapokTree / GRID_W) | 0;
+      box = { left: 8 - sp.ax, top: 15 - sp.ay, right: 8 - sp.ax + sp.w, bottom: 15 - sp.ay + sp.h };
+    }
+    const tile = composeExaminedTile(land.art, land.field, x, y, box);
     const k = creature ? 2 : 1;
     const canvas = document.createElement('canvas');
     canvas.width = tile.width * k;
@@ -66,6 +83,11 @@ namespace SE {
     const image = ctx.createImageData(tile.width, tile.height);
     new Uint32Array(image.data.buffer).set(tile.pixels);
     ctx.putImageData(image, 0, 0);
+    if (kapok && box) {
+      // The frame canvas has a transparent border of its own.
+      const pad = (kapok.width - sp.w) / 2;
+      ctx.drawImage(kapok, box.left - tile.left - pad, box.top - tile.top - pad);
+    }
     if (creature) {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(canvas, 0, 0, tile.width, tile.height, 0, 0, canvas.width, canvas.height);

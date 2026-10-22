@@ -60,9 +60,13 @@ namespace SE {
       c.tribe = tribe.id;
       return;
     }
-    // The distance rule leaves the last colours free for crossings and splits.
-    if (civ.tribes.length >= (crossed || !tribe ? TRIBE_MAX : TRIBE_FAR_MAX)) {
-      c.tribe = tribe ? tribe.id : nearestTribe(world, c.tile, c).tribe;
+    // The distance rule leaves the last colours free for crossings and splits;
+    // crossings the last one for the colonists of a continent still to be discovered.
+    const kept = crossed && civ.tribes.length === TRIBE_MAX - 1 ? colourForColonists(world) : 0;
+    if (civ.tribes.length >= (crossed || !tribe ? TRIBE_MAX - kept : TRIBE_FAR_MAX)) {
+      // Colonists on the discovered continent join the nearest people there (discovery.ts).
+      const colony = crossed ? colonyTribe(world, c) : -1;
+      c.tribe = colony >= 0 ? colony : tribe ? tribe.id : nearestTribe(world, c.tile, c).tribe;
       return;
     }
     const t = foundTribe(world, c, tribe ? tribe.id : -1);
@@ -134,6 +138,8 @@ namespace SE {
         if (d >= far) { far = d; c = o; }
       }
       if (!c || !world.rng.chance(TRIBE_SPLIT_CHANCE)) continue;
+      // The last colour waits for the first colony of a continent still to be discovered (discovery.ts).
+      if (civ.tribes.length === TRIBE_MAX - 1 && colourForColonists(world) > 0) return;
       const t = foundTribe(world, c, tribe.id);
       for (const o of civ.cities) {
         if (o.tribe === tribe.id && tileDistance(o.tile, c.tile) < tileDistance(o.tile, capital.tile)) o.tribe = t.id;

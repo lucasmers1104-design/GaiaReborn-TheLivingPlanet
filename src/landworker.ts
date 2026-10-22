@@ -21,7 +21,7 @@ namespace SE {
   /** What the composer and the signature read of TerrainField; the rest is the page's own bookkeeping. */
   const FIELD_PARTS = [
     'key', 'sea', 'lagoon', 'seaTile', 'reef', 'corals', 'sands', 'cay', 'beach', 'shade', 'rugged', 'volcano', 'ridges',
-    'river', 'paths', 'algae', 'edge', 'scene', 'density', 'groups', 'top', 'cactus', 'savannaTree', 'palm', 'sig',
+    'river', 'paths', 'algae', 'edge', 'scene', 'density', 'groups', 'top', 'cactus', 'savannaTree', 'palm', 'rail', 'sig',
   ] as const;
   /** Visible chunks asked for at once: enough to keep the worker busy, few enough that a newer field is used soon. */
   export const LAND_JOBS_MAX = 6;

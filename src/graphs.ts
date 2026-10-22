@@ -216,7 +216,9 @@ namespace SE {
       const mined = `${fmt.int(world.coalMined)} Gt`;
       const oil = `${fmt.int(world.oil)} Gt`;
       const pumped = `${fmt.int(world.oilMined)} Gt`;
-      if (!this.changed(`${Array.from(world.techCounts).join(',')}|${world.sentientClass}|${coal}|${mined}|${oil}|${pumped}`)) return;
+      const wood = `${fmt.int(world.wood)} Gt`;
+      const cut = `${fmt.int(world.woodCut)} Gt`;
+      if (!this.changed(`${Array.from(world.techCounts).join(',')}|${world.sentientClass}|${coal}|${mined}|${oil}|${pumped}|${wood}|${cut}`)) return;
       const road = make('ol', `tech-road${cities === 0 ? ' dormant' : ''}`);
       for (let t = 1; t < TECH_COUNT; t++) {
         const count = world.techCounts[t];
@@ -248,6 +250,8 @@ namespace SE {
       if (world.coalMined > 0) stat(evoIcon('clubmosses'), 'Abgebaute Kohle', mined);
       stat(uiIcon('oil'), 'Ölvorrat', oil);
       if (world.oilMined > 0) stat(uiIcon('oil'), 'Gefördertes Öl', pumped);
+      stat(evoIcon('broadleaf'), 'Holzvorrat', wood);
+      if (world.woodCut > 0) stat(evoIcon('broadleaf'), 'Geschlagenes Holz', cut);
       this.host.appendChild(facts);
     }
 

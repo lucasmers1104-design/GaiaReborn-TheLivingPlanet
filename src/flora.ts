@@ -266,7 +266,9 @@ namespace SE {
 
     step(world: WorldState, params: ModelParams): void {
       this.prepare(world, params);
-      const { flora, vegetation, floraTop, lifeDensity } = world;
+      // Logged woodland (wood.ts) grows back a little before the plants grow; a city cuts what grew.
+      regrowWood(world);
+      const { flora, vegetation, floraTop, lifeDensity, logged } = world;
       const rng = world.rng;
       const growth = 0.12 * mul(params.bio.reproductionRate);
       const co2Gate = clamp((world.co2 - 20) / 60, 0, 1);
@@ -316,6 +318,7 @@ namespace SE {
 
         // Photosynthesis needs carbon; the sea's algae are gated the same way.
         cap = Math.min(1, cap) * co2Gate;
+        if (logged[i] !== 0) cap = Math.min(cap, 1 - logged[i] / 255);
         const v = vegetation[i];
         let next: number;
         if (cap > 0.02) {

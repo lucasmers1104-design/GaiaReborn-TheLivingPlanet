@@ -75,6 +75,10 @@ namespace SE {
     pop: number;
     /** Its way leads across water to another shore. */
     crossed: boolean;
+    /** Read by the map: the voyage of discovery, three sailing ships instead of one boat (discovery.ts). */
+    voyage?: boolean;
+    /** Colonists: its way crosses the open sea to the discovered continent (discovery.ts). */
+    colony?: boolean;
   }
 
   /**
@@ -129,7 +133,26 @@ namespace SE {
     until: number;
     /** The peoples of `a` and `b` at the start; one may be gone by the end. */
     readonly sides: readonly [Tribe, Tribe];
+    /** Set as it ends (conflict.ts): `Tribe.id` of the side that won, −1 without a winner. Read by fleets.ts. */
+    winner?: number;
+    /** Set by fleets.ts: the battle point on the water when it is also fought at sea, else −1. Read by the map. */
+    sea?: number;
   }
+
+  /*
+   * `world.landUse`: what a civilization made of a tile beside its cities, by
+   * bits, so each feature clears and sets only its own. The landscape grows no
+   * wild plant objects where any of LAND_USE_CLEARS is set (landfield.ts).
+   */
+  /** Bits 0–2: the look of a field, 1..7 (fields.ts); 0 none. */
+  export const LAND_USE_FIELD = 0x07;
+  /** The railway runs over the tile (railway.ts). */
+  export const LAND_USE_RAIL = 0x08;
+  /** A world wonder stands on the tile or is being built there (wonders.ts). */
+  export const LAND_USE_WONDER = 0x10;
+  /** Free for the logging of the forests (wood.ts). */
+  export const LAND_USE_LOGGED = 0x20;
+  export const LAND_USE_CLEARS = LAND_USE_FIELD | LAND_USE_RAIL | LAND_USE_WONDER;
 
   /** A short message for the player from one civilization step, optionally also a chronicle entry. */
   export interface CivNews {
@@ -151,6 +174,14 @@ namespace SE {
     readonly bands: Band[] = [];
     readonly outbreaks: Outbreak[] = [];
     readonly conflicts: Conflict[] = [];
+    /** Read by the map: ships of the coastal cities and the liners between continents (fleets.ts). */
+    readonly ships: Ship[] = [];
+    /** The voyage of discovery that opens the Industrial age (discovery.ts); the railway reads its landfall. */
+    discovery: Discovery = { state: 'open', landfall: -1 };
+    /** Read by the map: the one railway line of the planet, from the Industrial age (railway.ts); null before. */
+    rail: Railway | null = null;
+    /** Read by the map: world wonders, built or under construction (wonders.ts). */
+    readonly wonders: Wonder[] = [];
     /** What the last step (or sync) has to tell the player; emptied at the start of each. */
     readonly news: CivNews[] = [];
     /** False until the records were derived from the grid (new planet, after a load). */
@@ -183,6 +214,7 @@ namespace SE {
       this.bands.length = 0;
       this.outbreaks.length = 0;
       this.conflicts.length = 0;
+      this.ships.length = 0;
       this.peace.clear();
       this.news.length = 0;
       this.byTile.clear();
@@ -195,6 +227,19 @@ namespace SE {
       this.topSince = 0;
       this.settled = false;
       this.atomBan = false;
+      this.revision++;
+    }
+
+    /**
+     * Forget what the civilization built and found: discovery, railway and
+     * wonders. Not part of `clear`, which only drops the records derived from
+     * the grid (cities.ts derives them again after a load): these come from
+     * their own save fields and outlast that.
+     */
+    clearWorks(): void {
+      this.discovery = { state: 'open', landfall: -1 };
+      this.rail = null;
+      this.wonders.length = 0;
       this.revision++;
     }
 

@@ -191,6 +191,8 @@ function probe(seed) {
   const wars = [];
   const openWars = new Map();
   const warNews = { start: 0, end: 0 };
+  // The voyage of discovery (src/discovery.ts): each change of its state, and the cities on the new continent after landfall.
+  const voyage = { state: 'open', held: -1, found: -1, log: [], colonies: [] };
 
   console.log('   tick  cities  minDist  land%  found  river/coast  bad  settlers  tribes  outbreaks  conflicts  top           CO2  civ ms');
   for (let k = 0; k <= civTicks; k++) {
@@ -212,6 +214,27 @@ function probe(seed) {
     }
     const civ = w.civ;
     underway.push(civ.settlers.length > 0);
+    const dsc = civ.discovery;
+    if (voyage.held < 0 && dsc.held >= 0) {
+      voyage.held = k;
+      voyage.log.push(`held +${k}`);
+    }
+    if (dsc.state !== voyage.state) {
+      voyage.state = dsc.state;
+      const ships = civ.settlers.find((x) => x.voyage);
+      const xy = (t) => `${t % SE.GRID_W},${Math.floor(t / SE.GRID_W)}`;
+      const lm = ships || dsc.state === 'found' ? SE.landmasses(w) : null;
+      const to = ships ? ships.path[ships.path.length - 1] : dsc.landfall;
+      voyage.log.push(ships && dsc.state === 'sailing'
+        ? `ships out +${k} from ${civ.cityAt(ships.path[0])?.name} (${xy(ships.path[0])}) to (${xy(to)}) on ${lm.size[lm.label[to]]} land tiles, ${ships.path.length - 1} tiles`
+        : `${dsc.state} +${k}${dsc.state === 'found' ? ` at (${xy(to)})` : ''}`);
+      if (dsc.state === 'found') voyage.found = k;
+    }
+    if (voyage.found >= 0 && [100, 300, 500].includes(k - voyage.found)) {
+      const { label } = SE.landmasses(w);
+      const home = label[dsc.landfall];
+      voyage.colonies.push(`${civ.cities.filter((c) => label[c.tile] === home).length} at +${k - voyage.found}`);
+    }
     // Told apart by the news each founding sends (src/tribes.ts); a people without one is the first or a lone city.
     for (const n of civ.news) {
       if (!n.chronicle || !n.chronicle.key.startsWith('civ:tribe:')) continue;
@@ -245,7 +268,8 @@ function probe(seed) {
       console.log(`  CO2 over 500 ticks from the first industrial city: ${co2Industrial.toFixed(0)} → ${w.co2.toFixed(0)} ppm (${d >= 0 ? '+' : ''}${d.toFixed(0)}), top ${SE.TECH_NAMES[topNow]}`);
     }
     if (civ.settlers.length > 0) tot.settlerTicks++;
-    tot.settlerMax = Math.max(tot.settlerMax, civ.settlers.length);
+    // The voyage of discovery (discovery.ts) sails beside the capped settler groups.
+    tot.settlerMax = Math.max(tot.settlerMax, civ.settlers.filter((s) => !s.voyage).length);
     tot.conflictMax = Math.max(tot.conflictMax, civ.conflicts.length);
     for (const c of civ.conflicts) {
       if (seenConflicts.has(c)) continue;
@@ -363,6 +387,10 @@ function probe(seed) {
   console.log(`  eras: ${eras.join('; ')}`);
   const when = (ks) => `${ks.length}${ks.length ? ` (+${ks.join(", +")})` : ""}`;
   console.log(`  peoples: ${when(tribeCause.first)} first or lone, ${when(tribeCause.far)} far from the capital, ${when(tribeCause.water)} across water, ${when(tribeCause.split)} by split; at the end ${tribeSizes(w.civ)} cities each`);
+  const industryAt = eraAt[SE.Tech.Industrial];
+  console.log(`  discovery: ${voyage.log.join(', ') || 'nothing'}` +
+    (voyage.held >= 0 && industryAt !== undefined ? `; Industrial age ${industryAt - voyage.held} ticks after the first hold` : '') +
+    (voyage.colonies.length ? `; cities on the new continent ${voyage.colonies.join(', ')}` : ''));
   console.log(`  epidemics ${tot.outbreaks}; done in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
 }
 

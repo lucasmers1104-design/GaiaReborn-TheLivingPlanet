@@ -285,10 +285,16 @@ namespace SE {
         coal: coalToJSON(w),
         oil: oilToJSON(w),
         termites: w.termiteMound,
+        kapok: w.kapokTree,
         terraformed: terraformedToJSON(w),
         fates: fatesToJSON(w),
         paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
         space: spaceToJSON(w),
+        // What the civilization built and found (docs/bewegung-2026-10): optional fields, the format number stays.
+        wood: woodToJSON(w),
+        discovery: discoveryToJSON(w),
+        rail: railToJSON(w),
+        wonders: wondersToJSON(w),
       };
     }
 
@@ -408,6 +414,7 @@ namespace SE {
       restoreCoal(ctx.world, raw.coal);
       restoreOil(ctx.world, raw.oil);
       restoreTermites(ctx.world, raw.termites);
+      restoreKapok(ctx.world, raw.kapok);
       // What died out for good (optional field, stagefates.ts); without it the first tick finds out.
       restoreFates(ctx.world, raw.fates);
       // Land the brush raised (optional field, terraform.ts): its summits keep their snow.
@@ -437,6 +444,11 @@ namespace SE {
       } catch {
         ctx.world.civ.clear();
       }
+      // Optional fields of what the civilization built and found; each drops only itself when unsound.
+      restoreWood(ctx.world, raw.wood);
+      restoreDiscovery(ctx.world, raw.discovery);
+      restoreRail(ctx.world, raw.rail);
+      restoreWonders(ctx.world, raw.wonders);
       return { notes };
     }
 

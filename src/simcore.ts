@@ -124,6 +124,7 @@ namespace SE {
       OilSystem.step(w);
       this.life.stepLife(w, p, this.atmo); // also refreshes derived aggregates
       placeTermiteMound(w);
+      placeKapok(w);
       this.fauna.step(w);
       this.evolution.step(w, p);
       this.civ.step(w, p, this.atmo);
@@ -160,7 +161,10 @@ namespace SE {
       CoalSystem.step(w);
       OilSystem.step(w);
       this.life.stepLife(w, p, this.atmo);
-      if (termites) placeTermiteMound(w);
+      if (termites) {
+        placeTermiteMound(w);
+        placeKapok(w);
+      }
       this.evolution.step(w, p);
       this.civ.step(w, p, this.atmo);
       this.atmo.step(w, p);

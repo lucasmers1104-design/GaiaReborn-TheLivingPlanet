@@ -115,7 +115,7 @@ namespace SE {
         const under = Math.abs(dx) <= 1 && dy <= 0;
         if (under && (world.isWater(j) || world.riverLevel[j] > 0)) return false;
         const near = under || tileDistance(i, j) < SPACE_CITY_GAP;
-        if (near && (j === world.oilRigLand || world.tech[j] !== Tech.None)) return false;
+        if (near && (j === world.oilRigLand || world.tech[j] !== Tech.None || (world.landUse[j] & LAND_USE_WONDER) !== 0)) return false;
       }
     }
     return true;

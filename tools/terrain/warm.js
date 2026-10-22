@@ -2,7 +2,7 @@
  * SimEarth 2.0 — terrain recipes, family "warm"
  * -----------------------------------------------------------------------------
  * Sand, stony desert, semi-desert on sand and on rock, savanna and the
- * rainforest floor; cycads, rainforest giants, umbrella trees, baobabs, tree ferns,
+ * rainforest floor; cycads, rainforest giants, understory palms, umbrella trees, baobabs, tree ferns,
  * columnar, barrel and prickly-pear cacti, thorn bushes and tall grass. Ids and ranks are fixed in catalog.js.
  *
  *   materials[id](t, d)   paint the seamless texture `t` (Tex, wraps) for density d
@@ -201,38 +201,47 @@ function savanna(t, d) {
   clean(t);
 }
 
-// Rainforest herb layer: broad leaves and fern fans (3 lit, 2 mid, 1 shade, 0 shadow).
-const LEAVES = [
-  ['.33.', '3221', '.110'],
-  ['2.2.2', '.232.', '1.1.10'],
-  ['.32', '321', '110'],
-  ['3..', '22.', '.210'],
+// Rainforest understory seen from above: broad leaves (L lit, M leaf, D shaded leaf) over
+// their own shade on the humus (s).
+const UNDERSTORY = [
+  ['.LL..', 'LMMD.', 'MMDDs', '.Dss.'],
+  ['..L...', '.LMM.L', 'LMMDMD', 'MDDsDs', '.ss.s.'],
+  ['.L..', 'LMM.', 'MDDs', '.ss.'],
+  ['..LL..', '.LMMD.', 'LMDMMD', 'MDsDDs', '.s..s.'],
 ];
-// Fern fans standing out of the litter.
+// Fern fans and seedlings catching a fleck of the light that falls through the canopy.
 const FERNS = [
-  ['2..2..2', '.2.3.2.', '..232..', '1223221', '.11011.'],
-  ['.2.2.', '22322', '.1210'],
+  ['L..L..L', '.M.L.M.', '..MLM..', 'DMMLMMD', '.DDsDD.'],
+  ['.L.L.', 'MMLMM', '.DMDs'],
 ];
 
-/** Rainforest floor: dark wet red earth, leaf litter, seedlings in loose groups and fern fans. */
+/**
+ * Rainforest floor: dark wet humus like the forest floor next door, a little
+ * leaf litter, and a deep green understory of broad leaves in drifts with
+ * fern fans where light falls through; the denser step has more of all three.
+ */
 function rainforest(t, d) {
   const S = t.w;
-  mottle(t, 16, 351, 0.5, 'soil1', 'laterite0');
-  const litter = { L: 'laterite1', D: 'soil0', M: 'soil2' };
-  for (const p of scatter(S, 4, 355)) {
-    if (p.r < 0.4) motif(t, p.s < 0.5 ? ['LD'] : ['M.', 'LD'], litter, p.x, p.y);
+  const hollow = k.fbm(S, 16, 2, 351);
+  const bayer = (x, y) => (k.BAYER4[y & 3][x & 3] + 0.5) / 16;
+  t.each((x, y) => c(hollow(x, y) + (bayer(x, y) - 0.5) * 0.08 < 0.45 ? 'soil0' : 'soil1'));
+  const litter = { L: 'soil2' };
+  for (const p of scatter(S, 8, 355)) {
+    if (p.r < 0.6) motif(t, p.s < 0.4 ? ['LL'] : p.s < 0.7 ? ['L', 'L'] : ['L.', '.L'], litter, p.x, p.y);
   }
-  // Seedlings in the shade stay dark; fern fans catch the light that falls through.
-  const herb = k.fbm(S, 8, 3, 353);
-  const cut = quantile(herb, S, [0.35, 0.55][d]);
-  const shade = { 3: 'jungle2', 2: 'jungle1', 1: 'jungle0', 0: 'jungle0' };
+  // The understory grows in drifts; in them the ground lies in deep green shade.
+  const lush = k.fbm(S, 8, 3, 353);
+  const cut = quantile(lush, S, [0.45, 0.65][d]);
+  t.each((x, y) => (lush(x, y) + (bayer(x, y) - 0.5) * 0.1 < cut - 0.03 ? c('jungle0') : undefined));
+  const deep = { L: 'jungle2', M: 'jungle1', D: 'jungle0', s: 'jungle0' };
+  const open = { L: 'jungle2', M: 'jungle1', D: 'jungle0', s: 'soil0' };
   for (const p of scatter(S, 4, 356)) {
-    if (herb(p.x, p.y) < cut && p.r < 0.8) motif(t, LEAVES[Math.floor(p.s * LEAVES.length)], shade, p.x - 1, p.y);
+    const inside = lush(p.x, p.y) < cut;
+    if (p.r < (inside ? 0.85 : [0.08, 0.16][d])) motif(t, UNDERSTORY[Math.floor(p.s * UNDERSTORY.length)], inside ? deep : open, p.x - 2, p.y);
   }
-  const lit = { 3: 'jungle3', 2: 'jungle2', 1: 'jungle1', 0: 'jungle0' };
-  const cover = [0.3, 0.45][d];
+  const fern = { L: 'jungle3', M: 'jungle2', D: 'jungle1', s: 'jungle0' };
   for (const p of scatter(S, 8, 357)) {
-    if (p.r < cover) motif(t, FERNS[p.s < 0.6 ? 0 : 1], lit, p.x, p.y);
+    if (p.r < [0.25, 0.4][d]) motif(t, FERNS[p.s < 0.6 ? 0 : 1], fern, p.x - 3, p.y);
   }
   clean(t);
 }
@@ -272,122 +281,122 @@ function sprite(rows, key) {
   return k.grid(rows, key);
 }
 
-// Rainforest giant: broad flat dome of leaf puffs over a dark underside, pale trunk, buttress roots.
-const GIANT_KEY = { 0: 'jungle0', 1: 'jungle1', 2: 'jungle2', 3: 'jungle3', t: 'rock3', m: 'rock2', d: 'rock1', e: 'bark0' };
+/**
+ * A crown of overlapping leaf clumps [cx, cy, r], each lit from its own upper
+ * left; a later clump lies in front of an earlier one, so every clump keeps a
+ * shaded seam where the next one covers it. `tone` = [outline, shade, leaf, lit].
+ */
+function clumps(t, list, tone, squash = 1) {
+  const own = new Int8Array(t.w * t.h).fill(-1);
+  list.forEach(([cx, cy, r], n) => {
+    for (let y = 0; y < t.h; y++) {
+      for (let x = 0; x < t.w; x++) if (Math.hypot(x + 0.5 - cx, (y + 0.5 - cy) / squash) <= r) own[y * t.w + x] = n;
+    }
+  });
+  const at = (x, y) => (x < 0 || y < 0 || x >= t.w || y >= t.h ? -1 : own[y * t.w + x]);
+  t.each((x, y) => {
+    const n = at(x, y);
+    if (n < 0) return undefined;
+    const [cx, cy, r] = list[n];
+    if (at(x + 1, y) < 0 || at(x, y + 1) < 0) return c(tone[0]);
+    if (at(x, y + 1) !== n || at(x + 1, y) > n) return c(tone[1]);
+    if (at(x - 1, y) < 0 || at(x, y - 1) < 0) return c(tone[1]);
+    const l = -(((x + 0.5 - cx) / r) * 0.6 + ((y + 0.5 - cy) / (r * squash)) * 0.8);
+    return c(l > 0.35 ? tone[3] : l > -0.25 ? tone[2] : tone[1]);
+  });
+}
+
+/**
+ * A straight trunk `w` px wide from row `top` to the foot, lit on its left,
+ * and buttress roots flaring out over its last `flare` rows.
+ */
+function bole(t, x0, w, top, flare, [lit, mid, dark]) {
+  const foot = t.h - 1;
+  for (let y = top; y <= foot; y++) {
+    for (let i = 0; i < w; i++) {
+      if (t.get(x0 + i, y) === 0) t.set(x0 + i, y, c(i === 0 ? lit : i === w - 1 ? dark : mid));
+    }
+  }
+  for (let s = 1; s <= flare; s++) {
+    const y = foot - flare + s;
+    t.set(x0 - s, y, c(lit));
+    t.set(x0 - s + 1, y, c(mid));
+    t.set(x0 + w - 1 + s, y, c(dark));
+    t.set(x0 + w - 2 + s, y, c(mid));
+  }
+}
+
+// Rainforest giants, two kinds of canopy tree. Form 0: a broad, flat umbrella of
+// dark leaf clumps on a pale trunk with wide buttress roots. Form 1: a taller,
+// rounder crown of clumps in a lighter green with sunlit tops, on a brown trunk.
 const GIANT = {
-  l0: [
-    '...1110...1110..',
-    '..1333221133320.',
-    '.133322212333220',
-    '1332222112322210',
-    '1222211111122110',
-    '1111123332211110',
-    '1331233332213320',
-    '1321333322213220',
-    '1221332222112210',
-    '1211322221112210',
-    '1211222221111110',
-    '0111122211111110',
-    '.00000111100000.',
-    '......0mde0.....',
-    '.......tmd......',
-    '.......tmd......',
-    '......ttmdd.....',
-    '.....ttmmmdd....',
-    '....ttm.tmd.dd..',
-    '...ttm..tmd..dd.',
-  ],
-  l1: [
-    '......11110.....',
-    '.....1333320....',
-    '..11133332220...',
-    '.13323332222110.',
-    '1333222222211320',
-    '1332212221113220',
-    '1221111111111120',
-    '1123332111233210',
-    '123333321233330.',
-    '1333332123333220',
-    '1333222123332220',
-    '0222222122222210',
-    '.0222110.022210.',
-    '..00000mde0000..',
-    '.......tmd......',
-    '.......tmd......',
-    '.......tmdd.....',
-    '......ttmmdd....',
-    '.....ttm.tmdd...',
-    '...tttm..tmd.dd.',
-  ],
-  m0: [
-    '..110...110..',
-    '.13330.13330.',
-    '1333221333220',
-    '1221111112220',
-    '1233123321110',
-    '1333133321220',
-    '1321333213320',
-    '.022333222210',
-    '..0022221000.',
-    '....0mde0....',
-    '.....tmd.....',
-    '.....tmd.....',
-    '.....tmd.....',
-    '.....tmd.....',
-    '....ttmdd....',
-    '...tm.tmd.dd.',
-    '..tm..tmd..d.',
-  ],
-  m1: [
-    '....11110....',
-    '...1333320...',
-    '.1333322210..',
-    '133122212330.',
-    '1322111133220',
-    '1212333212210',
-    '1123333221210',
-    '0133322221110',
-    '.02222221110.',
-    '..01111110...',
-    '...00mde00...',
-    '.....tmd.....',
-    '.....tmd.....',
-    '.....tmdd....',
-    '....ttmmd....',
-    '...ttm.tmd...',
-    '..tt...tmdd..',
-  ],
-  s0: [
-    '.1110.110.',
-    '1333211320',
-    '1322113220',
-    '1112332110',
-    '1233332210',
-    '0233222110',
-    '.02221110.',
-    '...0md00..',
-    '....tm....',
-    '....tm....',
-    '....tmd...',
-    '...ttmd...',
-    '...ttmdd..',
-  ],
-  s1: [
-    '...1110...',
-    '..133320..',
-    '.11333220.',
-    '1321322110',
-    '1211111320',
-    '1123332120',
-    '0133222110',
-    '.00000000.',
-    '....tm....',
-    '....tm....',
-    '....tmd...',
-    '....ttmd..',
-    '...tt.tmd.',
-  ],
+  0: {
+    tone: ['jungle0', 'jungle1', 'jungle2', 'jungle3'], bark: ['rock3', 'rock2', 'rock1'], squash: 0.8,
+    s: { clumps: [[2.5, 3.4, 2.4], [5, 2.6, 2.6], [7.5, 3.4, 2.4], [3.8, 5, 2.2], [6.4, 5, 2.2]], trunk: [4, 2, 6, 2] },
+    m: { clumps: [[2.6, 4.2, 2.6], [6.5, 3.2, 3], [10.4, 4.2, 2.6], [4.4, 6.2, 2.8], [8.6, 6.2, 2.8]], trunk: [6, 2, 8, 3] },
+    l: { clumps: [[3, 4.6, 3], [8, 3.4, 3.4], [13, 4.6, 3], [5.3, 7, 3.2], [10.7, 7, 3.2], [8, 8.4, 2.6]], trunk: [7, 2, 10, 4] },
+  },
+  1: {
+    tone: ['leaf0', 'leaf1', 'leaf2', 'meadow2'], bark: ['bark2', 'bark1', 'bark0'], squash: 1,
+    s: { clumps: [[5, 2.2, 2], [3, 4.2, 2.2], [7, 4.2, 2.2], [5, 6, 2.3]], trunk: [4, 2, 8, 1] },
+    m: { clumps: [[6.5, 2.6, 2.4], [3.8, 4.8, 2.6], [9.2, 4.8, 2.6], [6.5, 7, 2.8], [3, 8.6, 2.2], [10, 8.6, 2.2]], trunk: [6, 2, 10, 2] },
+    l: { clumps: [[8, 2.8, 2.8], [4.8, 5.2, 3], [11.2, 5.2, 3], [8, 7.6, 3.2], [3.4, 9.4, 2.8], [12.6, 9.4, 2.8], [8, 11, 2.6]], trunk: [7, 2, 12, 3] },
+  },
 };
+
+function giant(v) {
+  const kind = GIANT[v.form];
+  const spec = kind[v.size];
+  const [w, h] = { s: [10, 13], m: [13, 17], l: [16, 20] }[v.size];
+  const t = new k.Tex(w, h);
+  clumps(t, spec.clumps, kind.tone, kind.squash);
+  const [x0, tw, top, flare] = spec.trunk;
+  bole(t, x0, tw, top, flare, kind.bark);
+  return t;
+}
+
+/**
+ * A palm frond: an arching midrib from the crown (x0, y0) to its tip, lifted
+ * by `lift`, with leaflets hanging under it (longest mid-frond). `tone` =
+ * [midrib, leaflet, leaflet tip].
+ */
+function frond(t, x0, y0, x1, y1, lift, tone) {
+  const mx = (x0 + x1) / 2;
+  const my = Math.min(y0, y1) - lift;
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2);
+  for (let i = 1; i <= n; i++) {
+    const u = i / n;
+    const x = Math.round((1 - u) ** 2 * x0 + 2 * u * (1 - u) * mx + u * u * x1);
+    const y = Math.round((1 - u) ** 2 * y0 + 2 * u * (1 - u) * my + u * u * y1);
+    t.set(x, y, c(tone[0]));
+    if (u > 0.2 && u < 0.95 && t.get(x, y + 1) === 0) t.set(x, y + 1, c(tone[1]));
+    if (u > 0.35 && u < 0.8 && (x + y) % 2 === 0 && t.get(x, y + 2) === 0) t.set(x, y + 2, c(tone[2]));
+  }
+}
+
+// Understory palm (the flowering plants' form in the rainforest): pinnate fronds arching out of a short,
+// thin ringed trunk; young it is a shuttlecock of fronds straight out of the ground. Fronds back to front:
+// [tipX, tipY, lift, lit] in a box of [w, h], the crown at (cx, cy), the trunk from the crown to the foot.
+const PALM = [
+  { w: 10, h: 8, cx: 5, cy: 7, fronds: [[1, 1, 1, 1], [8, 1, 1, 0], [0, 5, 2, 1], [9, 5, 2, 0], [4, 0, 0, 1], [6, 3, 0, 0]] },
+  { w: 13, h: 12, cx: 6, cy: 7, fronds: [[2, 1, 2, 1], [10, 1, 2, 0], [0, 7, 3, 1], [12, 7, 3, 0], [6, 0, 0, 1], [3, 10, 2, 1], [10, 10, 2, 0]] },
+  { w: 16, h: 16, cx: 8, cy: 6, fronds: [[3, 0, 2, 1], [12, 0, 2, 0], [0, 6, 4, 1], [15, 6, 4, 0], [8, 0, 0, 1], [1, 11, 3, 1], [15, 11, 3, 0], [5, 10, 2, 1], [11, 10, 2, 0]] },
+];
+const PALM_LIT = ['leaf3', 'leaf2', 'leaf1'];
+const PALM_SHADE = ['leaf2', 'leaf1', 'leaf0'];
+
+function junglePalm(v) {
+  const p = PALM[v.index];
+  const t = new k.Tex(p.w, p.h);
+  for (let y = p.cy + 1; y < p.h; y++) {
+    t.set(p.cx, y, c(y % 2 ? 'bark2' : 'bark1'));
+    t.set(p.cx + 1, y, c('bark0'));
+  }
+  for (const [x, y, lift, lit] of p.fronds) frond(t, p.cx + 0.5, p.cy, x, y, lift, lit ? PALM_LIT : PALM_SHADE);
+  t.set(p.cx, p.cy, c('leaf1'));
+  t.set(p.cx + 1, p.cy, c('leaf0'));
+  return t;
+}
 
 // Umbrella thorn: flat, wide crown seen a little from above, dark underside, thin forked trunk.
 const ACACIA_KEY = { 0: 'leaf0', 1: 'leaf1', 2: 'leaf2', 3: 'leaf3', B: 'bark1', b: 'bark0' };
@@ -1013,7 +1022,8 @@ const TALL_GRASS = [
 
 const objects = {
   cycad: (v) => sprite(CYCAD[`${v.size}${v.form}`], CYCAD_KEY),
-  jungle_giant: (v) => sprite(GIANT[`${v.size}${v.form}`], GIANT_KEY),
+  jungle_giant: (v) => giant(v),
+  jungle_palm: (v) => junglePalm(v),
   acacia: (v) => sprite(ACACIA[`${v.size}${v.form}`], ACACIA_KEY),
   baobab: (v) => sprite(BAOBAB[`${v.size}${v.form}`], BAOBAB_KEY),
   tree_fern: (v) => sprite(TREE_FERN[v.index], TREE_FERN_KEY),

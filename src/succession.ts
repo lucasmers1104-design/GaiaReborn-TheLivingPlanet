@@ -342,6 +342,15 @@ namespace SE {
         if (iceShare > 0) {
           for (let k = 0; k < landCount; k++) if (cometIceAt(world, landList[k], iceShare)) target[landList[k]] = Landscape.Ice;
         }
+        // Woodland a city keeps cleared (wood.ts) stays at the open land of its own ladder.
+        const woody = woodyFloraMask(world);
+        const cacti = cactiArrived(world);
+        for (let k = 0; k < landCount; k++) {
+          const i = landList[k];
+          if ((world.landUse[i] & LAND_USE_LOGGED) === 0 || LANDSCAPE_LEVEL[target[i]] < 3) continue;
+          const climax = fillLadder(world.landscapeZone[i], present[i], world.soil[i] >= SOIL_EARTH_U8, lad, woody, cacti);
+          target[i] = ladderTarget(Math.min(climax, lad[2] !== LADDER_NONE ? 2 : 3), lad);
+        }
       }
 
       SuccessionSystem.settle(world, run, full);

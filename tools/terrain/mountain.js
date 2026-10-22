@@ -238,14 +238,14 @@ function alpineMeadow(t, d) {
 
 /**
  * Montane rainforest floor: the lowland rainforest floor (warm.js) under
- * cloud — darker humus instead of red laterite, and mosses on everything.
+ * cloud — soaked, olive-dark peaty humus instead of brown, and mosses on everything.
  */
 function rainforestMontane(t, d) {
   const S = t.w;
   warm.materials.rainforest(t, d);
-  // Darker than the lowland rain forest: the canopy a step down, humus for laterite.
+  // Darker than the lowland rain forest: the understory a step down, wet peat for humus, moss for litter.
   const humus = {
-    [c('laterite0')]: c('soil0'), [c('laterite1')]: c('soil1'), [c('soil2')]: c('moss0'),
+    [c('soil0')]: c('mud0'), [c('soil1')]: c('mud1'), [c('soil2')]: c('moss0'),
     [c('jungle1')]: c('jungle0'), [c('jungle2')]: c('jungle1'), [c('jungle3')]: c('jungle2'),
   };
   t.each((x, y) => humus[t.get(x, y)]);

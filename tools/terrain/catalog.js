@@ -9,6 +9,7 @@
  *
  * Families (one recipe file each under tools/terrain/):
  *   cold · temperate · warm · wet · mountain (docs/hoehe-spec.md) · coast (beaches, reefs)
+ *   · fields (round the cities, docs/bewegung-2026-10)
  * ========================================================================== */
 'use strict';
 
@@ -36,6 +37,17 @@ const MATERIALS = [
   { id: 'steppe', name: 'Steppe', family: 'temperate', size: 128, densities: 3 },
   { id: 'savanna', name: 'Savanne', family: 'warm', size: 128, densities: 3 },
   { id: 'meadow', name: 'Wiese', family: 'temperate', size: 64, densities: 3 },
+  // Fields round the cities: no landscape owns them, src/fields.ts lays them
+  // (FieldLook 1..7, in this order) and landfield.ts swaps the ground for
+  // them. Above the open land, so their rims fray into it; scrub, marsh and
+  // forest fray over them.
+  { id: 'field_garden', name: 'Hackgarten', family: 'fields', size: 64, densities: 1 },
+  { id: 'field_strips', name: 'Streifenflur', family: 'fields', size: 64, densities: 1 },
+  { id: 'field_millet', name: 'Hirsefeld', family: 'fields', size: 64, densities: 1 },
+  { id: 'field_paddy', name: 'Reisfeld', family: 'fields', size: 64, densities: 1 },
+  { id: 'field_terrace', name: 'Terrassenfeld', family: 'fields', size: 64, densities: 1 },
+  { id: 'field_hedgerows', name: 'Heckenlandschaft', family: 'fields', size: 64, densities: 1 },
+  { id: 'field_large', name: 'Großfeld', family: 'fields', size: 128, densities: 1 },
   { id: 'alpine_meadow', name: 'Alpine Matte', family: 'mountain', size: 64, densities: 3 },
   { id: 'marsh', name: 'Sumpf', family: 'wet', size: 64, densities: 3 },
   { id: 'shrub', name: 'Gebüsch', family: 'temperate', size: 64, densities: 3 },
@@ -124,7 +136,7 @@ const LANDSCAPES = [
   },
   {
     id: 'rainforest', name: 'Regenwald', materials: m('rainforest'),
-    objects: { tree: [1.8, 3.0], low: [0.3, 0.2] },
+    objects: { tree: [1.8, 3.0], bush: [0.3, 0.2], low: [0.3, 0.2] },
   },
   {
     id: 'marsh', name: 'Sumpf', materials: m('marsh'),
@@ -140,7 +152,7 @@ const LANDSCAPES = [
   },
   {
     id: 'cloudforest', name: 'Bergregenwald', materials: m('rainforest_montane'),
-    objects: { tree: [1.8, 3.0], low: [0.3, 0.2] },
+    objects: { tree: [1.8, 3.0], bush: [0.3, 0.2], low: [0.3, 0.2] },
   },
 ];
 
@@ -179,6 +191,8 @@ const OBJECTS = [
   { id: 'seed_fern', name: 'Samenfarn-Busch', group: 'seedPlants', kind: 'bush', family: 'temperate' },
   { id: 'juniper', name: 'Wacholder', group: 'conifers', kind: 'bush', family: 'cold' },
   { id: 'flower_bush', name: 'Blütenstrauch', group: 'flowering', kind: 'bush', family: 'temperate' },
+  // The flowering plants' form in the rainforest's understory, beside the tree ferns.
+  { id: 'jungle_palm', name: 'Urwaldpalme', group: 'flowering', kind: 'bush', family: 'warm' },
   { id: 'shrub', name: 'Laubstrauch', group: 'broadleaf', kind: 'bush', family: 'temperate' },
   { id: 'thorn_bush', name: 'Dornbusch', group: 'broadleaf', kind: 'bush', family: 'warm' },
   // --- low plants ---
@@ -272,6 +286,7 @@ const GROUPS = {
       { id: 'cactus_opuntia', where: ['semidesert', 'desert'] },
       { id: 'dwarf_shrub', where: ['tundra', 'alpine', 'lichen', 'moss'] },
       { id: 'flower_bush', where: ['shrubland', 'forest', 'meadow'] },
+      { id: 'jungle_palm', where: ['rainforest', 'cloudforest'] },
       { id: 'flowers', where: '*' },
     ],
     swatch: null,
@@ -309,7 +324,7 @@ const ABIOTIC = [
 /** Edge masks: 16 marching-squares cases (corner bits TL=1 TR=2 BL=4 BR=8) × variants. */
 const MASKS = { cases: 16, variants: 3 };
 
-const FAMILIES = ['cold', 'temperate', 'warm', 'wet', 'mountain', 'coast'];
+const FAMILIES = ['cold', 'temperate', 'warm', 'wet', 'mountain', 'coast', 'fields'];
 
 module.exports = {
   MATERIALS, OVERLAYS, LANDSCAPES, OBJECTS, TREE_SIZES, TREE_FORMS, KIND_BOX,

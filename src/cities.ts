@@ -317,6 +317,8 @@ namespace SE {
           // Rolled at the full chance first, so isolation is looked at only on a hit.
           up = isolated(world, civ.tribe(c.tribe), c) || rng.next() < civilizationShare(civ.cities.length, t);
         }
+        // The voyage of discovery holds the Industrial age (discovery.ts).
+        if (t === Tech.Iron) up = industrialGate(world, c, up);
         if (!up && t < top && rng.chance(TECH_TRADE)) up = neighbourAhead(world, c, t);
       }
       if (!up) continue;
