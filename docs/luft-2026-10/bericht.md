@@ -11,11 +11,16 @@ sich aus der Gasmischung ergibt.
   - Zusammensetzung der Luft: ein Balken der Anteile (N₂, O₂, Ar, CO₂, CH₄), jedes vorhandene Gas mindestens ein Pixel
     breit, darunter die Prozentwerte.
   - Sauerstoff, sein Weg vom Meer in die Luft: Gelöstes Eisen → O₂ im Meer → O₂ in der Luft. Die drei Stufen stehen
-    nebeneinander, die Stufe, in der der Planet gerade steht, ist hell hinterlegt.
+    nebeneinander, die Stufe, in der der Planet gerade steht, ist hell hinterlegt. Das gilt, solange das Meer noch
+    Eisen hält.
+  - Ist das gelöste Eisen verbraucht (unter 5 % oder Meilenstein „Eisen im Meer aufgebraucht“), verschwindet diese
+    Karte. Sauerstoff steht dann als Gaszeile „Sauerstoff O₂“ über Stickstoff, wie die anderen Gase; seine
+    Änderungszahl wandert mit.
   - Darunter untereinander Stickstoff, Kohlendioxid, Methan, Wasserdampf und Staub.
 - Gestaltung:
   - Pergamentkarten mit Goldrand auf dunklem Holz.
-  - Jedes Gas zeigt sein Molekül als Pixel-Sprite (UI-Atlas, Familie `air`, 11 Sprites).
+  - Jedes Gas zeigt sein Molekül als Pixel-Sprite (UI-Atlas, Familie `air`, 13 Sprites mit O₂-Molekül und
+    Info-Zeichen).
   - Ein Pixelbalken mit grüner Linie für den Bereich, in dem sich das Leben wohlfühlt. Warnwerte bekommen einen roten
     Rand.
 - Beschreibungen erscheinen nur im Tooltip, bei Hover oder Tastaturfokus. Er zeigt Name, Wert, Skala, Bedeutung und die
@@ -23,7 +28,7 @@ sich aus der Gasmischung ergibt.
   CO₂, Wasserdampf, Methan und Luftdruck.
 - Methan steht auf einer logarithmischen Skala (0–1.000 ppm).
 - Pixelkunst mit 2 CSS-px je Kunstpixel, in ganzen Gerätepixeln (bei 125 % Skalierung 2,4 CSS-px). Das Fenster ist
-  540 × 660 px groß.
+  560 × 660 px groß.
 - Die acht Fenster des Planet-Menüs tragen ihr Pixel-Icon (`menu_*`) in der Titelleiste.
 
 ## 2. Methan (`src/methane.ts`, Werte in `src/params.ts`)
@@ -72,16 +77,62 @@ gerechnet, wärmen aber nicht.
 - Der Sauerstoff-Fahrplan verschiebt sich je nach Planet in beide Richtungen (12345 früher, 2024 später). Einen
   systematischen Trend zeigen die zwei Planeten nicht.
 
+## 5. Gasbilanz: Δ letzter Simulationsschritt (`src/gasbudget.ts`, `src/gasbalance.ts`, `src/gasbalanceview.ts`)
+
+- Neben dem Sauerstoff der Luft, Kohlendioxid und Methan steht die Änderung im letzten abgeschlossenen Schritt, z. B.
+  „+0,8“. Die Farbe ist neutral.
+- Die Zahl steckt in einem Pergament-Chip mit Goldrand und dem üblichen Info-Zeichen, einer blauen Plakette mit weißem
+  „i“ (`air_info`). Das zeigt, dass sich dort Details öffnen. Bei Hover leuchtet der Rand golden, eine festgehaltene
+  Bilanz bekommt einen zweiten Ring.
+- Die Bilanz zeigt mit einem gestuften Pixel-Pfeil auf ihre Zahl. Die Legende unten zeigt einen solchen Chip und nennt
+  einmal die Bedeutung.
+- Vor dem ersten Schritt, nach dem Laden und auf einem neuen Planeten steht „—“ („Noch keine Bilanz verfügbar“).
+- Hover oder Fokus öffnen die Bilanz, ein Klick (Enter, Leertaste) hält sie. Erneuter Klick, Escape, ein Klick daneben
+  oder das Schließen des Fensters beenden sie. Der Zeiger darf von der Zahl in die Bilanz wechseln (250 ms Wartezeit).
+  Es ist höchstens eine Bilanz offen.
+- Die Bilanz liegt im DOM direkt hinter ihrer Zahl, so führt Tab hinein. Angezeigt wird sie als manuelles Popover in
+  der obersten Ebene: unter oder über der Zahl, rechtsbündig, immer im sichtbaren Bereich.
+- Aktualisierungen im 100-ms-Takt der Oberfläche schreiben nur Texte und verwenden ihre Zeilen weiter; Fokus und Lage
+  bleiben. Die Lage wird beim Öffnen verankert, damit eine Zahl, die eine Stelle dazugewinnt, nichts verschiebt.
+- Inhalt: Quellen und Senken mit Beiträgen, die Summen beider, die Nettoänderung (Ende minus Beginn) und die Werte zu
+  Beginn und am Ende. Einheiten: ppm je Schritt für CO₂ und CH₄, Prozentpunkte (Pp.) je Schritt für O₂.
+- Gebucht wird an den Rechenstellen, ohne eine Formel, die Reihenfolge oder den Zufall zu ändern:
+  - O₂: Landpflanzen, Austausch mit dem Meer (Abgabe als Quelle, Aufnahme als Senke), Atmung der Landtiere und Wale,
+    fossile Verbrennung, Brände, Oxidation von Gestein und toter Biomasse, reduzierende Gase und frisches Gestein. Die
+    Produktion im Meer und die Bindung durch Eisen zählen nicht zur Luft.
+  - CO₂: Hintergrundvulkanismus, Vulkanausbrüche, Einschläge, Brände, Atmung der Tiere, Atmung der Städte, fossile
+    Verbrennung, Photosynthese, Verwitterung.
+  - CH₄: methanbildende Archaeen, Sümpfe, Gestein und heiße Quellen, die Zivilisation (Vieh, Reisfelder und Erdgas sind
+    ein gemeinsamer Wert) und der Abbau in der Luft.
+  - Was eine Begrenzung (clamp) abschneidet, heißt „Modellbegrenzung“.
+- Der Schritt umfasst alles von `SimCore.tick()` bzw. `harnessTick()`, auch Ereignisse und Katastrophen vor dem
+  Atmosphärenschritt. Was zwischen zwei Schritten passiert, sind Eingriffe des Spielers: Terraformer, ausgelöste
+  Ereignisse und Katastrophen, der Komet. Sie gehen nicht in die Bilanz ein. Hat ein Eingriff den Wert seitdem
+  verändert, sagt die Bilanz das.
+- Die Bilanz reist mit dem Weltzustand vom Worker zur Seite. Sie wird nicht gespeichert.
+- Prüfung:
+  - Gleicher Seed, 700 Schritte, gierig gespielt, Planeten 12345 und 2024: der Fingerabdruck der Welt ist mit und
+    ohne Buchung bitgleich zum Stand vor der Änderung.
+  - Die Bilanzsumme weicht höchstens 2·10⁻¹⁶ relativ von der tatsächlichen Änderung ab.
+  - `tests/gasbudget.test.js` prüft Summen, Aufheben, Meeraustausch, Begrenzung, Katastrophen und Eingriffe,
+    Bitgleichheit, Pause, Laden, neuen Planeten, Worker-Übertragung und die Regeln von Öffnen und Schließen.
+  - Hover, Fokus, Halten, Schließen und Aktualisieren sind zusätzlich per Skript in headless Chrome geprüft.
+    `tools/ui-shot.js` emuliert dafür ein fokussiertes Fenster.
+
 ## Einschränkungen
 
 - Geprüft:
-  - Nur in headless Chrome, bei 100 % und 125 % Skalierung.
+  - Nur in headless Chrome, bei 100 % und 125 % Skalierung, die Gasbilanz bei 1366 × 768 und 1440 × 900.
   - Das Fenster mit veraltetem Stylesheet ist nicht geprüft. Nach dem Update einmal mit Strg+F5 neu laden.
+  - Die Bilanz braucht die Popover-API (Chrome 114, Firefox 125, Safari 17). Ohne sie öffnet sie innerhalb des
+    Fensters und kann dort beschnitten werden.
+  - Der Weg per Tab von der Zahl in die Bilanz ist nicht per Skript geprüft, nur das Halten des Fokus darin.
 - Tests:
   - Gemessen mit nur zwei Planeten.
   - `npm run test:full` ist nicht gelaufen.
-  - Grün: `test:quick`, `tests/methane.test.js`, `tests/oceanchem.test.js`, `tests/save.test.js`,
-    `tests/coal.test.js` und `tests/oil.test.js`.
+  - Grün: `test:quick`, `tests/methane.test.js`, `tests/gasbudget.test.js`, `tests/oceanchem.test.js`,
+    `tests/save.test.js`, `tests/simworker.test.js`, `tests/coal.test.js`, `tests/oil.test.js`,
+    `tests/hazard-chain.test.js` und `tests/hazard-impact.test.js`.
 - Vereinfachungen:
   - Stickstoff bleibt fest. Die Erde hatte vor 2,7 Mrd. Jahren vermutlich weniger als den halben heutigen Luftdruck;
     das Spiel bleibt bei 0,79 bar.

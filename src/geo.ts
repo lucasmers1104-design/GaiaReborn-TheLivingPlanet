@@ -380,7 +380,7 @@ namespace SE {
         }
         this.mark(world, i, EventKind.Volcano);
       });
-      world.co2 = clamp(world.co2 + 25, 0, 5000);
+      shiftGas(world, 'co2', 'volcano', 25, 0, 5000);
       world.dust = clamp(world.dust + 0.05, 0, 1);
       world.terrainDirty = true;
     }
@@ -400,7 +400,7 @@ namespace SE {
       });
       // The impact winter is the real killer, not the crater.
       world.dust = clamp(world.dust + 0.18, 0, 1);
-      world.co2 = clamp(world.co2 + 40, 0, 5000);
+      shiftGas(world, 'co2', 'impact', 40, 0, 5000);
       world.terrainDirty = true;
     }
 
@@ -442,7 +442,7 @@ namespace SE {
         // Anything with enough plant cover to carry a fire burns: the cover
         // drops to a fifth and the trees go, to return from the unburnt edge.
         if (!world.isWater(i) && world.vegetation[i] >= BiomeSystem.VEGETATION_THRESHOLD) {
-          world.co2 = clamp(world.co2 + world.vegetation[i] * 0.8, 0, 5000);
+          shiftGas(world, 'co2', 'fire', world.vegetation[i] * 0.8, 0, 5000);
           this.scorch(world, i, 0.2, EventSystem.WOODY_MASK);
           SuccessionSystem.burn(world, i);
           this.killLife(world, i, 0.7);

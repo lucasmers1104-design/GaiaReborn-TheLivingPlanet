@@ -295,6 +295,9 @@ namespace SE {
     vapor = 0.45; // 0 .. 1 saturation
     dust = 0.02;  // 0 .. 1 opacity
 
+    /** The last tick's O₂, CO₂ and CH₄ balance (gasbudget.ts); a diagnosis, never saved. */
+    readonly gas = new GasLedger();
+
     /* ---- ocean chemistry (see OceanChemistry) ---- */
     /** Dissolved iron (Fe²⁺) left in the sea, 1 = a young ocean's full load. */
     oceanIron = 1;
@@ -431,6 +434,7 @@ namespace SE {
       this.o2 = 0;
       this.n2 = 78;
       this.ch4 = 0;
+      this.gas.reset();
       this.vapor = 0.45;
       this.dust = 0.02;
       this.oceanIron = 1;
@@ -558,6 +562,8 @@ namespace SE {
       this.o2 = o.o2;
       this.n2 = o.n2;
       this.ch4 = o.ch4;
+      // A loaded planet has no balance until its first tick.
+      this.gas.reset();
       this.vapor = o.vapor;
       this.dust = o.dust;
       this.oceanIron = o.oceanIron;

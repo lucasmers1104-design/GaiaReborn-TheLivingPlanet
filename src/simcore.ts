@@ -112,6 +112,7 @@ namespace SE {
       const p = this.params;
       if (dinoEraHoldsTime(w)) return false;
       this.finishSettle();
+      w.gas.begin(w);
       this.geo.step(w, p);
       this.events.step(w, p);
       this.hazards.step(w);
@@ -140,6 +141,7 @@ namespace SE {
       this.recordCiv();
       // First reef and first white beach: from the map's own derivation (reefs.ts), not from the simulation.
       for (const e of reefMilestones(w)) this.evolution.record(w, e);
+      w.gas.close(w);
       return true;
     }
 
@@ -152,6 +154,7 @@ namespace SE {
     harnessTick(termites = true): void {
       const w = this.world;
       const p = this.params;
+      w.gas.begin(w);
       this.geo.step(w, p);
       this.events.step(w, p);
       RiverSystem.maybeRebuild(w);
@@ -173,6 +176,7 @@ namespace SE {
       w.absoluteYears += w.yearsPerTick;
       w.scaleYears += w.yearsPerTick;
       this.history.sample(w);
+      w.gas.close(w);
     }
 
     /** Hand the civilization's news to the chronicle, or else to the player as a message. */
@@ -590,11 +594,11 @@ namespace SE {
       let text = '';
       switch (tf) {
         case Terraformer.OxygenGenerator:
-          w.o2 = clamp(w.o2 + 1.5, 0, 40);
+          shiftGas(w, 'o2', 'player', 1.5, 0, 40);
           text = 'Sauerstoff-Generator: +1,5 % Sauerstoff.';
           break;
         case Terraformer.CO2Generator:
-          w.co2 = clamp(w.co2 + 120, 0, 5000);
+          shiftGas(w, 'co2', 'player', 120, 0, 5000);
           text = 'CO₂-Generator: +120 ppm CO₂.';
           break;
         case Terraformer.VaporGenerator:

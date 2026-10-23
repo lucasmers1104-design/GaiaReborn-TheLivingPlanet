@@ -135,7 +135,7 @@ namespace SE {
         const ny = h.y + HAZARD_NY[k];
         if (ny >= 0 && ny < GRID_H) lift(idx(wrapX(h.x + HAZARD_NX[k]), ny), VOLCANO_RING_LIFT);
       }
-      world.co2 = clamp(world.co2 + VOLCANO_CO2, 0, 5000);
+      shiftGas(world, 'co2', 'volcano', VOLCANO_CO2, 0, 5000);
       world.dust = clamp(world.dust + VOLCANO_DUST, 0, 1);
       for (let dy = -VOLCANO_ASH_RADIUS; dy <= VOLCANO_ASH_RADIUS; dy++) {
         const y = h.y + dy;

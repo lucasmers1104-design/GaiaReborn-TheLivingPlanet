@@ -40,7 +40,7 @@
 }
 .air-big .air-sprite { grid-area: sprite; }
 .air-big .air-name { grid-area: name; }
-.air-big .air-value { grid-area: value; }
+.air-big .air-amount { grid-area: value; }
 .air-big .air-bar { grid-area: bar; }
 
 .air-mix { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
@@ -69,13 +69,16 @@
 .air-list { display: flex; flex-direction: column; gap: 6px; }
 .air-row {
   display: grid;
-  grid-template-columns: auto 1fr auto 6.2em;
+  grid-template-columns: auto 1fr auto 13.4em;
   align-items: center;
   gap: 10px;
   min-height: 40px;
   padding: 4px 10px 4px 8px;
 }
+.air-row .air-amount { display: grid; grid-template-columns: 1fr 6.8em; align-items: center; gap: 6px; }
+.air-row .gas-delta { justify-self: start; }
 .air-row .air-value { text-align: right; }
+.air-step .air-amount { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 6px; }
 
 .air-key { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; color: var(--rail-text-2); font-size: 12px; }
 .air-key-line { flex: none; width: 18px; height: 2px; background: #72b92e; box-shadow: 0 2px 0 #2f6e1c; }

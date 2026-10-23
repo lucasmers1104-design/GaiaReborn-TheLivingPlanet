@@ -221,6 +221,8 @@ async function main() {
   await cdp.send('Log.enable');
   await cdp.send('Page.enable');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: a.w, height: a.h, deviceScaleFactor: a.dpr, mobile: false });
+  // As a focused window: headless pages get no focus events otherwise, and keyboard paths could not be checked.
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
   await cdp.send('Page.navigate', { url });
   const ready = a.page === 'index' ? '!!(window.SE && SE.app)' : "document.title === 'ready'";
   for (;;) {

@@ -87,7 +87,7 @@ namespace SE {
     world.flora[i] &= ~WOODY_FLORA_MASK;
     SuccessionSystem.burn(world, i);
     hazardKillLife(world, i, FIRE_LIFE_LOSS);
-    world.co2 = clamp(world.co2 + before * FIRE_CO2, 0, 5000);
+    shiftGas(world, 'co2', 'fire', before * FIRE_CO2, 0, 5000);
     const dust = Math.min(FIRE_DUST_TILE, FIRE_DUST_MAX - fire.dust);
     if (dust > 0) {
       world.dust = clamp(world.dust + dust, 0, 1);
@@ -174,7 +174,11 @@ namespace SE {
       }
       fire.burning = still.concat(lit);
       // Oxygen-rich air burns hotter and more completely: the fire window's brake on too much O₂.
-      world.o2 = Math.max(0, world.o2 - fuel * FIRE_O2 * fireOxygen(world.o2));
+      const burnt = fuel * FIRE_O2 * fireOxygen(world.o2);
+      const raw = world.o2 - burnt;
+      world.o2 = Math.max(0, raw);
+      world.gas.add('o2', 'fire', -burnt);
+      world.gas.add('o2', 'limit', world.o2 - raw);
       return fire.burning.length > 0;
     },
 

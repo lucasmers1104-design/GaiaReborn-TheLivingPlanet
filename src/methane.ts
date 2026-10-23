@@ -45,10 +45,18 @@ namespace SE {
       const li = i * LIFE_COUNT + Life.Prokaryote;
       if (w.lifeStage[li] === METHANOGEN_STAGE) archaea += w.lifeDensity[li];
     }
-    const made = CH4_ARCHAEA * (archaea / TILE_COUNT) * escapeShare(w.oceanO2)
-      + CH4_WETLAND * (w.biomeCounts[Biome.Swamp] / TILE_COUNT)
-      + CH4_ABIOTIC * mul(params.geo.volcanoes) + extra;
+    const fromArchaea = CH4_ARCHAEA * (archaea / TILE_COUNT) * escapeShare(w.oceanO2);
+    const fromSwamps = CH4_WETLAND * (w.biomeCounts[Biome.Swamp] / TILE_COUNT);
+    const fromRock = CH4_ABIOTIC * mul(params.geo.volcanoes);
+    const made = fromArchaea + fromSwamps + fromRock + extra;
     const lost = Math.min(1, CH4_LOSS_ANOXIC + CH4_LOSS_PER_O2 * w.o2) * w.ch4;
-    w.ch4 = clamp(w.ch4 + made - lost, 0, CH4_MAX);
+    const raw = w.ch4 + made - lost;
+    w.ch4 = clamp(raw, 0, CH4_MAX);
+    w.gas.add('ch4', 'archaea', fromArchaea);
+    w.gas.add('ch4', 'swamps', fromSwamps);
+    w.gas.add('ch4', 'abiotic', fromRock);
+    w.gas.add('ch4', 'civ', extra);
+    w.gas.add('ch4', 'decay', -lost);
+    w.gas.add('ch4', 'limit', w.ch4 - raw);
   }
 }

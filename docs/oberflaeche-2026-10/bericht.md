@@ -127,9 +127,9 @@ Speicherfeld**; Spielstände bleiben unverändert und sehen nach dem Laden sofor
 
 ## 3. Pixelkunst und Technik
 
-- Alle 102 Sprites kommen aus Rezepten in `tools/uiart/` (`node tools/ui-atlas.js`), Vertrag `tools/uiart/catalog.js`.
+- Alle 104 Sprites kommen aus Rezepten in `tools/uiart/` (`node tools/ui-atlas.js`), Vertrag `tools/uiart/catalog.js`.
   Die Palette ist die der Landschaft plus 88 eigene Farben (Pergament, Gold, Holz, Haut, Haar, Ranken, Welken, Blüten,
-  Zauberlicht), 193 insgesamt (`tools/uiart/palette.js`). Der Atlas (512 × 532, 21 KB) steckt als Daten-URL in
+  Zauberlicht), 193 insgesamt (`tools/uiart/palette.js`). Der Atlas (512 × 533, 21 KB) steckt als Daten-URL in
   `src/uiatlas.ts`, damit er über `file://` ohne Server lädt.
 - Gaias Körper baut `tools/uiart/gaia-body.js` für alle Posen; ihre Posen haben ein leeres Gesicht, Augen, Brauen, Mund und
   Wangenröte setzt das Spiel an den Gesichtspunkt der Pose (zehn Augen, vier Brauen, acht Münder).

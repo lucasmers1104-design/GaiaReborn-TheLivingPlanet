@@ -128,7 +128,7 @@ namespace SE {
 
     start(world: WorldState, h: Hazard): void {
       world.dust = clamp(world.dust + METEOR_DUST, 0, 1);
-      world.co2 = clamp(world.co2 + METEOR_CO2, 0, 5000);
+      shiftGas(world, 'co2', 'impact', METEOR_CO2, 0, 5000);
       if (world.elevation[idx(h.x, h.y)] < 0) {
         around(h.x, h.y, 1, (i) => {
           if (world.elevation[i] < 0) hazardKillLife(world, i, METEOR_SEA_KILL);

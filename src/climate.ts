@@ -304,6 +304,9 @@ namespace SE {
 
       const volcanic = VOLCANIC_CO2 * mul(params.geo.volcanoes);
       world.co2 += volcanic + this.co2Delta - weathering;
+      // co2Delta's parts were booked where life and the civilization computed them (gasbudget.ts).
+      world.gas.add('co2', 'volcanism', volcanic);
+      world.gas.add('co2', 'weathering', -weathering);
 
       // --- Oxygen ---
       // Marine oxygen reaches the air only through the sea (OceanChemistry).
@@ -311,7 +314,12 @@ namespace SE {
       // there is, the more aggressively it attacks rock and dead organics.
       const outgassing = OceanChemistry.step(world, params, this.oceanO2Delta);
       const oxidation = world.o2 * OXIDATION * (0.5 + world.o2 / 40);
-      world.o2 += this.o2Delta + outgassing - oxidation - OceanChemistry.reducingSink(world.o2);
+      const reducing = OceanChemistry.reducingSink(world.o2);
+      world.o2 += this.o2Delta + outgassing - oxidation - reducing;
+      // The marine production went into the sea; only the exchange with it reaches the air.
+      world.gas.add('o2', 'sea', outgassing);
+      world.gas.add('o2', 'oxidation', -oxidation);
+      world.gas.add('o2', 'reducing', -reducing);
 
       // --- Methane --- (after the oxygen, which destroys it)
       stepMethane(world, params, this.ch4Delta);
@@ -329,8 +337,12 @@ namespace SE {
       world.dust -= world.dust * DUST_SETTLING;
 
       // --- Bounds ---
+      const co2 = world.co2;
+      const o2 = world.o2;
       world.co2 = clamp(world.co2, 0, 5000);
       world.o2 = clamp(world.o2, 0, 40);
+      world.gas.add('co2', 'limit', world.co2 - co2);
+      world.gas.add('o2', 'limit', world.o2 - o2);
       world.n2 = clamp(world.n2, 0, 100);
       world.vapor = clamp(world.vapor, 0, 1);
       world.dust = clamp(world.dust, 0, 1);

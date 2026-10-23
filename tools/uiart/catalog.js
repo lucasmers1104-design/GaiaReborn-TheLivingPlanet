@@ -250,6 +250,8 @@ const SPRITES = [
   // Molecules as ball-and-stick models in the usual atom colours (O red, N blue, C dark grey, H white), lit from
   // the upper left, with a dark selective outline so the white hydrogen reads on parchment; transparent around.
   { id: 'air_n2', name: 'Stickstoff N₂: zwei blaue Kugeln, Dreifachbindung', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  // The air's oxygen as a gas row like the others, once the sea's iron is used up.
+  { id: 'air_o2', name: 'Sauerstoff O₂: zwei rote Kugeln, Doppelbindung', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_co2', name: 'Kohlendioxid CO₂: dunkelgraues C zwischen zwei roten O, gerade, Doppelbindungen', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_ch4', name: 'Methan CH₄: dunkelgraues C, vier weiße H als Tetraeder (eins vorn, eins dahinter)', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_h2o', name: 'Wasserdampf H₂O: rotes O, zwei weiße H im Winkel, ein Dampfwölkchen', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
@@ -259,6 +261,8 @@ const SPRITES = [
   { id: 'air_o2_sea', name: 'O₂ im Meer: O₂-Molekül (zwei rote Kugeln) im Meerwasser mit Bläschen', family: 'air', w: 24, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_o2_sky', name: 'O₂ in der Luft: O₂-Molekül vor hellem Himmel mit Wölkchen', family: 'air', w: 24, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_arrow', name: 'Goldener Pfeil nach rechts zwischen den Sauerstoff-Stufen', family: 'air', w: 7, h: 7, frames: 1, fps: 0, anchor: 'topleft' },
+  // On the change numbers that open a gas balance: the usual sign for "details here".
+  { id: 'air_info', name: 'Info-Zeichen: blaue runde Plakette mit weißem i', family: 'air', w: 9, h: 9, frames: 1, fps: 0, anchor: 'topleft' },
   // The two summary cards above the gases.
   { id: 'air_baro', name: 'Barometer: runde Messingdose mit Skala und Zeiger (Luftdruck)', family: 'air', w: 16, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_temp', name: 'Thermometer mit roter Säule und Kugel (Mitteltemperatur)', family: 'air', w: 16, h: 16, frames: 1, fps: 0, anchor: 'topleft' },

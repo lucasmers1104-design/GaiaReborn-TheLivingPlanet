@@ -50,6 +50,23 @@ const MOL = {
     '....................',
     '....................',
   ],
+  // Oxygen: two red balls joined by a double bond, placed like nitrogen's so the rows match.
+  o2: [
+    '....................',
+    '....................',
+    '....................',
+    '...qqq........qqq...',
+    '..qPPRq......qPPRq..',
+    '.qPwRRRqssssqPwRRRq.',
+    '.qPRRRrq....qPRRRrq.',
+    '.qRRRrrqssssqRRRrrq.',
+    '..qRrrq......qRrrq..',
+    '...qqq........qqq...',
+    '....................',
+    '....................',
+    '....................',
+    '....................',
+  ],
   // Carbon dioxide: a charcoal carbon between two red oxygens in a straight line, double bonds.
   co2: [
     '....................',
@@ -242,6 +259,22 @@ const ARROW = [
   { k: 'gold0', A: 'gold5', g: 'gold3', d: 'gold2' },
 ];
 
+/** The info sign on a change number: the usual blue round badge with a white "i", lit from the upper left. */
+const INFO = [
+  [
+    '...kkk...',
+    '.kkLBBkk.',
+    '.kLBWBBk.',
+    'kBBBBBBbk',
+    'kBBBWBBbk',
+    'kBBBWBbbk',
+    '.kBBWbbk.',
+    '.kkbbbkk.',
+    '...kkk...',
+  ],
+  { k: 'water1', L: 'water7', B: 'water5', b: 'water3', W: 'white0' },
+];
+
 /* -------------------------------------------------------- summary ---- */
 
 const SUMMARY = {
@@ -297,6 +330,7 @@ const pair = ([rows, legend]) => () => K.grid(rows, legend);
 module.exports = {
   sprites: {
     air_n2: mol('n2'),
+    air_o2: mol('o2'),
     air_co2: mol('co2'),
     air_ch4: mol('ch4'),
     air_h2o: mol('h2o'),
@@ -305,6 +339,7 @@ module.exports = {
     air_o2_sea: cell('o2_sea'),
     air_o2_sky: cell('o2_sky'),
     air_arrow: pair(ARROW),
+    air_info: pair(INFO),
     air_baro: pair(SUMMARY.baro),
     air_temp: pair(SUMMARY.temp),
   },

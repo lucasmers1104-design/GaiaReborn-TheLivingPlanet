@@ -946,7 +946,7 @@ namespace SE {
 
     private buildGraphWindows(): void {
       const specs: [string, string, GraphKind, string, number, number][] = [
-        ['graph-air', 'Luftzusammensetzung', 'air', 'overlay-wind', 540, 660],
+        ['graph-air', 'Luftzusammensetzung', 'air', 'overlay-wind', 560, 660],
         ['graph-biomes', 'Lebensraumanteile', 'biomes', 'layer-biomes', 520, 380],
         ['graph-life', 'Lebensformen', 'life', 'layer-life', 460, 600],
         ['graph-tech', 'Technologie', 'tech', 'layer-cities', 560, 360],

@@ -7,7 +7,8 @@
  * warms the planet shows only in a tooltip, on hover or keyboard focus. From
  * the top: pressure and mean temperature, the air's mix, the oxygen's way
  * from the sea's iron into the air, then nitrogen, CO₂, methane, water vapour
- * and dust. Built once; a render rewrites only what changed. Canvas sizes and
+ * and dust. Once the sea's iron is used up, that way gives place to an oxygen
+ * row above nitrogen, like the other gases. Built once; a render rewrites only what changed. Canvas sizes and
  * the tooltip's position are inline (safe with a stale stylesheet);
  * css/airpanel.css paints.
  * ========================================================================== */
@@ -21,6 +22,11 @@ namespace SE {
   const STEP_BAR_W = 40;
   const MIX_H = 8;
   const MIX_MIN_W = 40;
+
+  /** The gauges whose value carries the last tick's change, a button for its gas balance (gasbalanceview.ts). */
+  const BALANCE_OF: Partial<Record<GaugeKey, GasId>> = { air: 'o2', o2: 'o2', co2: 'co2', ch4: 'ch4' };
+  /** The gas rows' bars, art px: shorter than the cards', so a name keeps its room beside value and change. */
+  const ROW_BAR_W = 48;
 
   /** UI palette steps of a bar's fill: shade, base, lit, glint. */
   type Ramp = readonly [string, string, string, string];
@@ -41,7 +47,7 @@ namespace SE {
     readonly bar: number;
   }
 
-  type GaugeKey = 'press' | 'temp' | 'iron' | 'sea' | 'air' | 'n2' | 'co2' | 'ch4' | 'vapor' | 'dust';
+  type GaugeKey = 'press' | 'temp' | 'iron' | 'sea' | 'air' | 'o2' | 'n2' | 'co2' | 'ch4' | 'vapor' | 'dust';
 
   interface Gauge {
     readonly key: GaugeKey;
@@ -78,6 +84,14 @@ namespace SE {
     if (w.oceanIron >= IRON_DEPLETED) return 'Noch bindet gelöstes Eisen einen großen Teil des Sauerstoffs im Wasser.';
     if (w.oceanO2 < OCEAN_O2_RISEN) return 'Das Eisen ist verbraucht – jetzt reichert sich Sauerstoff an.';
     return 'Tauscht Sauerstoff mit der Luft aus, bis beide im Gleichgewicht sind.';
+  }
+
+  /** The air's oxygen, in the oxygen's way and in its own row. */
+  function airOxygen(w: WorldState): Reading {
+    return {
+      value: `${fmt.one(w.o2)} %`, at: w.o2 / 40, band: [15 / 40, 25 / 40],
+      text: `Kommt aus dem Meer, sobald es gesättigt ist, später auch von Landpflanzen. ${oxygenNote(w.o2)}`,
+    };
   }
 
   function methaneNote(w: WorldState): string {
@@ -118,10 +132,11 @@ namespace SE {
     },
     {
       key: 'air', name: 'O₂ in der Luft', sprite: 'air_o2_sky', ramp: ['glowT1', 'glowT2', 'glowT3', 'glowT4'], scale: '0 … 40 %',
-      read: ({ w }) => ({
-        value: `${fmt.one(w.o2)} %`, at: w.o2 / 40, band: [15 / 40, 25 / 40],
-        text: `Kommt aus dem Meer, sobald es gesättigt ist, später auch von Landpflanzen. ${oxygenNote(w.o2)}`,
-      }),
+      read: ({ w }) => airOxygen(w),
+    },
+    {
+      key: 'o2', name: 'Sauerstoff', formula: 'O₂', sprite: 'air_o2', ramp: ['glowT1', 'glowT2', 'glowT3', 'glowT4'], scale: '0 … 40 % der Luft',
+      read: ({ w }) => airOxygen(w),
     },
     {
       key: 'n2', name: 'Stickstoff', formula: 'N₂', sprite: 'air_n2', ramp: ['petalB0', 'petalB1', 'petalB2', 'petalB3'], scale: '0 … 100 % der Luft',
@@ -264,6 +279,13 @@ namespace SE {
     private readonly mixBar = new PixelCanvas('air-mix-bar', 0);
     private readonly mixLegend = make('div', 'air-legend');
     private mixDrawn = '';
+    private readonly balance = new GasBalanceView(() => { if (this.tipFor) this.hideTip(this.tipFor); });
+    /** Each gauge's value box, and the number with its balance that each gas has once. */
+    private readonly amounts = new Map<GaugeKey, HTMLElement>();
+    private readonly balanceNodes = new Map<GasId, HTMLElement[]>();
+    private oxyCard: HTMLElement | null = null;
+    /** The sea's iron is used up: oxygen shows as a gas row; null before the first render. */
+    private ironGone: boolean | null = null;
 
     constructor(private readonly host: HTMLElement) {
       this.tip.id = 'air-tip';
@@ -306,9 +328,29 @@ namespace SE {
         if (slot.el.getAttribute('aria-label') !== label) slot.el.setAttribute('aria-label', label);
         this.tips.set(slot.el, { title: `${gauge.name}${gauge.formula ? ` (${gauge.formula})` : ''} · ${r.value}`, scale: gauge.scale, text: r.text });
       }
+      const ironGone = world.oceanIron < IRON_DEPLETED || world.evo.chronicle.some((e) => e.key === 'oxygen:iron');
+      if (ironGone !== this.ironGone) this.showOxygenAs(ironGone);
       this.renderOxygenWay(world, sc, art);
       this.renderMix(world, sc, art);
+      this.balance.update(world.gas);
       if (this.tipFor) this.fillTip(this.tipFor);
+    }
+
+    /**
+     * The oxygen's way while the sea still holds iron, else oxygen as a gas
+     * row above nitrogen; its change number moves along (inline display: a
+     * stale stylesheet cannot show both).
+     */
+    private showOxygenAs(row: boolean): void {
+      this.ironGone = row;
+      if (this.oxyCard) this.oxyCard.style.display = row ? 'none' : '';
+      const o2 = this.slots.get('o2')?.el;
+      if (o2) o2.style.display = row ? '' : 'none';
+      const nodes = this.balanceNodes.get('o2');
+      const host = this.amounts.get(row ? 'o2' : 'air');
+      if (!nodes || !host || host.contains(nodes[0])) return;
+      this.balance.close();
+      host.append(...nodes);
     }
 
     /** The stage the oxygen is at: the iron still binds it, it fills the sea, it reaches the air, or all three are done. */
@@ -357,6 +399,7 @@ namespace SE {
       this.mixCard = mix;
 
       const oxy = make('div', 'air-card air-oxy');
+      this.oxyCard = oxy;
       const way = make('div', 'air-way');
       (['iron', 'sea', 'air'] as const).forEach((key, k) => {
         if (k > 0) {
@@ -372,11 +415,13 @@ namespace SE {
       oxy.append(make('div', 'air-name', 'Sauerstoff: vom Meer in die Luft'), way);
 
       const list = make('div', 'air-list');
-      for (const key of ['n2', 'co2', 'ch4', 'vapor', 'dust'] as const) list.appendChild(this.card(key, 'air-card air-row'));
+      for (const key of ['o2', 'n2', 'co2', 'ch4', 'vapor', 'dust'] as const) list.appendChild(this.card(key, 'air-card air-row', ROW_BAR_W));
 
       const key = make('p', 'air-key');
       key.append(make('span', 'air-key-line'), make('span', undefined, 'Grüne Linie unter einem Balken: der Bereich, in dem sich das Leben am wohlsten fühlt.'));
-      root.append(sum, mix, oxy, list, key, this.tip);
+      const delta = make('p', 'air-key');
+      delta.append(this.balance.legendChip('+0,1'), make('span', undefined, 'Δ letzter Simulationsschritt: Zeiger darauf oder anklicken öffnet die Details zu Quellen und Senken.'));
+      root.append(sum, mix, oxy, list, key, delta, this.tip);
       this.host.appendChild(root);
       this.root = root;
     }
@@ -393,7 +438,16 @@ namespace SE {
       const name = make('div', 'air-name', gauge.name);
       if (gauge.formula) name.appendChild(make('span', 'air-formula', gauge.formula));
       const value = make('span', 'air-value');
-      el.append(sprite.canvas, name, bar.canvas, value);
+      const amount = make('div', 'air-amount');
+      amount.appendChild(value);
+      this.amounts.set(key, amount);
+      const gas = BALANCE_OF[key];
+      if (gas && !this.balanceNodes.has(gas)) {
+        const nodes = this.balance.mount(gas);
+        this.balanceNodes.set(gas, nodes);
+        amount.append(...nodes);
+      }
+      el.append(sprite.canvas, name, bar.canvas, amount);
       this.hoverable(el);
       this.slots.set(key, { el, value, bar, barW, sprite, drawn: '', art: '' });
       return el;
@@ -412,6 +466,8 @@ namespace SE {
     }
 
     private showTip(el: HTMLElement): void {
+      // An open gas balance says more; the tip would cover it.
+      if (this.balance.isOpen) return;
       this.tipFor?.removeAttribute('aria-describedby');
       this.tipFor = el;
       el.setAttribute('aria-describedby', this.tip.id);

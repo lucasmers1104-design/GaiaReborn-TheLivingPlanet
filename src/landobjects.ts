@@ -152,6 +152,12 @@ namespace SE {
 
   /** Objects take this share of their tile's ground shading (TerrainField.shade), rounded to whole steps. */
   const OBJECT_RELIEF = 0.6;
+  /**
+   * At most one step: the leaf ramp has four, so on a lit mountain flank two
+   * steps merged a crown's mid and light tones and the forest read as a flat
+   * light green patch (likewise flat dark on the shadow side).
+   */
+  const OBJECT_RELIEF_MAX = 1;
 
   /**
    * Draw placements into an index buffer of width `w` whose pixel (0, 0) is
@@ -209,8 +215,8 @@ namespace SE {
       // The relief of the tile it stands on, in whole steps: hills read through a forest too.
       let tone: Uint8Array | null = null;
       if (shade) {
-        const s = Math.round(shade[clampY(Math.floor(p.fy / 16)) * GRID_W + wrapX(Math.floor(p.fx / 16))] * OBJECT_RELIEF);
-        if (s !== 0) tone = art.shift[LAND_SHIFT_MAX + clamp(s, -LAND_SHIFT_MAX, LAND_SHIFT_MAX)];
+        const s = clamp(Math.round(shade[clampY(Math.floor(p.fy / 16)) * GRID_W + wrapX(Math.floor(p.fx / 16))] * OBJECT_RELIEF), -OBJECT_RELIEF_MAX, OBJECT_RELIEF_MAX);
+        if (s !== 0) tone = art.shift[LAND_SHIFT_MAX + s];
       }
       const left = fx - t.ax;
       const up = fy - t.ay;

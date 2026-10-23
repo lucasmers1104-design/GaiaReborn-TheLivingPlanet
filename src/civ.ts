@@ -228,15 +228,19 @@ namespace SE {
       // exactly the wrong story about what their factories were doing.
       const burnt = CHEM_RATE * demand * mix.fossilFuel * 0.008;
       atmo.co2Delta += burnt;
+      world.gas.add('co2', 'fossil', burnt);
       atmo.dustDelta += demand * mix.fossilFuel * 0.000008;
       // Combustion does consume oxygen, but a heavier coefficient let industry
       // outpace the entire biosphere's photosynthesis and strip the air to 7%,
       // which is not what burning carbon does to a planet.
-      atmo.o2Delta -= CHEM_RATE * demand * mix.fossilFuel * 0.000015;
+      const burntO2 = CHEM_RATE * demand * mix.fossilFuel * 0.000015;
+      atmo.o2Delta -= burntO2;
+      world.gas.add('o2', 'fossil', -burntO2);
 
       // Every city also breathes.
       const breath = CHEM_RATE * (people / TILE_COUNT) * 0.4;
       atmo.co2Delta += breath;
+      world.gas.add('co2', 'cityBreath', breath);
       // Cattle, rice fields and leaking natural gas: methane in step with the carbon.
       atmo.ch4Delta += CIV_CH4_PER_CO2 * (burnt + breath);
     }

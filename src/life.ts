@@ -503,8 +503,15 @@ namespace SE {
       atmo.oceanO2Delta +=
         fixing * (oceanProductivity * PLANKTON_O2_YIELD + world.algaeCoverage * ALGAE_O2_YIELD) -
         seaConsumers * RESPIRATION_O2;
-      atmo.o2Delta += fixing * world.vegetationCoverage * LAND_O2_YIELD - airConsumers * RESPIRATION_O2;
+      const plantsO2 = fixing * world.vegetationCoverage * LAND_O2_YIELD;
+      const breathO2 = airConsumers * RESPIRATION_O2;
+      atmo.o2Delta += plantsO2 - breathO2;
       atmo.co2Delta += CHEM_RATE * (-photosynthesis * 2.0 * absorption + consumers * 0.5);
+      // The parts of these sums for the tick's gas balance; the marine oxygen above is the sea's.
+      world.gas.add('o2', 'plants', plantsO2);
+      world.gas.add('o2', 'breath', -breathO2);
+      world.gas.add('co2', 'photosynthesis', CHEM_RATE * (-photosynthesis * 2.0 * absorption));
+      world.gas.add('co2', 'breath', CHEM_RATE * (consumers * 0.5));
     }
 
     /* ---------------------------------------------------------------- tools -- */
