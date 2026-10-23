@@ -100,8 +100,8 @@ gerechnet, wärmen aber nicht.
   - O₂: Landpflanzen, Austausch mit dem Meer (Abgabe als Quelle, Aufnahme als Senke), Atmung der Landtiere und Wale,
     fossile Verbrennung, Brände, Oxidation von Gestein und toter Biomasse, reduzierende Gase und frisches Gestein. Die
     Produktion im Meer und die Bindung durch Eisen zählen nicht zur Luft.
-  - CO₂: Hintergrundvulkanismus, Vulkanausbrüche, Einschläge, Brände, Atmung der Tiere, Atmung der Städte, fossile
-    Verbrennung, Photosynthese, Verwitterung.
+  - CO₂: Hintergrundvulkanismus, Vulkanausbrüche, Einschläge, Brände, Atmung der Lebewesen (alle Gruppen außer den
+    Bakterien, auch „Komplexe Zellen“), Atmung der Städte, fossile Verbrennung, Photosynthese, Verwitterung.
   - CH₄: methanbildende Archaeen, Sümpfe, Gestein und heiße Quellen, die Zivilisation (Vieh, Reisfelder und Erdgas sind
     ein gemeinsamer Wert) und der Abbau in der Luft.
   - Was eine Begrenzung (clamp) abschneidet, heißt „Modellbegrenzung“.
@@ -110,9 +110,26 @@ gerechnet, wärmen aber nicht.
   Ereignisse und Katastrophen, der Komet. Sie gehen nicht in die Bilanz ein. Hat ein Eingriff den Wert seitdem
   verändert, sagt die Bilanz das.
 - Die Bilanz reist mit dem Weltzustand vom Worker zur Seite. Sie wird nicht gespeichert.
+- Nach Gruppen (`src/gasdetailview.ts`): Fünf Zeilen der Bilanz tragen ein eigenes „i“. Bei O₂ sind das Abgabe aus dem
+  Meer, Landpflanzen sowie Atmung der Landtiere und Wale, bei CO₂ Atmung der Lebewesen und Photosynthese.
+  - Das „i“ öffnet ein Feld neben der Bilanz, links, wo Platz ist, mit Pfeil auf seine Zeile. Es zeigt jede Gruppe
+    mit Anteil und Wert, die Summe und wie aufgeteilt wurde.
+  - Die Regeln sind dieselben wie bei der Bilanz: Hover oder Fokus öffnen, ein Klick hält, Escape schließt zuerst das
+    Feld und dann die Bilanz. Ein Klick außerhalb schließt beide. Die Reihenfolge der Zeilen bleibt, solange es offen
+    ist.
+  - Atmung: je Tiergruppe aus ihrer Biomasse, genau wie das Modell sie summiert. Meerestiere atmen den Sauerstoff des
+    Meeres, Wale den der Luft.
+  - Landpflanzen und Photosynthese an Land: das Modell rechnet mit der ganzen Pflanzendecke. Jedes Feld wird der
+    Pflanzengruppe zugeordnet, die dort die Decke trägt (`floraTop`); die Summe bleibt exakt. Zur Photosynthese kommen
+    Cyanobakterien (Plankton) und Meeresalgen.
+  - Abgabe aus dem Meer: Sie hängt nicht an Gruppen, sondern daran, wie viel das Meer gelöst hat (in % der heutigen
+    Sättigung) gegenüber dem, was zur jetzigen Luft passt. Dazu steht, was in diesem Schritt ins Meer kam: Plankton und
+    Meeresalgen, die Atmung jeder Meerestiergruppe, die Bindung durch Eisen. Diese Mengen ändern das Meer, die Luft
+    erst über den Austausch.
 - Prüfung:
   - Gleicher Seed, 700 Schritte, gierig gespielt, Planeten 12345 und 2024: der Fingerabdruck der Welt ist mit und
-    ohne Buchung bitgleich zum Stand vor der Änderung.
+    ohne Buchung bitgleich zum Stand vor der Änderung, auch mit der Aufteilung nach Gruppen.
+  - Die Gruppen jeder Zeile ergeben bis auf 10⁻⁹ relativ ihren Wert (`tests/gasbudget.test.js`).
   - Die Bilanzsumme weicht höchstens 2·10⁻¹⁶ relativ von der tatsächlichen Änderung ab.
   - `tests/gasbudget.test.js` prüft Summen, Aufheben, Meeraustausch, Begrenzung, Katastrophen und Eingriffe,
     Bitgleichheit, Pause, Laden, neuen Planeten, Worker-Übertragung und die Regeln von Öffnen und Schließen.

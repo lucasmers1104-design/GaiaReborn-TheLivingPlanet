@@ -22,10 +22,12 @@ namespace SE {
       // what the sea has just drawn from the air.
       const saturated = (world.o2 / O2_PRESENT) * OCEAN_O2_CAPACITY;
       let dissolved = (world.oceanO2 / 100) * OCEAN_O2_CAPACITY;
+      world.gas.seaLevels(world.oceanO2, (world.o2 / O2_PRESENT) * 100);
       const outgassing = OCEAN_GAS_EXCHANGE * (dissolved - saturated);
       dissolved = Math.max(0, dissolved - outgassing + marineO2);
 
       const bound = dissolved * Math.min(1, IRON_REACTIVITY * world.oceanIron);
+      world.gas.addSea('iron', -bound);
       world.oceanIron = clamp(
         world.oceanIron - bound / IRON_O2_DEMAND + IRON_RESUPPLY * mul(params.geo.volcanoes), 0, 1,
       );

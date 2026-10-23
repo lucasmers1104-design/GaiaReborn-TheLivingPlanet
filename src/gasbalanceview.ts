@@ -22,6 +22,9 @@ namespace SE {
   const INFO_BOX = 18;
   const CARET_W = 14;
 
+  /** The lines whose share the model sums by group: they get a button for their groups (gasdetailview.ts). */
+  const GROUPED: Readonly<Record<GasId, readonly GasProcess[]>> = { o2: ['plants', 'breath', 'sea'], co2: ['breath', 'photosynthesis'], ch4: [] };
+
   interface Line {
     readonly row: HTMLElement;
     readonly label: HTMLElement;
@@ -29,9 +32,11 @@ namespace SE {
   }
 
   interface Section {
+    readonly key: string;
     readonly box: HTMLElement;
     readonly list: HTMLElement;
-    readonly lines: Line[];
+    /** Rows by process, in the order they had when the balance opened: a refresh never moves a focused button. */
+    readonly lines: Map<GasProcess, Line>;
   }
 
   interface Item {
@@ -56,36 +61,22 @@ namespace SE {
     shown: string;
   }
 
-  function line(label: string): Line {
+  /** A row: label, value, and a cell for a group button (empty on most rows, so the values stay aligned). */
+  function line(label: string, extra?: readonly HTMLElement[]): Line {
     const row = make('div', 'gas-pop-row');
     const l = make('span', 'gas-pop-label', label);
     const value = make('span', 'gas-pop-num');
-    row.append(l, value);
+    const cell = make('span', 'gas-pop-slot');
+    if (extra) cell.append(...extra);
+    row.append(l, value, cell);
     return { row, label: l, value };
   }
 
-  function section(title: string): Section {
+  function section(title: string, key: string): Section {
     const box = make('div', 'gas-pop-part');
     const list = make('div', 'gas-pop-list');
     box.append(make('div', 'gas-pop-h', title), list);
-    return { box, list, lines: [] };
-  }
-
-  /** `lines` into the section's rows, reusing them; surplus rows hide. */
-  function fillSection(s: Section, lines: readonly BalanceLine[], unit: string): void {
-    s.box.hidden = lines.length === 0;
-    lines.forEach((l, k) => {
-      let row = s.lines[k];
-      if (!row) {
-        row = line('');
-        s.lines.push(row);
-        s.list.appendChild(row.row);
-      }
-      row.row.hidden = false;
-      setText(row.label, l.label);
-      setText(row.value, `${fmtChange(l.value)} ${unit}`);
-    });
-    for (let k = lines.length; k < s.lines.length; k++) s.lines[k].row.hidden = true;
+    return { key, box, list, lines: new Map() };
   }
 
   function setText(el: HTMLElement, text: string): void {
@@ -106,6 +97,7 @@ namespace SE {
     private seen: IntersectionObserver | null = null;
     private readonly icons: PixelCanvas[] = [];
     private iconsArt = '';
+    private readonly details = new GasDetailView(() => this.infoSign());
 
     /** `onOpen`: a balance has just opened (the window hides its hover tip). */
     constructor(private readonly onOpen: () => void) {
@@ -147,6 +139,8 @@ namespace SE {
       const pc = new PixelCanvas('gas-delta-info', 0);
       pc.canvas.style.position = 'static';
       this.icons.push(pc);
+      // Signs made after the atlas has decoded (the group buttons come with their lines) are drawn at once.
+      if (UiArt.shared().ready) drawUiIcon(pc, 'air_info', INFO_BOX);
       return pc.canvas;
     }
 
@@ -186,8 +180,8 @@ namespace SE {
       body.style.overflowY = 'auto';
       const missing = make('p', 'gas-pop-missing', 'Noch keine Bilanz verfügbar');
       const empty = make('p', 'gas-pop-empty', `In diesem Schritt hat kein Prozess den Wert von ${names.formula} verändert.`);
-      const sources = section('Quellen');
-      const sinks = section('Senken');
+      const sources = section('Quellen', 'sources');
+      const sinks = section('Senken', 'sinks');
       const sums = make('div', 'gas-pop-sums');
       const sumSources = line('Summe der Quellen');
       const sumSinks = line('Summe der Senken');
@@ -227,7 +221,8 @@ namespace SE {
       }
       for (const item of this.items.values()) this.updateNumber(item);
       const open = this.shownGas ? this.items.get(this.shownGas) : undefined;
-      if (open && this.fill(open)) this.place(false);
+      if (open && this.fill(open, false)) this.place(false);
+      this.details.update(ledger);
     }
 
     private wire(item: Item, close: HTMLButtonElement): void {
@@ -295,7 +290,8 @@ namespace SE {
       if (!item) return;
       this.shownGas = gas;
       item.shown = '';
-      this.fill(item);
+      this.fill(item, true);
+      if (this.ledger) this.details.update(this.ledger);
       if (item.pop.hasAttribute('popover')) item.pop.showPopover();
       else item.pop.hidden = false;
       this.above = false;
@@ -313,6 +309,7 @@ namespace SE {
 
     private hide(gas: GasId): void {
       const item = this.items.get(gas);
+      this.details.close();
       this.shownGas = null;
       if (!item) return;
       this.seen?.unobserve(item.button);
@@ -367,8 +364,30 @@ namespace SE {
       if (item.button.getAttribute('aria-label') !== label) item.button.setAttribute('aria-label', label);
     }
 
-    /** Rewrites the open balance when its tick or the interventions since changed; true when it did. */
-    private fill(item: Item): boolean {
+    /** `lines` into the section's rows by process; `fresh` (on opening) puts them in this order, a refresh keeps theirs. */
+    private fillSection(item: Item, s: Section, lines: readonly BalanceLine[], unit: string, fresh: boolean): void {
+      s.box.hidden = lines.length === 0;
+      const seen = new Set<GasProcess>();
+      for (const l of lines) {
+        let row = s.lines.get(l.id);
+        if (!row) {
+          const grouped = GROUPED[item.gas].includes(l.id);
+          row = line('', grouped ? this.details.mount(item.gas, l.id, `${item.gas}-${s.key}-${l.id}`) : undefined);
+          s.lines.set(l.id, row);
+          s.list.appendChild(row.row);
+        } else if (fresh) {
+          s.list.appendChild(row.row);
+        }
+        seen.add(l.id);
+        row.row.hidden = false;
+        setText(row.label, l.label);
+        setText(row.value, `${fmtChange(l.value)} ${unit}`);
+      }
+      for (const [id, row] of s.lines) if (!seen.has(id)) row.row.hidden = true;
+    }
+
+    /** Rewrites the open balance when its tick or the interventions since changed; `fresh` on opening. True when it did. */
+    private fill(item: Item, fresh: boolean): boolean {
       const v = this.ledger ? balanceView(this.ledger, item.gas) : null;
       const shown = v ? `${v.tick}|${v.since}` : '-';
       if (shown === item.shown) return false;
@@ -378,8 +397,8 @@ namespace SE {
       setText(item.sub, v ? `Letzter abgeschlossener Simulationsschritt · Schritt ${fmt.int(v.tick)}` : 'Letzter abgeschlossener Simulationsschritt');
       const parts = v ? v.sources.length + v.sinks.length : 0;
       item.empty.hidden = !v || parts > 0;
-      fillSection(item.sources, v ? v.sources : [], names.unit);
-      fillSection(item.sinks, v ? v.sinks : [], names.unit);
+      this.fillSection(item, item.sources, v ? v.sources : [], names.unit, fresh);
+      this.fillSection(item, item.sinks, v ? v.sinks : [], names.unit, fresh);
       item.sums.hidden = !v || parts === 0;
       item.levels.hidden = !v;
       item.since.hidden = !v || v.since === 0;

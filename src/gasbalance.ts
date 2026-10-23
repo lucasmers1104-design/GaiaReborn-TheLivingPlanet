@@ -33,7 +33,7 @@ namespace SE {
       volcano: 'Vulkanausbrüche',
       impact: 'Einschläge',
       fire: 'Brände',
-      breath: 'Atmung der Tiere',
+      breath: 'Atmung der Lebewesen',
       cityBreath: 'Atmung der Städte',
       fossil: 'Fossile Verbrennung',
       photosynthesis: 'Photosynthese',
@@ -47,6 +47,86 @@ namespace SE {
       decay: 'Abbau in der Luft',
     },
   };
+
+  /** What a group of a share is called (gasbudget.ts GasGroups). */
+  export function groupLabel(key: string): string {
+    const [kind, n] = key.split(':');
+    if (kind === 'life') return LIFE[Number(n) as Life]?.name ?? key;
+    if (kind === 'flora') return Number(n) === Flora.None ? 'Pflanzendecke ohne führende Gruppe' : FLORA[Number(n) as Flora]?.name ?? key;
+    if (key === 'plankton') return 'Cyanobakterien (Plankton)';
+    if (key === 'algae') return 'Meeresalgen';
+    if (key === 'iron') return 'Bindung durch gelöstes Eisen';
+    return key;
+  }
+
+  /** How a process's groups were split, as the window says it. */
+  const GROUP_NOTES: Readonly<Record<GasId, Partial<Record<GasProcess, string>>>> = {
+    o2: {
+      plants: 'Aufgeteilt nach der Pflanzengruppe, die auf jedem Feld die Pflanzendecke trägt; das Modell rechnet mit der ganzen Pflanzendecke an Land.',
+      breath: 'Nach der Biomasse jeder Tiergruppe. Meerestiere atmen den Sauerstoff des Meeres, nicht den der Luft; Wale atmen Luft.',
+    },
+    co2: {
+      breath: 'Nach der Biomasse jeder Gruppe, an Land und im Meer; Bakterien zählt das Modell hier nicht.',
+      photosynthesis: 'Landpflanzen nach der Gruppe, die auf jedem Feld die Pflanzendecke trägt, dazu Cyanobakterien und Meeresalgen im Meer.',
+    },
+    ch4: {},
+  };
+
+  export interface GroupLine {
+    readonly key: string;
+    readonly label: string;
+    readonly value: number;
+    /** Of all lines with the same sign, 0..1. */
+    readonly share: number;
+  }
+
+  /** One process's share by group, or for O₂'s exchange the sea behind it. */
+  export interface GroupView {
+    readonly gas: GasId;
+    readonly id: GasProcess;
+    readonly tick: number;
+    /** The process's share, as the balance lists it. */
+    readonly total: number;
+    readonly lines: readonly GroupLine[];
+    readonly note: string;
+    /** For 'sea': the sea's level and what the air lets it hold (% of today's saturation). */
+    readonly sea: { readonly level: number; readonly saturated: number } | null;
+  }
+
+  function groupLines(groups: GasGroups): GroupLine[] {
+    let plus = 0;
+    let minus = 0;
+    for (const v of Object.values(groups)) {
+      if (v > 0) plus += v;
+      else minus += v;
+    }
+    return Object.entries(groups)
+      .filter(([, v]) => v !== 0)
+      .map(([key, value]) => ({ key, label: groupLabel(key), value, share: value > 0 ? value / plus : value / minus }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  }
+
+  /** Whether process `id` of `gas` has groups to show in the last tick's balance. */
+  export function hasGroups(ledger: GasLedger, gas: GasId, id: GasProcess): boolean {
+    const b = ledger.last;
+    if (!b || b[gas].parts[id] === undefined) return false;
+    return id === 'sea' && gas === 'o2' ? b.sea !== null : b[gas].groups[id] !== undefined;
+  }
+
+  /** The groups of process `id` of `gas` in the last tick, or null while it has none. */
+  export function groupView(ledger: GasLedger, gas: GasId, id: GasProcess): GroupView | null {
+    const b = ledger.last;
+    if (!b || !hasGroups(ledger, gas, id)) return null;
+    const total = b[gas].parts[id] ?? 0;
+    if (id === 'sea' && b.sea) {
+      const giving = total > 0;
+      return {
+        gas, id, tick: b.tick, total, lines: groupLines(b.sea.flows), sea: { level: b.sea.sea, saturated: b.sea.saturated },
+        note: `Diese Mengen änderten in diesem Schritt den Sauerstoff im Meer, nicht die Luft. ${giving ? 'Abgegeben wird' : 'Aufgenommen wird'} er über den Austausch mit der Luft, Schritt für Schritt.`,
+      };
+    }
+    return { gas, id, tick: b.tick, total, lines: groupLines(b[gas].groups[id] ?? {}), sea: null, note: GROUP_NOTES[gas][id] ?? '' };
+  }
 
   export function balanceLabel(gas: GasId, id: GasProcess, v: number): string {
     if (id === 'limit') return 'Modellbegrenzung';
@@ -131,17 +211,17 @@ namespace SE {
    * it; focus inside keeps it; only one is open. A held balance ignores the
    * pointer over another number, focus on one switches to it.
    */
-  export class BalanceToggle {
-    open: GasId | null = null;
+  export class BalanceToggle<K extends string = GasId> {
+    open: K | null = null;
     pinned = false;
     /** Page time at which a hover-opened balance closes; 0 for none. */
     closeAt = 0;
     private pointer = false;
     private focus = false;
     /** The number focus goes back to after Escape: that focus must not reopen it. */
-    private quiet: GasId | null = null;
+    private quiet: K | null = null;
 
-    enterNumber(gas: GasId): void {
+    enterNumber(gas: K): void {
       this.pointer = true;
       this.closeAt = 0;
       if (!this.pinned) this.show(gas);
@@ -158,7 +238,7 @@ namespace SE {
       if (this.open && !this.pinned && !this.focus) this.closeAt = now + BALANCE_CLOSE_DELAY;
     }
 
-    focusNumber(gas: GasId): void {
+    focusNumber(gas: K): void {
       if (this.quiet === gas) {
         this.quiet = null;
         return;
@@ -181,7 +261,7 @@ namespace SE {
       if (this.open && !this.pinned && !this.pointer) this.close();
     }
 
-    click(gas: GasId): void {
+    click(gas: K): void {
       if (this.open === gas && this.pinned) {
         this.close();
         return;
@@ -192,7 +272,7 @@ namespace SE {
     }
 
     /** Closes; with focus inside the balance, returns the gas whose number gets it back without reopening. */
-    escape(focusInBalance: boolean): GasId | null {
+    escape(focusInBalance: boolean): K | null {
       const refocus = focusInBalance ? this.open : null;
       this.close();
       this.quiet = refocus;
@@ -214,7 +294,7 @@ namespace SE {
       this.closeAt = 0;
     }
 
-    private show(gas: GasId): void {
+    private show(gas: K): void {
       if (this.open === gas) return;
       this.open = gas;
     }

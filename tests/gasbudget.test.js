@@ -58,6 +58,34 @@ test('every tick\'s parts add up to its change, from one tick\'s end to the next
   assert.ok(Object.keys(prev.co2.parts).includes('volcanism') && Object.keys(prev.co2.parts).includes('weathering'));
 });
 
+test("a share's groups add up to it, and the sea behind O₂'s exchange shows what flowed into it", () => {
+  const s = makeSim(2024);
+  const w = s.world;
+  let checked = 0;
+  play(s, 260, () => {
+    const b = w.gas.last;
+    for (const gas of ['o2', 'co2']) {
+      for (const [id, groups] of Object.entries(b[gas].groups)) {
+        const part = b[gas].parts[id];
+        const sum = Object.values(groups).reduce((a, v) => a + v, 0);
+        assert.ok(Math.abs(sum - part) <= 1e-9 * Math.abs(part) + 1e-15, `${gas} ${id}: groups ${sum} vs ${part} at ${w.ticks}`);
+        checked++;
+      }
+    }
+    assert.ok(b.sea && Number.isFinite(b.sea.sea) && Number.isFinite(b.sea.saturated));
+    for (const k of Object.keys(b.sea.flows)) assert.ok(k === 'plankton' || k === 'algae' || k === 'iron' || k.startsWith('life:'), k);
+  });
+  assert.ok(checked > 0);
+  const photo = SE.groupView(w.gas, 'co2', 'photosynthesis');
+  assert.ok(photo.lines.some((l) => l.label === 'Cyanobakterien (Plankton)'), JSON.stringify(photo.lines));
+  assert.ok(Math.abs(photo.lines.reduce((a, l) => a + l.share, 0) - 1) < 1e-9, 'the shares of a sink add up to all of it');
+  assert.equal(SE.groupLabel('life:7'), 'Wale');
+  assert.equal(SE.groupLabel(`flora:${SE.Flora.Grasses}`), 'Gräser');
+  const sea = SE.groupView(w.gas, 'o2', 'sea');
+  if (sea) assert.ok(sea.sea && sea.lines.every((l) => !l.key.startsWith('flora:')));
+  assert.equal(SE.groupView(w.gas, 'ch4', 'decay'), null, 'methane has no groups');
+});
+
 test('sources and sinks that cancel stay listed, and an exact zero reads 0', () => {
   const w = new SE.WorldState();
   w.gas.begin(w);

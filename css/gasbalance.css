@@ -44,6 +44,16 @@
 }
 .gas-pop[data-side="below"]::before { top: -10px; }
 .gas-pop[data-side="above"]::before { bottom: -10px; transform: scaleY(-1); }
+/* Beside the balance (a line's groups): pointing sideways at its button, --caret-y inline. */
+.gas-pop[data-side="left"]::before,
+.gas-pop[data-side="right"]::before {
+  top: var(--caret-y, 12px);
+  width: 8px;
+  height: 14px;
+  clip-path: polygon(0 0, 2px 0, 2px 2px, 4px 2px, 4px 4px, 6px 4px, 6px 6px, 8px 6px, 8px 8px, 6px 8px, 6px 10px, 4px 10px, 4px 12px, 2px 12px, 2px 14px, 0 14px);
+}
+.gas-pop[data-side="left"]::before { left: auto; right: -10px; }
+.gas-pop[data-side="right"]::before { left: -10px; transform: scaleX(-1); }
 
 /* It sits inside a row or the centred oxygen stage in the DOM: nothing of theirs may carry over. */
 .gas-pop {
@@ -93,7 +103,29 @@
 .gas-pop-body p { margin: 0; }
 .gas-pop-h { margin-bottom: 2px; color: var(--rail-gold-lo); font-family: var(--font-display); font-size: 12px; font-weight: 700; }
 .gas-pop-list { display: flex; flex-direction: column; gap: 2px; }
-.gas-pop-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 12px; }
+/* Label, value and a cell for the group button: empty on most rows, so the values stay aligned. */
+.gas-pop-row { display: grid; grid-template-columns: 1fr auto 22px; align-items: center; gap: 0 8px; min-height: 22px; }
+.gas-pop-slot { display: flex; justify-content: center; }
+.gas-info {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.gas-info:hover,
+.gas-info[aria-expanded="true"] { background: #fffdf6; box-shadow: inset 0 0 0 2px var(--rail-gold); }
+.gas-info.held { box-shadow: inset 0 0 0 2px var(--rail-gold), 0 0 0 2px var(--rail-gold-hi); }
+.gas-info:focus-visible { outline: 2px solid var(--rail-gold-hi); outline-offset: 1px; }
+
+/* The panel of a line by group, beside the balance. */
+.gas-detail-row { display: grid; grid-template-columns: 1fr auto auto; align-items: baseline; gap: 10px; }
+.gas-detail-share { min-width: 3.4em; color: var(--rail-gold-deep); font-family: var(--mono); font-size: 11.5px; text-align: right; }
+.gas-detail-sum { margin-top: 2px; padding-top: 5px; border-top: 2px solid var(--rail-parch-lo); font-weight: 700; }
+.gas-detail-sea { font-size: 11.5px; }
 .gas-pop-num { font-family: var(--mono); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
 .gas-pop-sums { display: flex; flex-direction: column; gap: 2px; padding-top: 6px; border-top: 2px solid var(--rail-parch-lo); }
 .gas-pop-net { padding-top: 2px; font-weight: 700; }

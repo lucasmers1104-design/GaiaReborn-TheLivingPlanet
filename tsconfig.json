@@ -279,6 +279,7 @@
     "src/goalnotice.ts",
     "src/hudinfo.ts",
     "src/gasbalance.ts",
+    "src/gasdetailview.ts",
     "src/gasbalanceview.ts",
     "src/airpanel.ts",
     "src/graphs.ts",

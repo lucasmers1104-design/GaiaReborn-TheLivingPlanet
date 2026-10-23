@@ -19,6 +19,8 @@
 
 namespace SE {
   export class LifeSystem {
+    /** Land plant cover by the plant group carrying it (floraTop), for the gas balance's groups. */
+    private readonly coverByFlora = new Float64Array(FLORA_COUNT);
     /** Per-class oxygen gate, recomputed once a tick — it is global, not local. */
     private readonly o2Gates = new Float32Array(LIFE_COUNT);
     private readonly tempLo = new Float32Array(LIFE_COUNT);
@@ -482,9 +484,14 @@ namespace SE {
       const consumers = airConsumers + seaConsumers;
 
       let producers = 0;
+      const book = world.gas.isOpen;
+      const cover = this.coverByFlora;
+      if (book) cover.fill(0);
       for (let i = 0; i < TILE_COUNT; i++) {
         const li = i * LIFE_COUNT + Life.Prokaryote;
         if (OXYGENIC_STAGE[world.lifeStage[li]]) producers += world.lifeDensity[li];
+        // The land cover refreshDerived summed into vegetationCoverage, by who carries it.
+        if (book && world.elevation[i] >= 0) cover[world.floraTop[i]] += world.vegetation[i];
       }
       producers /= TILE_COUNT;
       const oceanProductivity = world.oceanFraction * clamp(producers / CYANO_PRODUCTIVITY_BIOMASS, 0, 1);
@@ -512,6 +519,36 @@ namespace SE {
       world.gas.add('o2', 'breath', -breathO2);
       world.gas.add('co2', 'photosynthesis', CHEM_RATE * (-photosynthesis * 2.0 * absorption));
       world.gas.add('co2', 'breath', CHEM_RATE * (consumers * 0.5));
+      if (book) this.bookGroups(world, fixing, carbon, absorption, oceanProductivity);
+    }
+
+    /**
+     * The same shares by group, each the term above for one group: breath per
+     * animal class from its biomass (sea animals breathe the sea's oxygen),
+     * plants per group carrying the cover, photosynthesis also by plankton and
+     * algae, and what the producers and the sea animals did to the sea.
+     */
+    private bookGroups(world: WorldState, fixing: number, carbon: number, absorption: number, oceanProductivity: number): void {
+      const g = world.gas;
+      for (let c = 1; c < LIFE_COUNT; c++) {
+        if (c === Life.Prokaryote) continue;
+        const b = world.lifeBiomass[c] / TILE_COUNT;
+        if (b === 0) continue;
+        const key = `life:${c}`;
+        if (!isSeaLife(c as Life) || c === Life.Cetacean) g.addGroup('o2', 'breath', key, -b * RESPIRATION_O2);
+        else g.addSea(key, -b * RESPIRATION_O2);
+        g.addGroup('co2', 'breath', key, CHEM_RATE * (b * 0.5));
+      }
+      for (let f = 0; f < FLORA_COUNT; f++) {
+        const v = this.coverByFlora[f] / TILE_COUNT;
+        if (v === 0) continue;
+        g.addGroup('o2', 'plants', `flora:${f}`, fixing * v * LAND_O2_YIELD);
+        g.addGroup('co2', 'photosynthesis', `flora:${f}`, CHEM_RATE * (-(v * 0.9) * carbon * 2.0 * absorption));
+      }
+      g.addGroup('co2', 'photosynthesis', 'plankton', CHEM_RATE * (-(oceanProductivity * 0.30) * carbon * 2.0 * absorption));
+      g.addGroup('co2', 'photosynthesis', 'algae', CHEM_RATE * (-(world.algaeCoverage * 0.25) * carbon * 2.0 * absorption));
+      g.addSea('plankton', fixing * oceanProductivity * PLANKTON_O2_YIELD);
+      g.addSea('algae', fixing * world.algaeCoverage * ALGAE_O2_YIELD);
     }
 
     /* ---------------------------------------------------------------- tools -- */

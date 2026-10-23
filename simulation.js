@@ -17615,8 +17615,12 @@ var SE;
  * closing it keeps the tick's balance: its parts add up to end minus start.
  * Outside a tick every booked change is the player's (a terraformer, a
  * disaster set off by hand, the comet) and is summed apart as intervention
- * since that balance. A diagnosis only: not saved, gone with a new or loaded
- * planet. O₂ in percentage points of the air, CO₂ and CH₄ in ppm. Node-safe.
+ * since that balance. Some shares are also booked by group where the model
+ * sums them by group: the animals' breath by class, the plants' by the plant
+ * group carrying each tile's cover, photosynthesis also by plankton and
+ * algae; and the sea behind O₂'s exchange with it, with what flowed into the
+ * sea. A diagnosis only: not saved, gone with a new or loaded planet. O₂ in
+ * percentage points of the air, CO₂ and CH₄ in ppm. Node-safe.
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -17626,11 +17630,42 @@ var SE;
             this.last = null;
             /** What the player's actions changed since `last`, per gas. */
             this.since = { o2: 0, co2: 0, ch4: 0 };
-            /** The tick being booked, its start levels and parts; null between ticks. */
+            /** The tick being booked, its start levels, parts, groups and sea; null between ticks. */
             this.open = null;
         }
+        get isOpen() {
+            return this.open !== null;
+        }
         begin(w) {
-            this.open = { start: { o2: w.o2, co2: w.co2, ch4: w.ch4 }, parts: { o2: {}, co2: {}, ch4: {} } };
+            this.open = {
+                start: { o2: w.o2, co2: w.co2, ch4: w.ch4 },
+                parts: { o2: {}, co2: {}, ch4: {} },
+                groups: { o2: {}, co2: {}, ch4: {} },
+                sea: { sea: NaN, saturated: NaN, flows: {} },
+            };
+        }
+        /** `v` of process `id`'s share of `gas` came from `group` (book the share itself with add). Within a tick only. */
+        addGroup(gas, id, group, v) {
+            var _a;
+            const o = this.open;
+            if (!o || v === 0)
+                return;
+            const g = ((_a = o.groups[gas])[id] ?? (_a[id] = {}));
+            g[group] = (g[group] ?? 0) + v;
+        }
+        /** The sea's dissolved oxygen as its exchange with the air begins, and what the air would let it hold (% of today's saturation). */
+        seaLevels(sea, saturated) {
+            if (!this.open)
+                return;
+            this.open.sea.sea = sea;
+            this.open.sea.saturated = saturated;
+        }
+        /** `v` (Pp. of the air) of the sea's own oxygen from `group` in this tick. */
+        addSea(group, v) {
+            const o = this.open;
+            if (!o || v === 0)
+                return;
+            o.sea.flows[group] = (o.sea.flows[group] ?? 0) + v;
         }
         /** `v` of `gas` from process `id`: part of the open tick, between ticks the player's doing. */
         add(gas, id, v) {
@@ -17648,8 +17683,11 @@ var SE;
             const o = this.open;
             if (!o)
                 return;
-            const balance = (gas) => ({ start: o.start[gas], end: w[gas], parts: o.parts[gas] });
-            this.last = { tick: w.ticks, o2: balance('o2'), co2: balance('co2'), ch4: balance('ch4') };
+            const balance = (gas) => ({ start: o.start[gas], end: w[gas], parts: o.parts[gas], groups: o.groups[gas] });
+            this.last = {
+                tick: w.ticks, o2: balance('o2'), co2: balance('co2'), ch4: balance('ch4'),
+                sea: Number.isNaN(o.sea.sea) ? null : o.sea,
+            };
             this.since = { o2: 0, co2: 0, ch4: 0 };
             this.open = null;
         }
@@ -21158,9 +21196,11 @@ var SE;
             // what the sea has just drawn from the air.
             const saturated = (world.o2 / SE.O2_PRESENT) * SE.OCEAN_O2_CAPACITY;
             let dissolved = (world.oceanO2 / 100) * SE.OCEAN_O2_CAPACITY;
+            world.gas.seaLevels(world.oceanO2, (world.o2 / SE.O2_PRESENT) * 100);
             const outgassing = SE.OCEAN_GAS_EXCHANGE * (dissolved - saturated);
             dissolved = Math.max(0, dissolved - outgassing + marineO2);
             const bound = dissolved * Math.min(1, SE.IRON_REACTIVITY * world.oceanIron);
+            world.gas.addSea('iron', -bound);
             world.oceanIron = SE.clamp(world.oceanIron - bound / SE.IRON_O2_DEMAND + SE.IRON_RESUPPLY * SE.mul(params.geo.volcanoes), 0, 1);
             world.oceanO2 = ((dissolved - bound) / SE.OCEAN_O2_CAPACITY) * 100;
             return outgassing;
@@ -23717,6 +23757,8 @@ var SE;
                 LifeSystem.OVERLAP_OTHER * (totalLoad - guildLoadOfC)) / LifeSystem.edge(c);
         }
         constructor() {
+            /** Land plant cover by the plant group carrying it (floraTop), for the gas balance's groups. */
+            this.coverByFlora = new Float64Array(SE.FLORA_COUNT);
             /** Per-class oxygen gate, recomputed once a tick — it is global, not local. */
             this.o2Gates = new Float32Array(SE.LIFE_COUNT);
             this.tempLo = new Float32Array(SE.LIFE_COUNT);
@@ -24093,10 +24135,17 @@ var SE;
             }
             const consumers = airConsumers + seaConsumers;
             let producers = 0;
+            const book = world.gas.isOpen;
+            const cover = this.coverByFlora;
+            if (book)
+                cover.fill(0);
             for (let i = 0; i < SE.TILE_COUNT; i++) {
                 const li = i * SE.LIFE_COUNT + SE.Life.Prokaryote;
                 if (SE.OXYGENIC_STAGE[world.lifeStage[li]])
                     producers += world.lifeDensity[li];
+                // The land cover refreshDerived summed into vegetationCoverage, by who carries it.
+                if (book && world.elevation[i] >= 0)
+                    cover[world.floraTop[i]] += world.vegetation[i];
             }
             producers /= SE.TILE_COUNT;
             const oceanProductivity = world.oceanFraction * SE.clamp(producers / SE.CYANO_PRODUCTIVITY_BIOMASS, 0, 1);
@@ -24120,6 +24169,41 @@ var SE;
             world.gas.add('o2', 'breath', -breathO2);
             world.gas.add('co2', 'photosynthesis', SE.CHEM_RATE * (-photosynthesis * 2.0 * absorption));
             world.gas.add('co2', 'breath', SE.CHEM_RATE * (consumers * 0.5));
+            if (book)
+                this.bookGroups(world, fixing, carbon, absorption, oceanProductivity);
+        }
+        /**
+         * The same shares by group, each the term above for one group: breath per
+         * animal class from its biomass (sea animals breathe the sea's oxygen),
+         * plants per group carrying the cover, photosynthesis also by plankton and
+         * algae, and what the producers and the sea animals did to the sea.
+         */
+        bookGroups(world, fixing, carbon, absorption, oceanProductivity) {
+            const g = world.gas;
+            for (let c = 1; c < SE.LIFE_COUNT; c++) {
+                if (c === SE.Life.Prokaryote)
+                    continue;
+                const b = world.lifeBiomass[c] / SE.TILE_COUNT;
+                if (b === 0)
+                    continue;
+                const key = `life:${c}`;
+                if (!SE.isSeaLife(c) || c === SE.Life.Cetacean)
+                    g.addGroup('o2', 'breath', key, -b * SE.RESPIRATION_O2);
+                else
+                    g.addSea(key, -b * SE.RESPIRATION_O2);
+                g.addGroup('co2', 'breath', key, SE.CHEM_RATE * (b * 0.5));
+            }
+            for (let f = 0; f < SE.FLORA_COUNT; f++) {
+                const v = this.coverByFlora[f] / SE.TILE_COUNT;
+                if (v === 0)
+                    continue;
+                g.addGroup('o2', 'plants', `flora:${f}`, fixing * v * SE.LAND_O2_YIELD);
+                g.addGroup('co2', 'photosynthesis', `flora:${f}`, SE.CHEM_RATE * (-(v * 0.9) * carbon * 2.0 * absorption));
+            }
+            g.addGroup('co2', 'photosynthesis', 'plankton', SE.CHEM_RATE * (-(oceanProductivity * 0.30) * carbon * 2.0 * absorption));
+            g.addGroup('co2', 'photosynthesis', 'algae', SE.CHEM_RATE * (-(world.algaeCoverage * 0.25) * carbon * 2.0 * absorption));
+            g.addSea('plankton', fixing * oceanProductivity * SE.PLANKTON_O2_YIELD);
+            g.addSea('algae', fixing * world.algaeCoverage * SE.ALGAE_O2_YIELD);
         }
         /* ---------------------------------------------------------------- tools -- */
         /**
@@ -62098,7 +62182,7 @@ var SE;
             volcano: 'Vulkanausbrüche',
             impact: 'Einschläge',
             fire: 'Brände',
-            breath: 'Atmung der Tiere',
+            breath: 'Atmung der Lebewesen',
             cityBreath: 'Atmung der Städte',
             fossil: 'Fossile Verbrennung',
             photosynthesis: 'Photosynthese',
@@ -62112,6 +62196,72 @@ var SE;
             decay: 'Abbau in der Luft',
         },
     };
+    /** What a group of a share is called (gasbudget.ts GasGroups). */
+    function groupLabel(key) {
+        const [kind, n] = key.split(':');
+        if (kind === 'life')
+            return SE.LIFE[Number(n)]?.name ?? key;
+        if (kind === 'flora')
+            return Number(n) === SE.Flora.None ? 'Pflanzendecke ohne führende Gruppe' : SE.FLORA[Number(n)]?.name ?? key;
+        if (key === 'plankton')
+            return 'Cyanobakterien (Plankton)';
+        if (key === 'algae')
+            return 'Meeresalgen';
+        if (key === 'iron')
+            return 'Bindung durch gelöstes Eisen';
+        return key;
+    }
+    SE.groupLabel = groupLabel;
+    /** How a process's groups were split, as the window says it. */
+    const GROUP_NOTES = {
+        o2: {
+            plants: 'Aufgeteilt nach der Pflanzengruppe, die auf jedem Feld die Pflanzendecke trägt; das Modell rechnet mit der ganzen Pflanzendecke an Land.',
+            breath: 'Nach der Biomasse jeder Tiergruppe. Meerestiere atmen den Sauerstoff des Meeres, nicht den der Luft; Wale atmen Luft.',
+        },
+        co2: {
+            breath: 'Nach der Biomasse jeder Gruppe, an Land und im Meer; Bakterien zählt das Modell hier nicht.',
+            photosynthesis: 'Landpflanzen nach der Gruppe, die auf jedem Feld die Pflanzendecke trägt, dazu Cyanobakterien und Meeresalgen im Meer.',
+        },
+        ch4: {},
+    };
+    function groupLines(groups) {
+        let plus = 0;
+        let minus = 0;
+        for (const v of Object.values(groups)) {
+            if (v > 0)
+                plus += v;
+            else
+                minus += v;
+        }
+        return Object.entries(groups)
+            .filter(([, v]) => v !== 0)
+            .map(([key, value]) => ({ key, label: groupLabel(key), value, share: value > 0 ? value / plus : value / minus }))
+            .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+    }
+    /** Whether process `id` of `gas` has groups to show in the last tick's balance. */
+    function hasGroups(ledger, gas, id) {
+        const b = ledger.last;
+        if (!b || b[gas].parts[id] === undefined)
+            return false;
+        return id === 'sea' && gas === 'o2' ? b.sea !== null : b[gas].groups[id] !== undefined;
+    }
+    SE.hasGroups = hasGroups;
+    /** The groups of process `id` of `gas` in the last tick, or null while it has none. */
+    function groupView(ledger, gas, id) {
+        const b = ledger.last;
+        if (!b || !hasGroups(ledger, gas, id))
+            return null;
+        const total = b[gas].parts[id] ?? 0;
+        if (id === 'sea' && b.sea) {
+            const giving = total > 0;
+            return {
+                gas, id, tick: b.tick, total, lines: groupLines(b.sea.flows), sea: { level: b.sea.sea, saturated: b.sea.saturated },
+                note: `Diese Mengen änderten in diesem Schritt den Sauerstoff im Meer, nicht die Luft. ${giving ? 'Abgegeben wird' : 'Aufgenommen wird'} er über den Austausch mit der Luft, Schritt für Schritt.`,
+            };
+        }
+        return { gas, id, tick: b.tick, total, lines: groupLines(b[gas].groups[id] ?? {}), sea: null, note: GROUP_NOTES[gas][id] ?? '' };
+    }
+    SE.groupView = groupView;
     function balanceLabel(gas, id, v) {
         if (id === 'limit')
             return 'Modellbegrenzung';
@@ -62267,6 +62417,287 @@ var SE;
     SE.BalanceToggle = BalanceToggle;
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — a line of the gas balance by group
+ * -----------------------------------------------------------------------------
+ * The info button beside a line of the gas balance whose share the model
+ * sums by group (the animals' breath, the plants, photosynthesis, the sea
+ * behind O₂'s exchange), and the panel it opens beside the balance: who made
+ * how much and which part of it, how the share was split, and for the sea
+ * what flowed into it in that tick (gasbalance.ts groupView). The same rules
+ * as the balance (BalanceToggle): hover and focus open, a click holds, the
+ * pointer may cross over, focus inside keeps it, one at a time, Escape
+ * closes it before the balance. The panel sits inside the balance's DOM, so
+ * going into it never leaves the balance; it shows in the top layer beside
+ * it. Built once per line; a refresh rewrites texts and keeps the order of
+ * its rows, its place and the focus. Position and size are inline.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const EDGE = 8;
+    const GAP = 10;
+    const DETAIL_W = 300;
+    /** The side caret's height (css/gasbalance.css). */
+    const CARET_H = 14;
+    function setText(el, text) {
+        if (el.textContent !== text)
+            el.textContent = text;
+    }
+    function row(label) {
+        const r = SE.make('div', 'gas-detail-row');
+        const l = SE.make('span', 'gas-pop-label', label);
+        const share = SE.make('span', 'gas-detail-share');
+        const value = SE.make('span', 'gas-pop-num');
+        r.append(l, share, value);
+        return { row: r, label: l, share, value };
+    }
+    const shareText = (s) => (s >= 0.995 ? '100 %' : s >= 0.01 ? `${SE.fmt.int(s * 100)} %` : '<1 %');
+    class GasDetailView {
+        /** `infoSign` makes an info sign drawn like the balance's own. */
+        constructor(infoSign) {
+            this.infoSign = infoSign;
+            this.toggle = new SE.BalanceToggle();
+            this.details = new Map();
+            this.ledger = null;
+            this.shownKey = null;
+            this.timer = 0;
+            /** Left of the balance (else right of it), and where the panel hangs: its near edge and its button's middle. */
+            this.left = true;
+            this.anchor = { x: 0, y: 0 };
+            document.addEventListener('pointerdown', (e) => {
+                const d = this.shownKey ? this.details.get(this.shownKey) : undefined;
+                if (!d || (e.target instanceof Node && this.inDetail(d, e.target)))
+                    return;
+                this.toggle.pressOutside();
+                this.sync();
+            }, true);
+        }
+        get isOpen() {
+            return this.shownKey !== null;
+        }
+        close() {
+            if (!this.shownKey)
+                return;
+            this.toggle.close();
+            this.sync();
+        }
+        /** The info button for process `id` of `gas` on one balance line (`key` names that line) and right after it its panel. */
+        mount(gas, id, key) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'gas-info';
+            button.hidden = true;
+            button.appendChild(this.infoSign());
+            const pop = SE.make('div', 'gas-pop gas-detail');
+            pop.id = `gas-detail-${key.replace(/[^a-z0-9]+/gi, '-')}`;
+            pop.tabIndex = -1;
+            pop.setAttribute('role', 'dialog');
+            button.setAttribute('aria-haspopup', 'dialog');
+            button.setAttribute('aria-controls', pop.id);
+            button.setAttribute('aria-expanded', 'false');
+            if (typeof pop.showPopover === 'function')
+                pop.setAttribute('popover', 'manual');
+            else
+                pop.hidden = true;
+            Object.assign(pop.style, { position: 'fixed', inset: 'auto', margin: '0', left: '0px', top: '0px', width: `${DETAIL_W}px`, boxSizing: 'border-box', overflow: 'visible', zIndex: '660' });
+            const head = SE.make('div', 'gas-pop-head');
+            const title = SE.make('div', 'gas-pop-title');
+            title.id = `${pop.id}-title`;
+            pop.setAttribute('aria-labelledby', title.id);
+            const sub = SE.make('div', 'gas-pop-sub');
+            head.append(title, sub);
+            const body = SE.make('div', 'gas-pop-body');
+            body.style.overflowY = 'auto';
+            const seaText = SE.make('p', 'gas-detail-sea');
+            const listHead = SE.make('div', 'gas-pop-h');
+            const list = SE.make('div', 'gas-pop-list');
+            const sum = row('Summe');
+            sum.row.classList.add('gas-detail-sum');
+            const empty = SE.make('p', 'gas-pop-empty', 'In diesem Schritt hat keine Gruppe beigetragen.');
+            const note = SE.make('p', 'gas-pop-note');
+            body.append(seaText, listHead, list, sum.row, empty, note);
+            pop.append(head, body);
+            const d = { key, gas, id, button, pop, head, body, title, sub, seaText, listHead, list, rows: new Map(), sum, empty, note, shown: '' };
+            this.details.set(key, d);
+            this.wire(d);
+            return [button, pop];
+        }
+        /** New simulation data: which lines have groups, and the open panel; nothing is rebuilt. */
+        update(ledger) {
+            this.ledger = ledger;
+            for (const d of this.details.values()) {
+                const has = SE.hasGroups(ledger, d.gas, d.id);
+                if (d.button.hidden === has)
+                    d.button.hidden = !has;
+                const label = `${SE.balanceLabel(d.gas, d.id, ledger.last?.[d.gas].parts[d.id] ?? 0)}: nach Gruppen anzeigen`;
+                if (d.button.getAttribute('aria-label') !== label)
+                    d.button.setAttribute('aria-label', label);
+            }
+            const open = this.shownKey ? this.details.get(this.shownKey) : undefined;
+            if (!open)
+                return;
+            if (open.button.hidden || open.button.closest('[hidden]')) {
+                // Its line left the balance.
+                this.close();
+                return;
+            }
+            if (this.fill(open, false))
+                this.place(false);
+        }
+        wire(d) {
+            const { key, button, pop } = d;
+            const now = () => performance.now();
+            button.addEventListener('pointerenter', () => { this.toggle.enterNumber(key); this.sync(); });
+            button.addEventListener('pointerleave', () => { this.toggle.leave(now()); this.sync(); });
+            button.addEventListener('focus', () => { this.toggle.focusNumber(key); this.sync(); });
+            button.addEventListener('blur', (e) => { this.toggle.blur(this.inDetail(d, e.relatedTarget)); this.sync(); });
+            button.addEventListener('click', () => { this.toggle.click(key); this.sync(); });
+            pop.addEventListener('pointerenter', () => { this.toggle.enterBalance(); this.sync(); });
+            pop.addEventListener('pointerleave', () => { this.toggle.leave(now()); this.sync(); });
+            pop.addEventListener('focusin', () => { this.toggle.focusBalance(); });
+            pop.addEventListener('focusout', (e) => { this.toggle.blur(this.inDetail(d, e.relatedTarget)); this.sync(); });
+            // Escape closes the panel first; the balance it sits in hears it only when no panel is open.
+            const escape = (e) => {
+                if (e.key !== 'Escape' || this.shownKey !== key)
+                    return;
+                e.preventDefault();
+                e.stopPropagation();
+                const refocus = this.toggle.escape(pop.contains(document.activeElement));
+                if (refocus)
+                    button.focus({ preventScroll: true });
+                this.sync();
+            };
+            button.addEventListener('keydown', escape);
+            pop.addEventListener('keydown', escape);
+        }
+        inDetail(d, t) {
+            return t instanceof Node && (d.button.contains(t) || d.pop.contains(t));
+        }
+        sync() {
+            const want = this.toggle.open;
+            if (this.shownKey && this.shownKey !== want)
+                this.hide(this.shownKey);
+            if (want && this.shownKey !== want)
+                this.show(want);
+            for (const d of this.details.values()) {
+                const open = d.key === want;
+                if (d.button.getAttribute('aria-expanded') !== String(open))
+                    d.button.setAttribute('aria-expanded', String(open));
+                d.button.classList.toggle('held', open && this.toggle.pinned);
+            }
+            clearTimeout(this.timer);
+            this.timer = 0;
+            if (this.toggle.closeAt) {
+                this.timer = window.setTimeout(() => {
+                    this.toggle.tick(performance.now());
+                    this.sync();
+                }, Math.max(0, this.toggle.closeAt - performance.now()) + 5);
+            }
+        }
+        show(key) {
+            const d = this.details.get(key);
+            if (!d)
+                return;
+            this.shownKey = key;
+            d.shown = '';
+            this.fill(d, true);
+            if (d.pop.hasAttribute('popover'))
+                d.pop.showPopover();
+            else
+                d.pop.hidden = false;
+            this.place(true);
+        }
+        hide(key) {
+            const d = this.details.get(key);
+            this.shownKey = null;
+            if (!d)
+                return;
+            if (d.pop.hasAttribute('popover')) {
+                if (d.pop.matches(':popover-open'))
+                    d.pop.hidePopover();
+            }
+            else {
+                d.pop.hidden = true;
+            }
+        }
+        /**
+         * Beside the balance, left of it where there is room, at the height of its
+         * button, inside the viewport. `follow` takes the button's place anew
+         * (on opening); a refresh keeps where the panel hangs.
+         */
+        place(follow) {
+            const d = this.shownKey ? this.details.get(this.shownKey) : undefined;
+            if (!d)
+                return;
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            d.pop.style.width = `${Math.min(DETAIL_W, vw - 2 * EDGE)}px`;
+            d.body.style.maxHeight = `${Math.max(60, vh - 2 * EDGE - d.head.offsetHeight - 4)}px`;
+            const r = d.button.getBoundingClientRect();
+            const balance = d.pop.parentElement?.closest('.gas-pop');
+            const b = balance ? balance.getBoundingClientRect() : r;
+            const w = d.pop.offsetWidth;
+            const h = d.pop.offsetHeight;
+            if (follow) {
+                this.left = b.left - GAP - w >= EDGE || b.right + GAP + w > vw - EDGE;
+                this.anchor = { x: this.left ? b.left - GAP : b.right + GAP, y: r.top + r.height / 2 };
+            }
+            const left = Math.round(SE.clamp(this.left ? this.anchor.x - w : this.anchor.x, EDGE, Math.max(EDGE, vw - w - EDGE)));
+            const top = Math.round(SE.clamp(this.anchor.y - 24, EDGE, Math.max(EDGE, vh - h - EDGE)));
+            d.pop.style.left = `${left}px`;
+            d.pop.style.top = `${top}px`;
+            d.pop.dataset.side = this.left ? 'left' : 'right';
+            d.pop.style.setProperty('--caret-y', `${Math.round(SE.clamp(this.anchor.y - top - CARET_H / 2, 6, h - CARET_H - 6))}px`);
+        }
+        /** Rewrites the open panel when its tick changed; `fresh` (on opening) also orders its rows anew. True when it did. */
+        fill(d, fresh) {
+            const v = this.ledger ? SE.groupView(this.ledger, d.gas, d.id) : null;
+            const shown = v ? String(v.tick) : '-';
+            if (shown === d.shown)
+                return false;
+            d.shown = shown;
+            const names = SE.GAS_NAMES[d.gas];
+            const total = v ? v.total : 0;
+            setText(d.title, `${SE.balanceLabel(d.gas, d.id, total)} · ${SE.fmtChange(total)} ${names.unit}`);
+            setText(d.sub, v ? `${names.name} (${names.formula}) · Schritt ${SE.fmt.int(v.tick)}` : `${names.name} (${names.formula})`);
+            const sea = v?.sea ?? null;
+            d.seaText.hidden = !sea;
+            if (sea) {
+                setText(d.seaText, `Im Meer gelöst: ${SE.fmt.int(sea.level)} % der heutigen Sättigung; zur jetzigen Luft passen ${SE.fmt.int(sea.saturated)} %. ${total > 0 ? 'Den Überschuss gibt das Meer an die Luft ab.' : 'Die Differenz nimmt das Meer aus der Luft auf.'}`);
+            }
+            setText(d.listHead, sea ? 'In diesem Schritt ins Meer' : 'Nach Gruppen');
+            const lines = v ? v.lines : [];
+            const seen = new Set();
+            for (const l of lines) {
+                let r = d.rows.get(l.key);
+                if (!r) {
+                    r = row('');
+                    d.rows.set(l.key, r);
+                    d.list.appendChild(r.row);
+                }
+                else if (fresh) {
+                    d.list.appendChild(r.row);
+                }
+                seen.add(l.key);
+                r.row.hidden = false;
+                setText(r.label, l.label);
+                setText(r.share, sea ? '' : shareText(l.share));
+                setText(r.value, `${SE.fmtChange(l.value)} ${names.unit}`);
+            }
+            for (const [k, r] of d.rows)
+                if (!seen.has(k))
+                    r.row.hidden = true;
+            d.listHead.hidden = lines.length === 0;
+            d.empty.hidden = lines.length > 0;
+            d.sum.row.hidden = !!sea || lines.length < 2;
+            setText(d.sum.value, `${SE.fmtChange(total)} ${names.unit}`);
+            d.note.hidden = !v || !v.note;
+            setText(d.note, v ? v.note : '');
+            return true;
+        }
+    }
+    SE.GasDetailView = GasDetailView;
+})(SE || (SE = {}));
+/* =============================================================================
  * Gaia Reborn — the gas balance at its number
  * -----------------------------------------------------------------------------
  * The small signed number of the last tick's change beside O₂ in the air,
@@ -62289,35 +62720,24 @@ var SE;
     /** The info sign's box, CSS px, and the caret's width (css/gasbalance.css). */
     const INFO_BOX = 18;
     const CARET_W = 14;
-    function line(label) {
+    /** The lines whose share the model sums by group: they get a button for their groups (gasdetailview.ts). */
+    const GROUPED = { o2: ['plants', 'breath', 'sea'], co2: ['breath', 'photosynthesis'], ch4: [] };
+    /** A row: label, value, and a cell for a group button (empty on most rows, so the values stay aligned). */
+    function line(label, extra) {
         const row = SE.make('div', 'gas-pop-row');
         const l = SE.make('span', 'gas-pop-label', label);
         const value = SE.make('span', 'gas-pop-num');
-        row.append(l, value);
+        const cell = SE.make('span', 'gas-pop-slot');
+        if (extra)
+            cell.append(...extra);
+        row.append(l, value, cell);
         return { row, label: l, value };
     }
-    function section(title) {
+    function section(title, key) {
         const box = SE.make('div', 'gas-pop-part');
         const list = SE.make('div', 'gas-pop-list');
         box.append(SE.make('div', 'gas-pop-h', title), list);
-        return { box, list, lines: [] };
-    }
-    /** `lines` into the section's rows, reusing them; surplus rows hide. */
-    function fillSection(s, lines, unit) {
-        s.box.hidden = lines.length === 0;
-        lines.forEach((l, k) => {
-            let row = s.lines[k];
-            if (!row) {
-                row = line('');
-                s.lines.push(row);
-                s.list.appendChild(row.row);
-            }
-            row.row.hidden = false;
-            setText(row.label, l.label);
-            setText(row.value, `${SE.fmtChange(l.value)} ${unit}`);
-        });
-        for (let k = lines.length; k < s.lines.length; k++)
-            s.lines[k].row.hidden = true;
+        return { key, box, list, lines: new Map() };
     }
     function setText(el, text) {
         if (el.textContent !== text)
@@ -62340,6 +62760,7 @@ var SE;
             this.seen = null;
             this.icons = [];
             this.iconsArt = '';
+            this.details = new SE.GasDetailView(() => this.infoSign());
             // Capture: a press that some control stops still closes the balance.
             document.addEventListener('pointerdown', (e) => {
                 if (!this.shownGas || (e.target instanceof Node && this.within(e.target)))
@@ -62378,6 +62799,9 @@ var SE;
             const pc = new SE.PixelCanvas('gas-delta-info', 0);
             pc.canvas.style.position = 'static';
             this.icons.push(pc);
+            // Signs made after the atlas has decoded (the group buttons come with their lines) are drawn at once.
+            if (SE.UiArt.shared().ready)
+                SE.drawUiIcon(pc, 'air_info', INFO_BOX);
             return pc.canvas;
         }
         /** The number of `gas` and, right after it, its balance (hidden), for the caller to append in this order. */
@@ -62416,8 +62840,8 @@ var SE;
             body.style.overflowY = 'auto';
             const missing = SE.make('p', 'gas-pop-missing', 'Noch keine Bilanz verfügbar');
             const empty = SE.make('p', 'gas-pop-empty', `In diesem Schritt hat kein Prozess den Wert von ${names.formula} verändert.`);
-            const sources = section('Quellen');
-            const sinks = section('Senken');
+            const sources = section('Quellen', 'sources');
+            const sinks = section('Senken', 'sinks');
             const sums = SE.make('div', 'gas-pop-sums');
             const sumSources = line('Summe der Quellen');
             const sumSinks = line('Summe der Senken');
@@ -62454,8 +62878,9 @@ var SE;
             for (const item of this.items.values())
                 this.updateNumber(item);
             const open = this.shownGas ? this.items.get(this.shownGas) : undefined;
-            if (open && this.fill(open))
+            if (open && this.fill(open, false))
                 this.place(false);
+            this.details.update(ledger);
         }
         wire(item, close) {
             const { gas, button, pop } = item;
@@ -62525,7 +62950,9 @@ var SE;
                 return;
             this.shownGas = gas;
             item.shown = '';
-            this.fill(item);
+            this.fill(item, true);
+            if (this.ledger)
+                this.details.update(this.ledger);
             if (item.pop.hasAttribute('popover'))
                 item.pop.showPopover();
             else
@@ -62544,6 +62971,7 @@ var SE;
         }
         hide(gas) {
             const item = this.items.get(gas);
+            this.details.close();
             this.shownGas = null;
             if (!item)
                 return;
@@ -62602,8 +63030,32 @@ var SE;
             if (item.button.getAttribute('aria-label') !== label)
                 item.button.setAttribute('aria-label', label);
         }
-        /** Rewrites the open balance when its tick or the interventions since changed; true when it did. */
-        fill(item) {
+        /** `lines` into the section's rows by process; `fresh` (on opening) puts them in this order, a refresh keeps theirs. */
+        fillSection(item, s, lines, unit, fresh) {
+            s.box.hidden = lines.length === 0;
+            const seen = new Set();
+            for (const l of lines) {
+                let row = s.lines.get(l.id);
+                if (!row) {
+                    const grouped = GROUPED[item.gas].includes(l.id);
+                    row = line('', grouped ? this.details.mount(item.gas, l.id, `${item.gas}-${s.key}-${l.id}`) : undefined);
+                    s.lines.set(l.id, row);
+                    s.list.appendChild(row.row);
+                }
+                else if (fresh) {
+                    s.list.appendChild(row.row);
+                }
+                seen.add(l.id);
+                row.row.hidden = false;
+                setText(row.label, l.label);
+                setText(row.value, `${SE.fmtChange(l.value)} ${unit}`);
+            }
+            for (const [id, row] of s.lines)
+                if (!seen.has(id))
+                    row.row.hidden = true;
+        }
+        /** Rewrites the open balance when its tick or the interventions since changed; `fresh` on opening. True when it did. */
+        fill(item, fresh) {
             const v = this.ledger ? SE.balanceView(this.ledger, item.gas) : null;
             const shown = v ? `${v.tick}|${v.since}` : '-';
             if (shown === item.shown)
@@ -62614,8 +63066,8 @@ var SE;
             setText(item.sub, v ? `Letzter abgeschlossener Simulationsschritt · Schritt ${SE.fmt.int(v.tick)}` : 'Letzter abgeschlossener Simulationsschritt');
             const parts = v ? v.sources.length + v.sinks.length : 0;
             item.empty.hidden = !v || parts > 0;
-            fillSection(item.sources, v ? v.sources : [], names.unit);
-            fillSection(item.sinks, v ? v.sinks : [], names.unit);
+            this.fillSection(item, item.sources, v ? v.sources : [], names.unit, fresh);
+            this.fillSection(item, item.sinks, v ? v.sinks : [], names.unit, fresh);
             item.sums.hidden = !v || parts === 0;
             item.levels.hidden = !v;
             item.since.hidden = !v || v.since === 0;
@@ -72009,7 +72461,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.92.2';
+    SE.APP_VERSION = '0.92.3';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
