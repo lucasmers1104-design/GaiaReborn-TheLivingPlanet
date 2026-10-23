@@ -41,6 +41,9 @@ namespace SE {
     /** Set once the player has moved or resized it; layout resets clear it. */
     userPlaced = false;
     private pressed = false;
+    /** Open for every caller; a closing window is already closed here while it leaves the screen. */
+    private shown = false;
+    private readonly motion: WindowMotion;
 
     constructor(readonly opts: WindowOptions) {
       this.id = opts.id;
@@ -62,6 +65,7 @@ namespace SE {
 
       this.body = make('div', 'win-body');
       this.root.append(this.head, this.body);
+      this.motion = new WindowMotion(this.root, opts.id);
 
       this.makeDraggable();
       this.root.addEventListener('pointerdown', () => { this.pressed = true; this.manager?.focus(this); }, true);
@@ -82,22 +86,21 @@ namespace SE {
     }
 
     get visible(): boolean {
-      return !this.root.classList.contains('hidden');
+      return this.shown;
     }
 
     /** Where the focus was when the window opened, to return it on close. */
     private returnFocus: HTMLElement | null = null;
 
     show(takeFocus = true): void {
-      const was = this.visible;
+      const was = this.shown;
+      this.shown = true;
       this.root.classList.remove('hidden');
       this.manager?.focus(this);
       if (!was) {
         if (this.opts.resetOnOpen) this.manager?.place(this, true);
         this.manager?.clamp(this);
-        this.root.classList.remove('win-enter');
-        void this.root.offsetWidth;
-        this.root.classList.add('win-enter');
+        this.motion.enter(this.manager?.reduceMotion() ?? true);
         if (takeFocus) {
           const active = document.activeElement;
           this.returnFocus = active instanceof HTMLElement && active !== document.body && !this.root.contains(active) ? active : null;
@@ -108,9 +111,10 @@ namespace SE {
     }
 
     hide(): void {
-      if (!this.visible) return;
+      if (!this.shown) return;
       const hadFocus = this.root.contains(document.activeElement);
-      this.root.classList.add('hidden');
+      this.shown = false;
+      this.motion.exit(this.manager?.reduceMotion() ?? true);
       this.manager?.onHidden(this);
       if (hadFocus) {
         const back = this.returnFocus && this.returnFocus.isConnected && this.returnFocus.offsetParent !== null
@@ -178,6 +182,8 @@ namespace SE {
     dragging: SimWindow | null = null;
     /** Called when any window opens or closes, for menu check marks. */
     onChange: (() => void) | null = null;
+    /** Still mode: windows appear and leave at once, their sprigs grown (the app adds its "reduce effects" setting). */
+    reduceMotion: () => boolean = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
     constructor(private readonly host: HTMLElement) {
       window.addEventListener('resize', () => this.clampAll());
@@ -305,7 +311,7 @@ namespace SE {
     }
   }
 
-  /* ------------------------------------------------------------- menu bar -- */
+  /* ---------------------------------------------------------------- menus -- */
 
   export interface MenuItem {
     readonly label: string;
@@ -355,206 +361,83 @@ namespace SE {
     readonly items: readonly MenuItem[];
   }
 
+  /** One menu's rows, as buildMenuRows made them. */
+  export interface MenuRows {
+    readonly rows: readonly { readonly el: HTMLElement; readonly item: MenuItem }[];
+    /** Re-reads check marks, off icons, slider values and disabled rows: call just before the menu shows. */
+    refresh(): void;
+    /** Focuses row `start`, or the next enabled one in direction `dir` (wrapping round). */
+    focus(start: number, dir: number): void;
+  }
+
   /**
-   * The pull-down menu bar: click or Enter opens, arrow keys move, Escape
-   * closes. Under NARROW_PX it collapses behind one "Menü" button into a
-   * sheet that lists every menu at once.
+   * The rows of `items` built into `panel` (a flyout menu of the rail or the
+   * gear): a button per item, a volume slider for slider items,
+   * separators between. `onKey` gets each row's keydown with its index; `onPick`
+   * runs just before an enabled item's action.
    */
-  export class MenuBar {
-    private openIndex = -1;
-    private readonly titles: HTMLButtonElement[] = [];
-    private readonly panels: HTMLElement[] = [];
-    private readonly rows: { el: HTMLElement; item: MenuItem }[][] = [];
-    private readonly toggleBtn: HTMLButtonElement;
-    private readonly sliderSyncs = new Map<HTMLElement, () => void>();
-
-    constructor(private readonly host: HTMLElement, private readonly defs: readonly MenuDef[]) {
-      host.setAttribute('role', 'menubar');
-      host.setAttribute('aria-label', 'Hauptmenü');
-
-      this.toggleBtn = button({
-        label: 'Menü', icon: uiIcon('hamburger'), cls: 'btn btn-ghost menu-toggle',
-        onClick: (e) => { e.stopPropagation(); this.toggleSheet(); },
+  export function buildMenuRows(panel: HTMLElement, items: readonly MenuItem[], onKey: (e: KeyboardEvent, row: number) => void, onPick: () => void): MenuRows {
+    const rows: { el: HTMLElement; item: MenuItem }[] = [];
+    const sliderSyncs = new Map<HTMLElement, () => void>();
+    for (const item of items) {
+      if (item.separator) { panel.appendChild(make('div', 'menu-sep')); continue; }
+      if (item.slider) {
+        const { input, percent, sync } = volumeSlider(item.label, item.slider);
+        const line = make('div', 'menu-item menu-slider');
+        input.tabIndex = -1;
+        line.append(make('span'), make('span'), input, percent);
+        input.addEventListener('keydown', (e) => onKey(e, rows.findIndex((r) => r.el === input)));
+        sliderSyncs.set(input, sync);
+        panel.appendChild(line);
+        rows.push({ el: input, item });
+        continue;
+      }
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'menu-item';
+      row.setAttribute('role', item.checked ? 'menuitemcheckbox' : 'menuitem');
+      row.tabIndex = -1;
+      const mark = make('span', 'menu-check');
+      mark.appendChild(img(uiIcon('check'), 'ico'));
+      row.append(
+        mark,
+        item.icon ? img(item.icon, 'ico menu-item-icon') : make('span', 'menu-item-icon'),
+        make('span', 'menu-label', item.label),
+        make('span', 'menu-hint', item.hint ?? ''),
+      );
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (item.disabled?.()) return;
+        onPick();
+        item.action?.();
       });
-      this.toggleBtn.setAttribute('aria-expanded', 'false');
-      host.parentElement?.insertBefore(this.toggleBtn, host);
-
-      defs.forEach((def, i) => {
-        const wrap = make('div', 'menu');
-        const title = document.createElement('button');
-        title.type = 'button';
-        title.className = 'menu-title';
-        title.setAttribute('role', 'menuitem');
-        title.setAttribute('aria-haspopup', 'true');
-        title.setAttribute('aria-expanded', 'false');
-        title.append(img(def.icon, 'ico menu-title-icon'), make('span', undefined, def.title));
-        title.title = def.title;
-        title.setAttribute('aria-label', def.title);
-        title.addEventListener('click', (e) => { e.stopPropagation(); this.toggle(i); });
-        title.addEventListener('pointerenter', () => {
-          if (this.openIndex >= 0 && this.openIndex !== i && !this.sheetOpen) this.open(i, false);
-        });
-        title.addEventListener('keydown', (e) => this.onTitleKey(e, i));
-
-        const panel = make('div', 'menu-panel glass hidden');
-        panel.setAttribute('role', 'menu');
-        panel.setAttribute('aria-label', def.title);
-        const rows: { el: HTMLElement; item: MenuItem }[] = [];
-        for (const item of def.items) {
-          if (item.separator) { panel.appendChild(make('div', 'menu-sep')); continue; }
-          if (item.slider) {
-            const { input, percent, sync } = volumeSlider(item.label, item.slider);
-            const line = make('div', 'menu-item menu-slider');
-            input.tabIndex = -1;
-            line.append(make('span'), make('span'), input, percent);
-            input.addEventListener('keydown', (e) => this.onItemKey(e, i, rows.findIndex((r) => r.el === input)));
-            this.sliderSyncs.set(input, sync);
-            panel.appendChild(line);
-            rows.push({ el: input, item });
-            continue;
-          }
-          const row = document.createElement('button');
-          row.type = 'button';
-          row.className = 'menu-item';
-          row.setAttribute('role', item.checked ? 'menuitemcheckbox' : 'menuitem');
-          row.tabIndex = -1;
-          const mark = make('span', 'menu-check');
-          mark.appendChild(img(uiIcon('check'), 'ico'));
-          row.append(
-            mark,
-            item.icon ? img(item.icon, 'ico menu-item-icon') : make('span', 'menu-item-icon'),
-            make('span', 'menu-label', item.label),
-            make('span', 'menu-hint', item.hint ?? ''),
-          );
-          row.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (item.disabled?.()) return;
-            this.closeAll();
-            item.action?.();
-          });
-          row.addEventListener('keydown', (e) => this.onItemKey(e, i, rows.findIndex((r) => r.el === row)));
-          panel.appendChild(row);
-          rows.push({ el: row, item });
+      row.addEventListener('keydown', (e) => onKey(e, rows.findIndex((r) => r.el === row)));
+      panel.appendChild(row);
+      rows.push({ el: row, item });
+    }
+    return {
+      rows,
+      refresh: () => {
+        for (const { el, item } of rows) {
+          const checked = item.checked?.() ?? false;
+          el.classList.toggle('checked', checked);
+          if (item.checked) el.setAttribute('aria-checked', checked ? 'true' : 'false');
+          if (item.iconOff && item.icon) (el.querySelector('img.menu-item-icon') as HTMLImageElement).src = checked ? item.icon : item.iconOff;
+          const disabled = item.disabled?.() ?? false;
+          sliderSyncs.get(el)?.();
+          if (el instanceof HTMLInputElement) { el.disabled = disabled; el.parentElement?.classList.toggle('disabled', disabled); }
+          el.classList.toggle('disabled', disabled);
+          el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
         }
-
-        wrap.append(title, panel);
-        host.appendChild(wrap);
-        this.titles.push(title);
-        this.panels.push(panel);
-        this.rows.push(rows);
-      });
-
-      document.addEventListener('pointerdown', (e) => {
-        if (!(e.target as HTMLElement).closest('.menubar, .menu-toggle')) this.closeAll();
-      });
-    }
-
-    /** Is any menu (or the phone sheet) open right now? */
-    get isOpen(): boolean {
-      return this.openIndex >= 0 || this.sheetOpen;
-    }
-
-    private get sheetOpen(): boolean {
-      return this.host.classList.contains('sheet-open');
-    }
-
-    private sheetClose: HTMLButtonElement | null = null;
-
-    private toggleSheet(): void {
-      const open = !this.sheetOpen;
-      this.host.classList.toggle('sheet-open', open);
-      this.toggleBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      // In the sheet the menu titles are headings, not controls.
-      this.titles.forEach((t) => { t.tabIndex = open ? -1 : 0; t.setAttribute('aria-disabled', open ? 'true' : 'false'); });
-      if (open) {
-        if (!this.sheetClose) {
-          this.sheetClose = button({
-            label: 'Menü schließen', icon: uiIcon('close'), cls: 'btn btn-small menu-sheet-close',
-            onClick: (e) => { e.stopPropagation(); this.closeAll(); this.toggleBtn.focus(); },
-          });
-          this.host.prepend(this.sheetClose);
+      },
+      focus: (start, dir) => {
+        if (rows.length === 0) return;
+        let k = (start + rows.length) % rows.length;
+        for (let n = 0; n < rows.length; n++) {
+          if (!rows[k].item.disabled?.()) { rows[k].el.focus(); return; }
+          k = (k + dir + rows.length) % rows.length;
         }
-        this.panels.forEach((p, i) => { p.classList.remove('hidden'); this.refreshMarks(i); });
-        this.sheetClose.focus();
-      } else {
-        this.closeAll();
-      }
-    }
-
-    private toggle(i: number): void {
-      if (this.sheetOpen) return;
-      if (this.openIndex === i) this.closeAll();
-      else this.open(i, false);
-    }
-
-    private open(i: number, focusFirst: boolean): void {
-      this.closeAll();
-      this.openIndex = i;
-      this.titles[i].classList.add('open');
-      this.titles[i].setAttribute('aria-expanded', 'true');
-      this.panels[i].classList.remove('hidden');
-      this.refreshMarks(i);
-      if (focusFirst) this.focusRow(i, 0, 1);
-    }
-
-    closeAll(): void {
-      this.openIndex = -1;
-      if (this.host.classList.contains('sheet-open')) {
-        this.titles.forEach((t) => { t.tabIndex = 0; t.setAttribute('aria-disabled', 'false'); });
-      }
-      this.host.classList.remove('sheet-open');
-      this.toggleBtn.setAttribute('aria-expanded', 'false');
-      this.titles.forEach((t) => { t.classList.remove('open'); t.setAttribute('aria-expanded', 'false'); });
-      for (const p of this.panels) p.classList.add('hidden');
-    }
-
-    private focusRow(menu: number, start: number, dir: number): void {
-      const rows = this.rows[menu];
-      if (rows.length === 0) return;
-      let k = (start + rows.length) % rows.length;
-      for (let n = 0; n < rows.length; n++) {
-        if (!rows[k].item.disabled?.()) { rows[k].el.focus(); return; }
-        k = (k + dir + rows.length) % rows.length;
-      }
-    }
-
-    private onTitleKey(e: KeyboardEvent, i: number): void {
-      const n = this.titles.length;
-      if (e.key === 'ArrowRight') { e.preventDefault(); this.titles[(i + 1) % n].focus(); if (this.openIndex >= 0) this.open((i + 1) % n, false); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); this.titles[(i - 1 + n) % n].focus(); if (this.openIndex >= 0) this.open((i - 1 + n) % n, false); }
-      else if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.open(i, true); }
-      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.closeAll(); }
-    }
-
-    private onItemKey(e: KeyboardEvent, menu: number, row: number): void {
-      if (e.key === 'ArrowDown') { e.preventDefault(); this.focusRow(menu, row + 1, 1); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); this.focusRow(menu, row - 1, -1); }
-      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.closeAll(); this.titles[menu].focus(); }
-      else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        // On a slider the side arrows change the value.
-        if (e.target instanceof HTMLInputElement) return;
-        e.preventDefault();
-        const n = this.titles.length;
-        const next = (menu + (e.key === 'ArrowRight' ? 1 : -1) + n) % n;
-        this.open(next, true);
-        this.titles[next].focus();
-        this.focusRow(next, 0, 1);
-      }
-    }
-
-    /** Update check marks and disabled rows just before a menu is shown. */
-    private refreshMarks(i: number): void {
-      for (const { el, item } of this.rows[i]) {
-        const checked = item.checked?.() ?? false;
-        el.classList.toggle('checked', checked);
-        if (item.checked) el.setAttribute('aria-checked', checked ? 'true' : 'false');
-        if (item.iconOff && item.icon) (el.querySelector('img.menu-item-icon') as HTMLImageElement).src = checked ? item.icon : item.iconOff;
-        const disabled = item.disabled?.() ?? false;
-        this.sliderSyncs.get(el)?.();
-        if (el instanceof HTMLInputElement) { el.disabled = disabled; el.parentElement?.classList.toggle('disabled', disabled); }
-        el.classList.toggle('disabled', disabled);
-        el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-      }
-    }
+      },
+    };
   }
 }

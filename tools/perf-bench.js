@@ -328,7 +328,7 @@ const SETUP = (name, save, seed, speed) => `(async () => {
   new PerformanceObserver((l) => { if (rec.on) for (const e of l.getEntries()) rec.long.push(e.duration); }).observe({ type: 'longtask' });
   SE.devMode.on = true;
   // Milestone cards and toasts would cover the map where the scenarios point and click.
-  document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '.showcase, .showcase-backdrop, .milestones, .toast-card, .toasts { display: none !important; }' }));
+  document.head.appendChild(Object.assign(document.createElement('style'), { textContent: '.showcase, .showcase-backdrop, .milestones, .toast-card, .toasts, .magic-layer, .magic-glow { display: none !important; }' }));
   if (app.title) { app.title.close(); app.title = null; }
   if (${JSON.stringify(name)} === 'young') {
     app.settings.epoch = 'youngEarth';

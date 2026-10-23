@@ -1,8 +1,8 @@
-/* Compact Examine panel, adjacent to the tool dock. */
+/* Compact Examine panel, beside the rail (--rail-w: livingrail.ts). */
 .win.win-examine {
-  position: absolute !important; left: 100px !important; top: 12px !important;
+  position: absolute !important; left: var(--rail-w, 100px) !important; top: 12px !important;
   right: auto !important; bottom: auto !important; width: 398px !important; height: auto !important;
-  min-width: 0; min-height: 0; max-width: calc(100% - 112px); max-height: calc(100% - 24px);
+  min-width: 0; min-height: 0; max-width: calc(100% - var(--rail-w, 100px) - 12px); max-height: calc(100% - 12px - var(--rail-foot, 12px));
   resize: none; border-radius: 0;
 }
 .win-examine .win-head { min-height: 45px; cursor: default; padding-left: 15px; gap: 9px; }

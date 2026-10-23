@@ -1,34 +1,47 @@
-/* Drop-down under the Ω and EP chips (hudinfo.ts); top/left are set inline. */
+/* Drop-down under the Ω and EP chips (hudinfo.ts); top/left are set inline.
+   A parchment panel like the status bar's (panel9 in tools/uiart/chrome.js):
+   ink outline, bevelled gold rim, parchment, in 2 px steps; colours from the
+   UI palette (tools/uiart/palette.js). */
 .hud-info {
   z-index: 700;
   width: 300px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px 11px;
-  background: var(--glass-strong);
+  padding: 12px 14px 13px;
   font-size: 13px;
-  color: var(--ink-2);
-  transform-origin: top center;
+  color: #523319;
   animation: hud-info-in 180ms var(--ease);
 }
+/* Outranks .glass (styles.css), which the pop also carries. */
+.hud-info.glass {
+  background: #f6e2bb;
+  border: 2px solid;
+  border-color: #f6cc6a #c27f2a #c27f2a #f6cc6a;
+  box-shadow:
+    0 0 0 2px #2a1a0e,
+    inset 2px 2px 0 #c27f2a, inset -2px -2px 0 #8f531a,
+    inset 4px 4px 0 #e9cb98, inset -4px -4px 0 #fdf1d8,
+    0 12px 24px rgba(20, 13, 8, 0.45);
+}
 .hud-info[hidden] { display: none; }
-@keyframes hud-info-in { from { opacity: 0; transform: translateY(-6px) scaleY(0.94); } }
+@keyframes hud-info-in { from { opacity: 0; transform: translateY(-6px); } }
 .hud-info-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
   padding-bottom: 6px;
-  border-bottom: 2px solid var(--glass-border);
+  border-bottom: 2px solid #c27f2a;
 }
-.hud-info-title { margin: 0; font-size: 14px; font-weight: 700; color: var(--ink); }
-.hud-info-num { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.hud-info-title { margin: 0; font-size: 14px; font-weight: 700; color: #2a1a0e; }
+.hud-info-num { color: #2a1a0e; font-weight: 600; white-space: nowrap; }
 .hud-info-rate { font-size: 16px; font-weight: 700; }
-.hud-info-omega { color: var(--energy); }
-.hud-info-ep { color: var(--ep); }
+.hud-info-omega { color: #8f531a; }
+.hud-info-ep { color: #5c3b9a; }
 .hud-info-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.hud-info-note { font-size: 12px; color: var(--ink-3); }
-.hud-info-pips { display: inline-flex; gap: 3px; }
-.hud-info-pips i { width: 8px; height: 8px; background: var(--raise-2); border: 1px solid var(--line-2); }
-.hud-info-pips i.on { background: var(--energy-fill); border-color: var(--energy); }
+.hud-info-note { font-size: 12px; color: #644219; }
+.hud-info-pips { display: inline-flex; gap: 2px; }
+/* Like the bar's Ω store: wood rim, gold when reached. */
+.hud-info-pips i { width: 10px; height: 10px; background: #d3ab76; border: 2px solid #523319; }
+.hud-info-pips i.on { background: #e3a63f; box-shadow: inset 0 2px 0 #fde9a6; }

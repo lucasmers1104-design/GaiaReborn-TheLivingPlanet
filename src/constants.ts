@@ -1874,9 +1874,6 @@ namespace SE {
   export const TOOL_NAMES: readonly string[] = [
     'Untersuchen', 'Verschieben', 'Höhe ändern', 'Pflanzen', 'Leben ansiedeln', 'Ereignis auslösen',
   ];
-  export const TOOL_ICONS: readonly string[] = [
-    'tool-examine', 'tool-move', 'tool-altitude', 'tool-plant', 'tool-life', 'tool-event',
-  ];
   export const TOOL_HINTS: readonly string[] = [
     'Tippe auf ein Feld, um Lebensraum, Arten und Klima zu sehen.',
     'Ziehe die Karte oder fahre mit W A S D. Das Mausrad zoomt.',

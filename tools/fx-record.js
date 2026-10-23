@@ -296,7 +296,7 @@ async function connect(work, w, h) {
 const PAGE = (bundle) => `<!DOCTYPE html>
 <html lang="de"><head><meta charset="UTF-8"><base href="${pathToUrl(ROOT)}/">
 <link rel="stylesheet" href="styles.css">
-<style>.showcase, .showcase-backdrop, .milestones, .toast-card, .toast, .win, .dock, .goal, .map-zoom { display: none !important; }</style></head><body>
+<style>.showcase, .showcase-backdrop, .milestones, .toast-card, .toast, .win, .dock, .goal, .map-zoom, .companion, .companion-say, .vines-back, .vines-front, .vines-top, .vines-hang, .magic-layer, .magic-glow { display: none !important; }</style></head><body>
 <header id="topbar" class="topbar glass"><nav id="menubar" class="menubar"></nav><div id="hud" class="hud"></div></header>
 <main id="desktop" class="stage"></main><div id="toasts" class="toasts"></div><div id="milestones" class="milestones"></div><div id="modal-root" class="modal-root"></div>
 <script src="${pathToUrl(bundle)}"></script><script src="_preview.js"></script></body></html>`;

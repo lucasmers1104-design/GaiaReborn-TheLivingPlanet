@@ -1,0 +1,163 @@
+/* =============================================================================
+   Living interface: the navigation rail, its flyout menus, the tool card and
+   the map controls in wood, parchment and gold (concept: left-toolbar.png).
+   Layout is inline in livingrail.ts / flyoutmenu.ts / app.ts; this only
+   paints. Imported before styles.css's own rules, so the overrides below
+   carry #desktop (or a second class) to win over them. Colours are the UI
+   palette's (tools/uiart/palette.js): wood, parch, gold, ink, vine, glowG.
+   ========================================================================== */
+
+:root {
+  --rail-wood: #36210f;
+  --rail-wood-hi: #523319;
+  --rail-wood-lit: #704725;
+  --rail-wood-deep: #1f120a;
+  --rail-parch: #f6e2bb;
+  --rail-parch-hi: #fffaee;
+  --rail-parch-lo: #d3ab76;
+  --rail-text: #fdf1d8;
+  --rail-text-2: #e9cb98;
+  --rail-text-3: #d3ab76;
+  --rail-ink: #2a1a0e;
+  --rail-gold: #c27f2a;
+  --rail-gold-lo: #8f531a;
+  --rail-gold-deep: #5e3410;
+  --rail-gold-hi: #f6cc6a;
+  --rail-green: #1d4c16;
+  --rail-green-hi: #2f6e1c;
+  --rail-leaf: #a6db4a;
+  /* Wood planks: flat fills with hard grain lines, no soft gradients. */
+  --rail-grain: repeating-linear-gradient(180deg, #3a2412 0 5px, #311d0d 5px 6px, #36210f 6px 13px, #3d2614 13px 14px);
+  /* Dark outline, gold rim, dark inner line: the frame of every wooden panel. */
+  --rail-frame: inset 0 0 0 2px var(--rail-wood-deep), 0 0 0 2px var(--rail-wood-deep), 0 10px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* ---- rail buttons: the pixel art is drawn under them, the faces stay clear ---- */
+.rail-btn { -webkit-tap-highlight-color: transparent; }
+.rail-btn:focus-visible { outline: none; } /* the canvas draws the golden focus ring */
+/* The shortcut as a tiny keycap in the coin's empty lower right corner. */
+.rail-key {
+  padding: 1px 2px 0;
+  background: var(--rail-wood-deep);
+  box-shadow: 0 0 0 1px var(--rail-gold-lo);
+  color: var(--rail-parch);
+  font-family: var(--mono);
+  font-weight: 700;
+}
+.rail-btn[aria-pressed="true"] .rail-key { color: var(--rail-leaf); box-shadow: 0 0 0 1px var(--rail-gold-hi); }
+
+/* ---- flyout menus ---- */
+.flyout.glass {
+  min-width: 260px;
+  padding: 0 6px 6px;
+  background: var(--rail-grain);
+  border: 2px solid var(--rail-gold);
+  box-shadow: var(--rail-frame);
+  color: var(--rail-text);
+  scrollbar-color: var(--rail-gold-lo) transparent;
+  animation: flyout-in 150ms var(--ease);
+}
+.flyout[data-side="below"] { animation-name: flyout-drop; }
+@keyframes flyout-in { from { opacity: 0; transform: translateX(-6px); } }
+@keyframes flyout-drop { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .flyout.glass { animation: none; } }
+.flyout-title {
+  margin: 0 -6px 6px;
+  padding: 6px 14px 5px;
+  background: var(--rail-parch);
+  box-shadow: inset 0 2px 0 var(--rail-parch-hi), inset 0 -2px 0 var(--rail-parch-lo), 0 2px 0 var(--rail-gold-lo);
+  color: var(--rail-ink);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.flyout .menu-item { color: var(--rail-text); }
+.flyout .menu-item:hover { background: var(--rail-wood-hi); box-shadow: inset 2px 0 0 var(--rail-gold-hi); }
+.flyout .menu-item:focus-visible { background: var(--rail-wood-hi); box-shadow: inset 0 0 0 2px var(--rail-gold-hi); }
+.flyout .menu-item.checked { background: rgba(47, 110, 28, 0.32); }
+.flyout .menu-item.checked:hover { background: var(--rail-green-hi); }
+.flyout .menu-item.disabled:hover { background: transparent; box-shadow: none; }
+.flyout .menu-hint { color: var(--rail-text-3); }
+.flyout .menu-sep { background: var(--rail-gold-deep); box-shadow: 0 2px 0 rgba(246, 204, 106, 0.12); }
+.flyout .volume-percent { color: var(--rail-text-3); }
+
+/* ---- the active tool's card ---- */
+#desktop .dock-panel {
+  background: var(--rail-grain);
+  border: 2px solid var(--rail-gold);
+  box-shadow: var(--rail-frame);
+  color: var(--rail-text);
+  scrollbar-color: var(--rail-gold-lo) transparent;
+}
+#desktop .dock-head,
+#desktop .layer-pop-head {
+  margin: -10px -12px 0;
+  padding: 4px 6px 4px 12px;
+  min-height: 40px;
+  background: var(--rail-parch);
+  box-shadow: inset 0 2px 0 var(--rail-parch-hi), inset 0 -2px 0 var(--rail-parch-lo), 0 2px 0 var(--rail-gold-lo);
+}
+#desktop .dock-title,
+#desktop .layer-pop-title { color: var(--rail-ink); }
+#desktop .dock-head .kbd { background: var(--rail-wood-hi); border-color: var(--rail-gold-lo); color: var(--rail-parch); }
+#desktop .dock-close,
+#desktop .layer-pop-close { background: var(--rail-wood-hi); border-color: var(--rail-gold-lo); }
+#desktop .dock-close:hover,
+#desktop .layer-pop-close:hover { background: var(--rail-wood-lit); border-color: var(--rail-gold-hi); }
+#desktop .dock-hint { color: var(--rail-text-3); margin-top: 0; }
+#desktop .dock .opt-tile { background: #452a13; border-color: #2c1a0b; color: var(--rail-text); }
+#desktop .dock .opt-tile:hover { background: var(--rail-wood-hi); border-color: var(--rail-gold); }
+#desktop .dock .opt-tile.on { background: var(--rail-green); border-color: var(--rail-gold-hi); box-shadow: inset 0 0 0 2px var(--rail-green-hi); }
+/* Disasters keep the red of their brush. */
+#desktop .dock[data-tool="5"] .opt-tile.on { background: #5a1f1c; border-color: #c4453f; box-shadow: inset 0 0 0 2px #8e2f33; }
+#desktop .dock .opt-tile:focus-visible,
+#desktop .dock .opt-more:focus-visible { box-shadow: inset 0 0 0 2px var(--rail-gold-hi); }
+#desktop .dock .opt-sub { color: var(--rail-text-2); }
+#desktop .dock .opt-note { color: var(--rail-text-3); }
+#desktop .dock .opt-more { border-color: var(--rail-gold-lo); color: var(--rail-text-2); }
+#desktop .dock .opt-more:hover { background: var(--rail-wood-hi); color: var(--rail-text); }
+#desktop .dock .opt-more-go { color: var(--rail-leaf); }
+#desktop .dock .opt-detail { background: rgba(31, 18, 10, 0.85); border-color: var(--rail-gold-deep); }
+#desktop .dock .seg { background: var(--rail-wood-deep); border-color: var(--rail-gold-deep); }
+#desktop .dock .seg-btn { color: var(--rail-text-3); }
+#desktop .dock .seg-btn:hover { color: var(--rail-text); background: rgba(246, 204, 106, 0.08); }
+#desktop .dock .seg-btn.on { background: var(--rail-wood-hi); color: var(--rail-text); box-shadow: inset 0 0 0 2px var(--rail-gold-lo); }
+#desktop .dock .brush-size-value { color: var(--rail-text-3); }
+
+/* ---- map controls and the layers popover ---- */
+#desktop .map-zoom,
+#desktop .layer-pop {
+  background: var(--rail-grain);
+  border: 2px solid var(--rail-gold);
+  box-shadow: var(--rail-frame);
+  color: var(--rail-text);
+}
+#desktop .map-zoom .icon-btn:hover { background: var(--rail-wood-lit); border-color: var(--rail-gold); }
+#desktop .map-zoom .icon-btn.on { background: var(--rail-green); border-color: var(--rail-gold-hi); }
+#desktop .map-zoom .icon-btn:focus-visible { box-shadow: inset 0 0 0 2px var(--rail-gold-hi); outline: none; }
+#desktop .map-zoom-sep { background: var(--rail-gold-deep); }
+#desktop .layer-pop { scrollbar-color: var(--rail-gold-lo) transparent; }
+#desktop .layer-tg { border-color: var(--rail-gold-deep); color: var(--rail-text-3); }
+#desktop .layer-tg:hover { background: var(--rail-wood-hi); color: var(--rail-text-2); }
+#desktop .layer-tg.on { background: var(--rail-green); border-color: var(--rail-gold-hi); color: var(--rail-text); }
+#desktop .layer-h { color: var(--rail-text-3); border-top-color: var(--rail-gold-deep); }
+#desktop .overlay-radio { color: var(--rail-text-2); }
+#desktop .overlay-radio:hover { background: var(--rail-wood-hi); color: var(--rail-text); }
+#desktop .overlay-radio.on { background: var(--rail-wood-hi); color: var(--rail-text); }
+#desktop .overlay-dot { border-color: var(--rail-gold-lo); background: var(--rail-wood-deep); }
+#desktop .overlay-radio.on .overlay-dot { border-color: var(--rail-leaf); background: #72b92e; box-shadow: inset 0 0 0 2px var(--rail-wood-deep); }
+#desktop .layer-pop .overlay-note,
+#desktop .layer-pop .legend-strip-labels { color: var(--rail-text-3); }
+#desktop .layer-pop .map-legend { color: var(--rail-text-2); }
+
+/* ---- the goal bar keeps clear of the card beside the rail (was: a 76 px rail) ---- */
+#desktop .goal { width: min(600px, calc(100% - 2 * (var(--rail-w, 76px) + 356px))); }
+@media (max-width: 1420px) {
+  #desktop .goal { left: calc(var(--rail-w, 76px) + 352px); width: auto; }
+  /* The docked Examine window (398 px) takes the card's place. */
+  #desktop.examining .goal { left: calc(var(--rail-w, 76px) + 410px); }
+}
+@media (max-width: 900px) {
+  #desktop.examining .goal { display: none; }
+}

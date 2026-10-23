@@ -229,6 +229,7 @@ namespace SE {
         window.clearTimeout(handle);
         card.classList.add('leaving');
         window.setTimeout(() => {
+          if (!card.isConnected) return; // cleared with its planet: no longer counted
           card.remove();
           this.cards = Math.max(0, this.cards - 1);
           this.pump();

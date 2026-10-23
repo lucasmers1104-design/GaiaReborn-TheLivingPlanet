@@ -37,6 +37,11 @@
 @import url("css/dinofate.css");
 @import url("css/hudinfo.css");
 @import url("css/spaceport.css");
+@import url("css/topbar-living.css");
+@import url("css/rail-living.css");
+@import url("css/companion.css");
+@import url("css/window-motion.css");
+@import url("css/magic.css");
 
 :root {
   --bg-0: #08101a;
@@ -358,79 +363,7 @@ p { margin: 0; }
   border-radius: 0;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 6px;
-  flex: 0 0 auto;
-}
-.brand-icon { width: 28px; height: 28px; filter: drop-shadow(0 2px 6px rgba(76, 182, 214, 0.4)); }
-.brand-name { font-family: var(--font-display); font-weight: 700; font-size: 17px; letter-spacing: 0.2px; }
-.brand-ver {
-  font-family: var(--mono);
-  /* At 11px bold the pixel font's "2" reads like an "8". */
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--plant);
-  background: rgba(141, 220, 90, 0.12);
-  border: 2px solid rgba(141, 220, 90, 0.35);
-  border-radius: 0;
-  clip-path: var(--px-clip);
-  padding: 1px 6px;
-}
-
-/* Never shrinks: a clipped menubar hides whole menus. The HUD gives way instead
-   (the date ellipsizes), and the breakpoints below keep both in one row. */
-.menubar { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; min-width: 0; }
-.menubar:not(.sheet-open) { overflow: hidden; }
-.menubar:not(.sheet-open):has(.menu-title.open) { overflow: visible; }
-.menu { position: relative; }
-.menu-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 0;
-  clip-path: var(--px-clip);
-  background: transparent;
-  color: var(--ink-2);
-  font-size: 14px;
-  font-weight: 550;
-  cursor: pointer;
-}
-.menu-title .ico { width: 18px; height: 18px; opacity: 0.85; }
-.menu-title::after {
-  content: "";
-  width: 12px;
-  height: 12px;
-  background: url("assets/ui/chevron-down.svg") center / contain no-repeat;
-  opacity: 0.6;
-}
-.menu-title:hover { background: var(--raise-2); color: var(--ink); }
-.menu-title.open { background: var(--raise-2); box-shadow: inset 0 0 0 2px var(--line-2); color: var(--ink); }
-.menu-title:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-.menu-toggle { display: none; }
-
-.menu-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  min-width: 280px;
-  padding: 6px;
-  border: 2px solid var(--glass-border);
-  border-radius: 0;
-  background: var(--glass-strong);
-  box-shadow: var(--shadow);
-  z-index: 700;
-  animation: drop-in 140ms var(--ease);
-}
 @keyframes drop-in { from { opacity: 0; transform: translateY(-4px); } }
-/* As wide as the longest entry: the wide pixel font wrapped most items at a
-   fixed 280 px. (The phone sheet lays the panels out full width instead.) */
-.menubar:not(.sheet-open) .menu-panel { width: max-content; max-width: calc(100vw - 24px); }
 
 .menu-item {
   display: grid;
@@ -473,145 +406,8 @@ p { margin: 0; }
   min-width: 0;
   flex: 0 1 auto;
 }
-.hud-chip {
-  position: relative;
-  isolation: isolate;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 38px;
-  padding: 0 11px;
-  white-space: nowrap;
-}
-/* The pixel box sits on ::before so its clip-path doesn't cut the tooltip. */
-.hud-chip::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--glass);
-  border: 2px solid var(--glass-border);
-  clip-path: var(--px-clip);
-}
 .hud-link { cursor: pointer; }
 .hud-link:hover::before { border-color: var(--focus); }
-.hud-chip:focus-visible { outline: none; }
-.hud-chip:focus-visible::before { border-color: var(--focus); }
-.hud-chip[data-tip]:hover::after,
-.hud-chip[data-tip]:focus-visible::after {
-  content: attr(data-tip);
-  position: absolute;
-  top: calc(100% + 8px);
-  /* Centred by auto margins in a widened box: translateX(-50%) lands on half
-     pixels and blurs the pixel font. */
-  left: -200px;
-  right: -200px;
-  margin-inline: auto;
-  width: max-content;
-  max-width: 260px;
-  padding: 7px 10px;
-  border-radius: 0;
-  background: var(--glass-strong);
-  border: 2px solid var(--line-2);
-  box-shadow: var(--shadow);
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 550;
-  white-space: normal;
-  z-index: 700;
-  pointer-events: none;
-}
-.hud-value { font-weight: 600; font-variant-numeric: tabular-nums; font-size: 15px; }
-.hud-sub { font-size: 11px; color: var(--ok); font-weight: 600; font-variant-numeric: tabular-nums; }
-/* Pixelify Sans has no tabular figures, so tabular-nums changes nothing: each
-   running value sits in a box as wide as its longest value (measured in the
-   pixel font), so the bar never shifts while the numbers change. */
-.hud-value, .hud-sub { display: inline-block; text-align: right; }
-.hud-omega .hud-value, .hud-ep .hud-value { min-width: 46px; }
-.hud-ep .hud-sub { min-width: 34px; text-align: left; }
-.hud-o2 .hud-value { min-width: 50px; }
-.hud-co2 .hud-value { min-width: 74px; }
-.hud-temp .hud-value { min-width: 48px; }
-.hud-omega .hud-value { color: var(--energy); }
-.hud-ep .hud-value { color: #d2bcff; }
-.hud-minor .hud-value { font-weight: 600; font-size: 14px; color: var(--ink); }
-.hud-tag { font-size: 11px; font-weight: 500; color: var(--ink-3); }
-.hud-bar {
-  position: absolute;
-  left: 10px; right: 10px; bottom: 5px;
-  height: 2px;
-  border-radius: 0;
-  background: rgba(0, 0, 0, 0.45);
-  overflow: hidden;
-}
-.hud-bar span { display: block; height: 100%; background: var(--energy); transition: width 300ms; }
-
-.hud-time {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  /* Fixed, not grown by its text: the date runs long ("vor 4.123,4 Mio. J. · Paläoproterozoikum") and ellipsizes. */
-  flex: none;
-  width: 240px;
-  height: 38px;
-  padding: 0 11px;
-  line-height: 1.15;
-  background: var(--glass);
-  border: 2px solid var(--glass-border);
-  clip-path: var(--px-clip);
-}
-.hud-scale { font-size: 11px; font-weight: 500; color: var(--ink-3); }
-.hud-date { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hud-scale, .hud-date { overflow: hidden; text-overflow: ellipsis; }
-
-/* Speed control: a dark well, the active speed raised inside it. */
-.speed.seg {
-  gap: 2px;
-  padding: 2px;
-  border: 2px solid var(--glass-border);
-  border-radius: 0;
-  clip-path: var(--px-clip);
-  background: var(--ink-dark);
-}
-.speed .seg-btn, .speed .speed-play, .speed .speed-cycle { border-radius: 0; clip-path: var(--px-clip); }
-.speed .seg-btn:hover, .speed .speed-play:hover { background: var(--raise-2); }
-.speed .seg-btn.on { background: var(--line-2); color: var(--ink); box-shadow: none; }
-.speed .seg-btn:focus-visible, .speed .speed-play:focus-visible, .speed .speed-cycle:focus-visible {
-  outline: none;
-  box-shadow: inset 0 0 0 2px var(--focus);
-}
-.speed-play { width: 34px; height: 30px; border-radius: 0; }
-.speed-play.paused { background: rgba(255, 209, 102, 0.14); box-shadow: inset 0 0 0 2px rgba(255, 209, 102, 0.45); }
-.speed-btn { padding: 0 9px; }
-.speed-dots { display: inline-flex; gap: 2px; align-items: center; }
-.speed-dots i { display: block; width: 4px; height: 12px; border-radius: 0; background: currentColor; opacity: 0.8; }
-
-/* Pixel box on ::before: a clip-path on the button would cut off its badge. */
-.btn.evo-btn {
-  isolation: isolate;
-  min-height: 38px;
-  padding: 0 16px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  clip-path: none;
-  color: #fff;
-}
-.btn.evo-btn::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--accent-fill);
-  border: 2px solid var(--accent);
-  clip-path: var(--px-clip);
-  transition: filter 140ms;
-}
-.btn.evo-btn:hover { background: transparent; }
-.btn.evo-btn:hover::before { filter: brightness(1.15); }
-.btn.evo-btn:focus-visible { outline: none; }
-.btn.evo-btn:focus-visible::before { border-color: var(--focus); }
-.btn.evo-btn .ico { filter: brightness(0) invert(1); }
 
 /* =============================================================================
    STAGE: the living map with the tool dock
@@ -648,7 +444,7 @@ p { margin: 0; }
 .world-canvas.panning { cursor: grabbing; }
 .world-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -4px; }
 
-/* Tool rail (64 px, icons with their shortcut letter) and, beside it, the card
+/* The living rail (livingrail.ts) and, beside it, the card
    of the active tool. The card closes with its X or a second click on the
    active tool; picking a tool opens it again. */
 .dock {
@@ -663,47 +459,7 @@ p { margin: 0; }
   pointer-events: none;
 }
 .dock > * { pointer-events: auto; }
-.dock-tools {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 6px;
-  background: var(--glass-strong);
-}
-.tool-btn {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  padding: 0;
-  border: 2px solid transparent;
-  border-radius: 0;
-  clip-path: var(--px-clip);
-  background: transparent;
-  cursor: pointer;
-  color: var(--ink-2);
-  transition: background 140ms, border-color 140ms, color 140ms;
-}
-.tool-btn .ico { width: 26px; height: 26px; }
-.tool-key {
-  position: absolute;
-  right: 3px;
-  bottom: 1px;
-  font-family: "JetBrains Mono", monospace;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1.2;
-  color: var(--ink-3);
-}
-.tool-btn:hover { background: var(--raise); border-color: var(--glass-border); color: var(--ink); }
-.tool-btn.on {
-  background: rgba(99, 193, 111, 0.14);
-  border-color: var(--accent);
-  color: var(--ink);
-}
-.tool-btn.on .tool-key { color: var(--ink-2); }
-.tool-btn:focus-visible, .opt-tile:focus-visible, .opt-more:focus-visible, .layer-tg:focus-visible, .overlay-radio:focus-visible {
+.opt-tile:focus-visible, .opt-more:focus-visible, .layer-tg:focus-visible, .overlay-radio:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--focus);
 }
@@ -985,7 +741,6 @@ p { margin: 0; }
 .win::-webkit-resizer {
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%234a5a6e'%3E%3Cpath d='M8 0h2v2H8zM4 4h2v2H4zM8 4h2v2H8zM0 8h2v2H0zM4 8h2v2H4zM8 8h2v2H8z'/%3E%3C/svg%3E") no-repeat 1px 1px;
 }
-.win-enter { animation: win-in 180ms var(--ease); }
 @keyframes win-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
 
 .win-head {
@@ -1743,19 +1498,7 @@ p { margin: 0; }
 @media (max-width: 1360px) {
   .tree-hint { display: none; }
 }
-/* Breakpoints measured with the pixel font and long values (4-digit Ω,
-   "vor 2.345 Mio. J. · Paläoproterozoikum"). */
-/* Three menus with text need the room of the word mark. */
-@media (max-width: 1680px) {
-  .brand-name, .brand-ver { display: none; }
-}
-@media (max-width: 1680px) {
-  .hud-minor:not(.hud-o2) { display: none; }
-}
 @media (max-width: 1420px) {
-  .hud-minor { display: none; }
-  .hud-scale { display: none; }
-  .hud-time { width: 190px; }
   /* Centred, the goal bar would shrink to 100% - 880 px and wrap its subline
      into a tall column, or slide under the tool card (12 + 64 + 8 + 340 px); sit
      it between the card and the map controls instead. */
@@ -1770,19 +1513,7 @@ p { margin: 0; }
   .goal-sub { display: none; }
   .goal .btn .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
-@media (max-width: 1200px) {
-  .brand-name, .brand-ver { display: none; }
-}
-@media (max-width: 1080px) {
-  .hud-sub { display: none; }
-  .hud-time { display: none; }
-  .evo-btn .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .evo-btn { padding: 0 12px; }
-}
-
 @media (max-width: 900px) {
-  .menu-title { padding: 0 7px; }
-  .speed-btn:not(:last-child) { display: none; }
   .stage.examining .goal { display: none; }
 }
 
@@ -1791,45 +1522,10 @@ p { margin: 0; }
      below show through. */
   :root { --topbar-h: 56px; --glass: rgb(15, 22, 33); --glass-strong: rgb(15, 22, 33); }
   .topbar { gap: 6px; padding: 0 8px; }
-  .brand { display: none; }
-  .menu-toggle { display: inline-flex; padding: 0 10px; }
-  .menu-toggle .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .menubar { display: none; }
-  .menubar.sheet-open {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    position: fixed;
-    top: calc(var(--topbar-h) + 6px);
-    left: 6px;
-    right: 6px;
-    max-height: min(76vh, calc(100vh - var(--topbar-h) - 90px));
-    overflow-y: auto;
-    padding: 10px;
-    z-index: 700;
-    border-radius: var(--radius);
-    background: var(--glass-strong);
-    border: 2px solid var(--glass-border);
-    box-shadow: var(--shadow);
-  }
-  .menubar.sheet-open .menu-title { pointer-events: none; color: var(--ink-3); min-height: 28px; }
-  .menubar.sheet-open .menu-title span { display: inline; font-size: 12px; font-weight: 800; }
-  .menubar.sheet-open .menu-panel { position: static; display: block; min-width: 0; background: transparent; box-shadow: none; border: 0; padding: 0; animation: none; }
   .hud { gap: 5px; }
-  .hud-chip { height: 36px; padding: 0 8px; }
-  .hud-chip .ico { width: 18px; height: 18px; }
-  .hud-sub { display: none; }
-  .hud-time { display: none; }
-  .speed-btn { display: none; }
-  .speed-cycle { display: inline-flex; }
-  .speed-play { width: 40px; height: 38px; }
-  .hud-bar { display: none; }
   .seg-btn { min-height: 36px; }
   .map-mode { width: 38px; height: 36px; }
   .hist-key { min-height: 36px; }
-  .evo-btn { padding: 0 10px; }
-  .evo-btn .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
   .dock {
     top: auto;
@@ -1840,14 +1536,6 @@ p { margin: 0; }
     max-height: 62%;
     max-width: none;
   }
-  .dock-tools { flex-direction: row; gap: 0; border-right: 0; border-top: 2px solid var(--glass-border); overflow-x: auto; overflow-y: hidden; padding: 4px; justify-content: space-between; }
-  .dock-tools::after { bottom: auto; right: -4px; flex-basis: 28px; margin: 0 0 0 -28px; background: linear-gradient(90deg, transparent, var(--glass-strong)); animation-timeline: scroll(nearest inline); }
-  /* Sized to the labels so all six fit on a 390 px phone. */
-  .tool-btn { width: auto; flex: 1 1 auto; padding: 6px 1px; }
-  .tool-btn .btn-label { font-size: 10.5px; }
-  .dock-collapse { position: absolute; top: 6px; right: 6px; margin: 0; z-index: 2; transform: rotate(-90deg); background: var(--raise-2); }
-  .dock:not(.collapsed) .dock-collapse { transform: rotate(90deg); }
-  .dock.collapsed .dock-collapse { top: auto; bottom: 70px; }
   .dock { overflow: visible; }
   .dock-panel { padding-right: 52px; }
   .dock-panel { width: auto; max-height: 40vh; }
@@ -1927,9 +1615,6 @@ p { margin: 0; }
   .win-head { cursor: default; }
   .tree-toolbar .btn-ghost .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .modal-head, .modal-foot { padding-top: 8px; padding-bottom: 8px; }
-  .dock-tools { padding: 4px 3px; gap: 2px; }
-  .tool-btn { padding: 4px 0 3px; gap: 1px; }
-  .tool-btn .ico { width: 22px; height: 22px; }
   .toasts { bottom: 8px; width: min(340px, 44vw); }
   .toast-card { grid-template-columns: 40px minmax(0, 1fr); gap: 10px; padding: 10px 44px 10px 10px; }
   .toast-art { width: 40px; height: 40px; }
@@ -1951,12 +1636,6 @@ p { margin: 0; }
   }
 }
 
-/* Speed cycling for small screens: one button shows and steps the speed. */
-.speed-cycle { display: none; align-items: center; justify-content: center; min-width: 46px; min-height: 38px; padding: 0 8px; border: 0; border-radius: 0; background: var(--raise-2); color: var(--ink); cursor: pointer; }
-.menu-sheet-close { display: none; }
-@media (max-width: 760px) {
-  .menubar.sheet-open .menu-sheet-close { display: inline-flex; align-self: flex-end; }
-}
 .cond-new { box-shadow: inset 0 0 0 2px rgba(143, 220, 154, 0.5) !important; }
 .detail-chronicle.fresh { animation: fresh-in 600ms var(--ease); box-shadow: inset 0 0 0 2px rgba(143, 220, 154, 0.5); }
 @keyframes fresh-in { from { opacity: 0; transform: translateY(-6px); } }

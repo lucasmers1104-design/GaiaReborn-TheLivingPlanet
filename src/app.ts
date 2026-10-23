@@ -130,7 +130,9 @@ namespace SE {
     private readonly stage: HTMLElement;
     private readonly windows: WindowManager;
     private readonly notifier: Notifier;
-    private menuBar!: MenuBar;
+    /** The rail's and the gear's menus: one flyout at a time. */
+    private flyout!: FlyoutMenu;
+    private menus!: Readonly<Record<'game' | 'planet' | 'windows', MenuDef>>;
     private title: TitleScreen | null = null;
     private readonly music: MusicPlayer;
     private readonly surf = new AmbientLoop('assets/audio/ambient/ocean-waves.mp3', SURF_VOLUME);
@@ -154,17 +156,11 @@ namespace SE {
     private hoverTip!: HTMLElement;
     private mapLegendEl!: HTMLElement;
     private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
+    private rail!: LivingRail;
     private readonly layerButtons: HTMLButtonElement[] = [];
     private readonly overlayButtons = new Map<Overlay, HTMLButtonElement>();
     private readonly mapButtons = new Map<MapMode, HTMLButtonElement>();
-    private readonly speedButtons: HTMLButtonElement[] = [];
-    private hud!: {
-      omega: HTMLElement; omegaBar: HTMLElement; ep: HTMLElement; epRate: HTMLElement;
-      o2: HTMLElement; co2: HTMLElement; temp: HTMLElement; date: HTMLElement; scale: HTMLElement;
-      play: HTMLButtonElement; evoBadge: HTMLElement; evoBtn: HTMLButtonElement;
-      oceanO2: HTMLElement;
-      devTag: HTMLElement; // DEVMODE
-    };
+    private hud!: LivingTopbar;
     private hudInfo!: HudInfo;
 
     /* ---- state ---- */
@@ -218,6 +214,15 @@ namespace SE {
     private readonly ripStamps: RipStamps;
     private screenHeld = false;
 
+    /* ---- the living interface ---- */
+    private readonly livingMood = new LivingMood();
+    private living: LivingState = SLEEPING_STATE;
+    private companion!: GaiaCompanion;
+    private vines!: VineLayer;
+    private gaiaMagic!: GaiaMagic;
+    /** The showcase's `done` while Gaia's magic plays before it. */
+    private magicDone: (() => void) | null = null;
+
     private lastFrame = 0;
     private accumulator = 0;
     private lastUi = 0;
@@ -244,18 +249,37 @@ namespace SE {
       }, { capture: true });
 
       this.windows = new WindowManager(this.stage);
+      this.windows.reduceMotion = () => this.settings.reduceEffects || prefersReducedMotion();
+      const showcase = new Showcase(document.body, {
+        view: (id) => this.openTree(id),
+        showOnMap: (e) => this.showEntryOnMap(e),
+        progress: () => ({ developed: this.world.evo.developed.size, total: EVO_NODES.length }),
+        sound: () => (this.settings.sound ? this.settings.soundVolume : 0),
+      });
       this.notifier = new Notifier(el<HTMLElement>('toasts'), el<HTMLElement>('milestones'), {
         reported: (key) => this.sim.predict({ type: 'reported', key }),
         view: (id) => this.openTree(id),
         milestone: (open) => { this.screenHeld = open; this.onMilestone(open); this.discoveries.setHeld(open); },
         narrow: () => this.windows.narrow,
         spaceport: () => this.openSpaceport(),
-        showcase: new Showcase(document.body, {
-          view: (id) => this.openTree(id),
-          showOnMap: (e) => this.showEntryOnMap(e),
-          progress: () => ({ developed: this.world.evo.developed.size, total: EVO_NODES.length }),
-          sound: () => (this.settings.sound ? this.settings.soundVolume : 0),
-        }),
+        // Gaia's magic plays before a step's showcase (gaiamagic.ts); closing during it still releases the queue.
+        showcase: {
+          show: (e, done) => {
+            this.magicDone = done;
+            this.gaiaMagic.play(e, () => {
+              if (this.magicDone !== done) return;
+              this.magicDone = null;
+              showcase.show(e, done);
+            });
+          },
+          close: () => {
+            const d = this.magicDone;
+            if (!d) { showcase.close(); return; }
+            this.magicDone = null;
+            this.gaiaMagic.cancel();
+            d();
+          },
+        },
       });
       this.notifier.pauseOnMilestone = this.settings.pauseOnMilestone;
       // Made here, not in index.html: a cached old page must still boot with a new bundle.
@@ -314,42 +338,52 @@ namespace SE {
       this.editView.reduceEffects = this.settings.reduceEffects;
       this.wireCanvas(canvas);
 
-      /* ---- tool rail and the active tool's card ---- */
+      /* ---- the living rail (tools, a knot, Evolution, Planet, Fenster) and the active tool's card ---- */
       const dock = make('aside', 'dock');
       dock.setAttribute('aria-label', 'Werkzeuge');
+      // Inline, safe with a stale stylesheet: the dock spans the stage's height, the rail and the card sit in it absolutely.
+      Object.assign(dock.style, {
+        position: 'absolute', left: '0px', top: '0px', bottom: '0px', width: '0px', maxHeight: 'none',
+        display: 'block', zIndex: '50', pointerEvents: 'none',
+      });
       this.dock = dock;
-      const tools = make('div', 'dock-tools glass');
-      tools.setAttribute('role', 'toolbar');
-      tools.setAttribute('aria-label', 'Werkzeuge');
-      tools.setAttribute('aria-orientation', 'vertical');
-      for (let t = 0; t < TOOL_NAMES.length; t++) {
-        const tool = t as Tool;
-        const b = button({
-          label: TOOL_NAMES[t], icon: uiIcon(TOOL_ICONS[t]), cls: 'tool-btn', showLabel: false,
-          title: `${TOOL_NAMES[t]} (Taste ${TOOL_KEYS[t]})`,
-          // The active tool's button opens and closes its card.
-          onClick: () => {
-            if (this.selection.tool === tool && !this.settings.dockCollapsed) this.setDockCollapsed(true);
-            else this.selectTool(tool);
-          },
-        });
-        b.setAttribute('aria-keyshortcuts', TOOL_KEYS[t]);
-        const key = make('span', 'tool-key', TOOL_KEYS[t]);
-        key.setAttribute('aria-hidden', 'true');
-        b.appendChild(key);
-        tools.appendChild(b);
-        this.toolButtons.set(tool, b);
-      }
+      const tools: RailItem[] = TOOL_NAMES.map((name, t) => ({
+        id: RAIL_TOOLS[t], label: name, title: `${name} (Taste ${TOOL_KEYS[t]})`, key: TOOL_KEYS[t],
+        // The active tool's button opens and closes its card.
+        onClick: () => {
+          if (this.selection.tool === t && !this.settings.dockCollapsed) this.setDockCollapsed(true);
+          else this.selectTool(t as Tool);
+        },
+      }));
+      this.rail = new LivingRail(dock, [
+        ...tools,
+        { id: 'evolution', label: 'Evolutionsbaum', title: 'Evolutionsbaum (E)', key: 'E', onClick: () => this.windows.toggle('evolution') },
+        { id: 'planet', label: 'Planet', title: 'Planet: Modelle und Diagramme', menu: true, onClick: (b) => this.openMenu('planet', b) },
+        { id: 'windows', label: 'Fenster', title: 'Fenster', menu: true, onClick: (b) => this.openMenu('windows', b) },
+      ], () => this.settings.reduceEffects || prefersReducedMotion());
+      RAIL_TOOLS.forEach((id, t) => {
+        const b = this.rail.buttons.get(id);
+        if (b) this.toolButtons.set(t as Tool, b);
+      });
 
       const panel = make('section', 'dock-panel glass');
       panel.id = 'tool-card';
+      // Beside the rail and above Gaia's corner, following the rail's scale (livingrail.ts sets the variables).
+      Object.assign(panel.style, {
+        position: 'absolute', left: 'var(--rail-w)', top: 'var(--rail-top)',
+        maxHeight: 'calc(100% - var(--rail-top) - var(--rail-foot))', pointerEvents: 'auto',
+      });
       const head = make('div', 'dock-head');
       this.toolTitle = make('h2', 'dock-title');
       this.toolKey = make('span', 'kbd');
       this.toolKey.setAttribute('aria-hidden', 'true');
       const close = button({
         label: 'Werkzeugkarte schließen', icon: uiIcon('close'), cls: 'icon-btn dock-close', showLabel: false,
-        onClick: () => this.setDockCollapsed(true),
+        onClick: () => {
+          this.setDockCollapsed(true);
+          // The card is gone with its button: hand focus back to the rail button that reopens it.
+          this.toolButtons.get(this.selection.tool)?.focus({ preventScroll: true });
+        },
       });
       head.append(this.toolTitle, this.toolKey, close);
       panel.setAttribute('aria-labelledby', 'tool-card-title');
@@ -357,7 +391,7 @@ namespace SE {
       this.toolHint = make('p', 'dock-hint');
       this.toolOptions = make('div', 'tool-options');
       panel.append(head, this.toolHint, this.toolOptions);
-      dock.append(tools, panel);
+      dock.append(panel);
       this.stage.appendChild(dock);
       this.setDockCollapsed(this.settings.dockCollapsed);
 
@@ -396,7 +430,30 @@ namespace SE {
       this.hoverTip.setAttribute('aria-hidden', 'true');
       this.stage.appendChild(this.hoverTip);
 
+      /* ---- the living interface: Gaia in the corner, the vines, her magic ---- */
+      this.companion = new GaiaCompanion(this.stage, { openGaiaWindow: () => this.windows.show('gaia') });
+      this.vines = new VineLayer(this.stage, el<HTMLElement>('topbar'));
+      this.gaiaMagic = new GaiaMagic({
+        companion: this.companion,
+        tileClient: (tile) => this.tileClient(tile),
+        reduced: () => this.settings.reduceEffects || prefersReducedMotion(),
+        blocked: () => !!this.title || !!activeIntro || Modal.open || this.fateAsking || !!this.launchFilm,
+        volume: () => SFX.volume(),
+      });
+
       this.selectTool(Tool.Examine, false);
+    }
+
+    /** Client px of a tile's centre on the map, or null when it is off screen or the evolution tree covers the map. */
+    private tileClient(tile: number): { x: number; y: number } | null {
+      if (this.windows.isVisible('evolution')) return null;
+      const v = this.editView;
+      let rx = (tile % GRID_W) + 0.5 - v.scrollX;
+      if (rx < 0) rx += GRID_W;
+      const r = this.canvas.getBoundingClientRect();
+      const x = r.left + rx * v.tilePx;
+      const y = r.top + (Math.floor(tile / GRID_W) + 0.5 - v.scrollY) * v.tilePx;
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? { x, y } : null;
     }
 
     /** The map-layers popover beside the map controls: additive layers and one climate overlay. */
@@ -739,18 +796,19 @@ namespace SE {
     }
 
     private buildInfoWindows(): void {
-      // Gaia
-      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 456, width: 300, height: 396 });
+      // Gaia: bottom right, 12 px clear of the map controls (50 px wide, 12 px from the right edge).
+      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -74, y: 456, width: 300, height: 396 });
       const gaiaWrap = make('div', 'gaia-layout');
       gaia.body.appendChild(gaiaWrap);
       this.gaiaPanel = new GaiaPanel(gaiaWrap);
 
-      // History: 4 px clear of the tool card (12 px in, 64 px rail, 8 px gap,
-      // 340 px card) and of the overview map (500 px wide, 12 px from the
-      // right), down to just above the bottom.
+      // History: 4 px clear of the tool card (beside the rail, 340 px wide)
+      // and of the overview map (500 px wide, 12 px from the right), down to
+      // just above the bottom.
+      const histX = this.rail.width + 344;
       const hist = this.windows.create({
         id: 'history', title: 'Verlauf', icon: uiIcon('history'), resetOnOpen: true,
-        x: 428, y: 12, width: -(428 + 516), height: -(12 + 27),
+        x: histX, y: 12, width: -(histX + 516), height: -(12 + 27),
       });
       const histWrap = make('div', 'hist-layout');
       hist.body.appendChild(histWrap);
@@ -851,9 +909,11 @@ namespace SE {
     }
 
     private buildTreeWindow(): void {
+      // Clear of the rail (its Evolution button toggles this window), 12 px from the right edge.
+      const treeX = this.rail.width + 4;
       const win = this.windows.create({
         id: 'evolution', title: 'Evolutionsbaum', icon: uiIcon('evolution'),
-        x: 0.03, y: 0.03, width: 0.94, height: 0.9, cls: 'win-tree',
+        x: treeX, y: 0.03, width: -(treeX + 12), height: 0.9, cls: 'win-tree',
         onShow: () => { this.evolution.refresh(this.world, this.params, true); this.tree.update(true); this.tree.onShown(); },
       });
       this.tree = new EvolutionTreeView({
@@ -871,119 +931,24 @@ namespace SE {
     /* ============================================================ HUD === */
 
     private buildHud(): void {
-      const top = el<HTMLElement>('topbar');
-      const brand = make('div', 'brand');
-      brand.append(img(uiIcon('new-planet'), 'brand-icon'), make('span', 'brand-name', 'SimEarth'), make('span', 'brand-ver', '2.0'));
-      top.prepend(brand);
-
-      const hud = el<HTMLElement>('hud');
-      const chip = (icon: string, title: string, cls = ''): { el: HTMLElement; value: HTMLElement } => {
-        const c = make('div', `hud-chip ${cls}`);
-        // Focusable, so the explanation is reachable by keyboard and by tap,
-        // not only by hovering.
-        c.dataset.tip = title;
-        c.tabIndex = 0;
-        c.setAttribute('role', 'group');
-        c.setAttribute('aria-label', title);
-        const v = make('span', 'hud-value');
-        c.append(img(icon, 'ico'), v);
-        return { el: c, value: v };
-      };
-      const omega = chip(resIcon('energy'), 'Energie (Ω) für Werkzeuge – füllt sich, während die Zeit läuft', 'hud-omega');
-      const omegaBar = make('span', 'hud-bar');
-      omegaBar.appendChild(make('span'));
-      const devTag = omega.el.appendChild(make('span', 'hud-tag', 'DEV')); // DEVMODE
-      omega.el.appendChild(omegaBar);
-      const ep = chip(resIcon('ep'), 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', 'hud-ep');
-      const epRate = make('span', 'hud-sub');
-      ep.el.appendChild(epRate);
-      const o2 = chip(resIcon('oxygen'), 'O₂ Luft: Sauerstoff in der Atmosphäre, in Prozent', 'hud-minor hud-o2');
-      o2.el.appendChild(make('span', 'hud-tag', 'Luft'));
-      const oceanO2 = chip(uiIcon('layer-oceans'), 'O₂ Meer: gelöster Sauerstoff, in Prozent der heutigen Sättigung. Er steigt erst, wenn das gelöste Eisen im Meer verbraucht ist.', 'hud-minor hud-o2');
-      oceanO2.el.appendChild(make('span', 'hud-tag', 'Meer'));
-      const co2 = chip(resIcon('co2'), 'Kohlendioxid in der Atmosphäre', 'hud-minor hud-co2');
-      const temp = chip(resIcon('temperature'), 'Mittlere Temperatur des Planeten', 'hud-minor hud-temp');
-      // The gas chips open the air composition window.
-      for (const c of [o2, oceanO2, co2]) {
-        c.el.setAttribute('role', 'button');
-        c.el.classList.add('hud-link');
-        c.el.addEventListener('click', () => this.windows.toggle('graph-air'));
-        c.el.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.windows.toggle('graph-air'); }
-        });
-      }
-
-      const time = make('div', 'hud-time');
-      const scale = make('span', 'hud-scale');
-      const date = make('span', 'hud-date');
-      time.append(scale, date);
-      time.title = 'Erdzeit und Zeitalter (Optionen: Datum vor heute oder Planetenalter)';
-
-      const speed = make('div', 'speed seg');
-      speed.setAttribute('role', 'group');
-      speed.setAttribute('aria-label', 'Tempo');
-      const play = button({
-        label: 'Pause', icon: uiIcon('pause'), cls: 'icon-btn speed-play', showLabel: false,
-        title: 'Pause / Weiter (Leertaste)', onClick: () => this.togglePause(),
+      this.hud = new LivingTopbar(el<HTMLElement>('topbar'), el<HTMLElement>('hud'), {
+        speedNames: SPEED_NAMES,
+        togglePause: () => this.togglePause(),
+        setSpeed: (s) => this.setSpeed(s),
+        cycleSpeed: () => this.setSpeed(this.speed >= SPEED_NAMES.length - 1 || this.speed === 0 ? 1 : this.speed + 1),
+        toggleAir: () => this.windows.toggle('graph-air'),
+        airOpen: () => this.windows.isVisible('graph-air'),
+        openGameMenu: (anchor) => this.openMenu('game', anchor),
+        fillOmega: (pop) => fillOmegaInfo(pop, this.world),
+        fillEp: (pop) => fillEpInfo(pop, this.world, this.evolution, this.params),
       });
-      speed.appendChild(play);
-      for (let s = 1; s < SPEED_NAMES.length; s++) {
-        const b = button({ label: SPEED_NAMES[s], cls: 'seg-btn speed-btn', title: `${SPEED_NAMES[s]} (${s})`, onClick: () => this.setSpeed(s) });
-        b.textContent = '';
-        const dots = make('span', 'speed-dots');
-        for (let k = 0; k < s; k++) dots.appendChild(make('i'));
-        b.append(dots, make('span', 'sr-only', SPEED_NAMES[s]));
-        speed.appendChild(b);
-        this.speedButtons[s] = b;
-      }
-
-      const cycle = button({
-        label: 'Tempo wechseln', cls: 'speed-cycle', showLabel: false,
-        onClick: () => this.setSpeed(this.speed >= SPEED_NAMES.length - 1 || this.speed === 0 ? 1 : this.speed + 1),
-      });
-      cycle.prepend(make('span', 'speed-dots'));
-      speed.appendChild(cycle);
-      this.speedCycle = cycle;
-
-      const evoBtn = button({ label: 'Evolution', icon: uiIcon('evolution'), cls: 'btn btn-primary evo-btn', title: 'Evolutionsbaum öffnen (E)', onClick: () => this.windows.toggle('evolution') });
-      const evoBadge = make('span', 'badge');
-      evoBtn.appendChild(evoBadge);
-
-      this.hudInfo = new HudInfo();
-      this.hudInfo.attach(omega.el, (pop) => fillOmegaInfo(pop, this.world));
-      this.hudInfo.attach(ep.el, (pop) => fillEpInfo(pop, this.world, this.evolution, this.params));
-
-      hud.append(omega.el, ep.el, o2.el, oceanO2.el, co2.el, temp.el, time, speed, evoBtn);
-      this.hud = {
-        omega: omega.value, omegaBar: omegaBar.firstChild as HTMLElement, ep: ep.value, epRate,
-        o2: o2.value, co2: co2.value, temp: temp.value, date, scale, play, evoBadge, evoBtn,
-        oceanO2: oceanO2.value,
-        devTag, // DEVMODE
-      };
+      this.hudInfo = this.hud.info;
+      this.hudInfo.reduced = () => this.settings.reduceEffects || prefersReducedMotion();
       this.syncSpeedButtons();
     }
 
-    private speedCycle: HTMLButtonElement | null = null;
-
     private syncSpeedButtons(): void {
-      this.speedButtons.forEach((b, s) => { if (b) setPressed(b, this.speed === s); });
-      if (this.speedCycle) {
-        const dots = this.speedCycle.querySelector('.speed-dots');
-        const shown = this.speed === 0 ? this.lastRunningSpeed : this.speed;
-        if (dots) {
-          dots.innerHTML = '';
-          for (let k = 0; k < shown; k++) dots.appendChild(make('i'));
-        }
-        const name = `Tempo: ${SPEED_NAMES[shown]}${this.speed === 0 ? ' (pausiert)' : ''} – tippen zum Wechseln`;
-        this.speedCycle.setAttribute('aria-label', name);
-        this.speedCycle.title = name;
-      }
-      const paused = this.speed === 0;
-      const playImg = this.hud.play.querySelector('img');
-      if (playImg) playImg.src = uiIcon(paused ? 'play' : 'pause');
-      const label = this.hud.play.querySelector('.sr-only');
-      if (label) label.textContent = paused ? 'Weiter' : 'Pause';
-      this.hud.play.classList.toggle('paused', paused);
+      this.hud.syncSpeed(this.speed, this.lastRunningSpeed);
     }
 
     /* ========================================================== menus === */
@@ -1013,9 +978,10 @@ namespace SE {
         checked: () => this.windows.isVisible(id),
       });
 
-      // Three menus with text; speed lives in the status bar, map layers at the map.
-      const defs: MenuDef[] = [
-        {
+      // Three flyout menus: Spiel from the status bar's gear, Fenster and Planet
+      // from the rail; speed lives in the status bar, map layers at the map.
+      this.menus = {
+        game: {
           title: 'Spiel', icon: uiIcon('menu-file'),
           items: [
             { label: 'Neuer Planet …', icon: uiIcon('new-planet'), action: () => void this.confirmNewPlanet() },
@@ -1028,7 +994,7 @@ namespace SE {
             { label: 'Einstellungen …', icon: uiIcon('menu-options'), action: () => void openSettings(this.settingDefs()) },
           ],
         },
-        {
+        windows: {
           title: 'Fenster', icon: uiIcon('menu-windows'),
           items: [
             winItem('Evolutionsbaum', 'evolution', 'evolution', 'E'),
@@ -1044,7 +1010,7 @@ namespace SE {
             { label: 'Fenster zurücksetzen', icon: uiIcon('zoom-fit'), action: () => this.windows.resetLayout() },
           ],
         },
-        {
+        planet: {
           title: 'Planet', icon: uiIcon('menu-models'),
           items: [
             modelItem('Modell Geosphäre', 'model-geo'),
@@ -1058,8 +1024,12 @@ namespace SE {
             winItem('Technologie', 'graph-tech', 'layer-cities'),
           ],
         },
-      ];
-      this.menuBar = new MenuBar(el('menubar'), defs);
+      };
+      this.flyout = new FlyoutMenu(() => this.settings.reduceEffects || prefersReducedMotion());
+      // The old menu bar is gone; its element stays (the record tools copy the page skeleton).
+      const bar = el<HTMLElement>('menubar');
+      bar.replaceChildren();
+      bar.style.display = 'none';
     }
 
     /** The lasting preferences, for the "Einstellungen" dialog (menu "Spiel" and the title screen). */
@@ -1113,8 +1083,22 @@ namespace SE {
     }
 
     private syncWindowButtons(): void {
-      setPressed(this.hud.evoBtn, this.windows.isVisible('evolution'));
+      this.syncEvolutionButton(this.evolution.availableIds().length);
       setPressed(this.mapBtn, this.windows.isVisible('map'));
+      this.flyout.refresh();
+    }
+
+    /**
+     * The rail's evolution button (livingrail.ts): pressed while the tree is open, its badge counts the steps
+     * ready to develop; the rail's knot grows with the planet's plants.
+     */
+    private syncEvolutionButton(available: number): void {
+      this.rail.sync(available, this.windows.isVisible('evolution'), this.living);
+    }
+
+    /** Opens menu `id` as a flyout at `anchor` (or closes it there): 'game' from the status bar's gear, 'planet' and 'windows' from the rail. */
+    private openMenu(id: 'game' | 'planet' | 'windows', anchor: HTMLElement): void {
+      this.flyout.toggle(this.menus[id], anchor);
     }
 
     /* ======================================================= keyboard === */
@@ -1159,7 +1143,7 @@ namespace SE {
         switch (e.key) {
           case 'Escape': {
             // An open menu takes the Escape for itself: one key, one thing closed.
-            if (this.menuBar.isOpen) { this.menuBar.closeAll(); e.preventDefault(); return; }
+            if (this.flyout.isOpen) { this.flyout.close(); e.preventDefault(); return; }
             if (!this.layerPop.hidden) { this.setLayersOpen(false); e.preventDefault(); return; }
             if (this.hudInfo.isOpen) { this.hudInfo.close(); e.preventDefault(); return; }
             const top = this.windows.topmost();
@@ -2198,14 +2182,6 @@ namespace SE {
       return this.sim.mode === 'direct' ? this.world.seed : this.planetSeed;
     }
 
-    /** `relativeDate` picks the Earth date with its era over the planet age. */
-    private dateText(): string {
-      const age = this.world.absoluteYears;
-      if (!this.settings.relativeDate) return `Planetenalter ${formatYears(age)}`;
-      const era = eraAt(age);
-      return `${formatEarthDate(age, true)} · ${this.windows.narrow ? era.short : era.name}`;
-    }
-
     /* =========================================================== tick === */
 
     /** One tick on the page (direct mode; preview pages call it to fast-forward). The worker ticks on its own. */
@@ -2234,31 +2210,19 @@ namespace SE {
     /** DOM writes, throttled to about 10 Hz. */
     private updateUi(): void {
       const w = this.world;
-      const h = this.hud;
+      this.living = this.livingMood.update(w, this.history, performance.now());
+      this.companion.update(this.living);
+      this.vines.update(this.living);
       const stage = omegaStage(w);
       if (stage > this.omegaStageSeen) {
         const s = OMEGA_STAGES[stage];
         this.notifier.message(`Energiestufe ${stage + 1}: ${s.name} – jetzt +${fmt.one(s.regen)} Ω je Zeitschritt, bis ${fmt.int(s.max)} Ω.`, 'ok');
       }
       this.omegaStageSeen = stage;
-      h.omega.textContent = fmt.int(w.omega);
-      h.omegaBar.style.width = `${Math.round((w.omega / OMEGA_STAGES[stage].max) * 100)}%`;
-      h.ep.textContent = fmt.int(w.evo.ep);
-      if (isDevMode()) { h.omega.textContent = h.ep.textContent = '∞'; h.omegaBar.style.width = '100%'; } // DEVMODE
-      h.devTag.hidden = !isDevMode(); // DEVMODE
-      const rate = this.evolution.epRate(w, this.params);
-      h.epRate.textContent = rate > 0 ? `+${fmt.two(rate)}` : '';
+      // `relativeDate`: the Earth date with its era, else the planet age.
+      this.hud.update(w, this.history, this.evolution.epRate(w, this.params), this.settings.relativeDate);
       this.hudInfo.refresh();
-      h.o2.textContent = `${fmt.one(w.o2)} %`;
-      h.co2.textContent = `${fmt.int(w.co2)} ppm`;
-      h.temp.textContent = `${fmt.one(w.globalTemp)} °C`;
-      h.scale.textContent = TIMESCALE_NAMES[w.timeScale];
-      h.date.textContent = this.dateText();
-      const available = this.evolution.availableIds().length;
-      h.evoBadge.textContent = available > 0 ? String(available) : '';
-      h.evoBadge.classList.toggle('show', available > 0);
-      h.evoBtn.setAttribute('aria-label', available > 0
-        ? `Evolutionsbaum öffnen, ${available} ${available === 1 ? 'Schritt' : 'Schritte'} entwickelbar` : 'Evolutionsbaum öffnen');
+      this.syncEvolutionButton(this.evolution.availableIds().length);
 
       this.goalNotice.update(this.evolution.availableIds(), performance.now(), !!this.title || !!activeIntro || this.screenHeld || Modal.open, this.settings.reduceEffects);
       if (this.evolution.revision !== this.toolRevision && (this.selection.tool === Tool.PlaceLife || this.selection.tool === Tool.PlantBiome)) {
@@ -2285,7 +2249,6 @@ namespace SE {
       this.flushChronicle();
       if (this.fauna.pending.length > 0) this.discoveries.push(this.fauna.pending.splice(0));
       this.ripStamps.collect(w, this.fauna, this.evolution);
-      h.oceanO2.textContent = `${fmt.int(w.oceanO2)} %`;
     }
 
     /** Held WASD keys glide the map, at the same screen speed at every zoom; opposite keys cancel out. */
@@ -2382,6 +2345,13 @@ namespace SE {
         }
       }
       if (this.windows.isVisible('gaia')) this.gaiaPanel.render(this.world, now, this.settings.reduceEffects, this.speed === 0);
+      const still = this.settings.reduceEffects || prefersReducedMotion();
+      this.companion.render(now, {
+        still, paused: this.speed === 0,
+        held: this.screenHeld || !!this.title || !!activeIntro || Modal.open || this.fateAsking || !!this.launchFilm,
+      });
+      this.vines.render(now, still);
+      this.gaiaMagic.render(now);
 
       if (now - this.lastUi > 100) {
         this.lastUi = now;
@@ -2675,10 +2645,8 @@ namespace SE {
 
     private enterGame(speed: number): void {
       this.setSpeed(speed, true);
-      if (!this.windows.narrow) {
-        this.windows.show('map', false);
-        this.windows.show('gaia', false);
-      }
+      // Gaia herself lives in the lower left corner now (gaiacompanion.ts); her window opens from there or the menu.
+      if (!this.windows.narrow) this.windows.show('map', false);
       this.canvas.focus({ preventScroll: true });
     }
 

@@ -1,0 +1,27 @@
+/* Gaia in the lower left corner. src/gaiacompanion.ts sets every layout style
+   inline (safe with a stale stylesheet); this only decorates. */
+.companion-btn:focus-visible { outline: 2px dotted #f6cc6a; outline-offset: -2px; }
+
+/* What she says: a small parchment note in a gold rim above her head, its
+   tail pointing down at her. */
+.companion-say {
+  padding: 3px 8px 4px;
+  font-family: var(--font);
+  font-weight: 500;
+  line-height: 1.3;
+  color: #2a1a0e;
+  background: #f6e2bb;
+  border: 2px solid #8f531a;
+  box-shadow: inset 0 -2px 0 #e9cb98, 0 2px 0 rgba(20, 13, 8, 0.5);
+  text-wrap: balance;
+}
+.companion-say::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  bottom: -8px;
+  width: 6px;
+  height: 6px;
+  background: #8f531a;
+  clip-path: polygon(0 0, 100% 0, 0 100%);
+}

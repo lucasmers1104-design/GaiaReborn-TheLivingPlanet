@@ -11,6 +11,8 @@ namespace SE {
     private chip: HTMLElement | null = null;
     private fill: ((pop: HTMLElement) => void) | null = null;
     private tip = '';
+    /** "Effekte reduzieren" or the OS preference, read at each open: the drop-down shows without its slide. */
+    reduced: () => boolean = () => false;
 
     constructor() {
       this.pop.id = 'hud-info';
@@ -65,6 +67,7 @@ namespace SE {
       this.tip = chip.dataset.tip ?? '';
       delete chip.dataset.tip;
       chip.setAttribute('aria-expanded', 'true');
+      this.pop.style.animation = this.reduced() ? 'none' : '';
       this.pop.hidden = false;
       this.refresh();
     }

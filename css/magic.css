@@ -1,0 +1,2 @@
+/* Living interface: Gaia's evolution magic (src/gaiamagic.ts). Its two canvases, .magic-glow and .magic-layer,
+   are laid out, layered and blended inline, so an old stylesheet cannot break them; nothing here may change that. */

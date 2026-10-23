@@ -1,0 +1,42 @@
+/* Living interface: window chrome in natural materials — a dark wood frame lit
+   from the upper left, a thin gold line inside it, a warm title bar with cream
+   text. The bodies stay dark. Motion and the corner sprigs live in
+   src/windowmotion.ts (inline styles, WAAPI); this file only decorates.
+   It loads before the rules of styles.css: one element type more beats their
+   single classes, while the two-class rules of single windows and dialogs
+   (.win.win-examine, .modal.launch-finale-modal …) still win. */
+
+div.win {
+  border-color: #704725 #523319 #36210f #704725;
+  box-shadow: 0 0 0 2px #1f120a, inset 0 0 0 1px #8f531a, 0 12px 26px rgba(0, 0, 0, 0.5);
+}
+div.win.focused {
+  border-color: #8f5e33 #523319 #36210f #8f5e33;
+  box-shadow: 0 0 0 2px #1f120a, inset 0 0 0 1px #c27f2a, 0 14px 30px rgba(0, 0, 0, 0.55);
+}
+
+/* The bar covers the frame's inner gold line, so it draws its own. */
+div.win-head {
+  background: #33210f;
+  border-bottom: 2px solid #1f120a;
+  box-shadow: inset 1px 1px 0 #8f531a, inset -1px 0 0 #8f531a, inset 0 3px 0 #3f2914;
+}
+div.win.focused > div.win-head {
+  background: #3a2511;
+  box-shadow: inset 1px 1px 0 #c27f2a, inset -1px 0 0 #c27f2a, inset 0 3px 0 #4a3017;
+}
+h2.win-title { color: #f6e2bb; text-shadow: 0 2px 0 #1f120a; }
+img.win-icon {
+  background: rgba(246, 204, 106, 0.1);
+  box-shadow: inset 0 0 0 2px rgba(194, 127, 42, 0.6);
+}
+button.win-close { box-shadow: inset 0 0 0 2px #523319; }
+button.win-close:hover { background: #523319; box-shadow: inset 0 0 0 2px #c27f2a; }
+button.win-close:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+
+/* Dialogs get the same frame; their bars and bodies stay as they are. */
+div.modal {
+  border-color: #704725 #523319 #36210f #704725;
+  box-shadow: 0 0 0 2px #1f120a, inset 0 0 0 1px #c27f2a, 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+h2.modal-title { color: #f6e2bb; }

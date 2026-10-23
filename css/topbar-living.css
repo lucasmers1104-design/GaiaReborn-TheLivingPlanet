@@ -1,0 +1,54 @@
+/* =============================================================================
+   Living interface: the status bar (src/livingtopbar.ts). The wood, the
+   parchment panels and every pixel readout are drawn in code, and the layout
+   is inline there; this file only colours the text and polishes the controls.
+   Ink and gold are the UI palette's (tools/uiart/palette.js). --lt-f (set
+   inline) lets the text grow a little with the art at large scales.
+   ========================================================================== */
+
+.lt-chip, .lt-speed, .lt-gear { color: #2a1a0e; }
+.lt-value { font-size: calc(15px * var(--lt-f, 1)); font-weight: 600; line-height: 1.1; }
+.lt-omega .lt-value { color: #8f531a; }
+.lt-ep .lt-value { color: #5c3b9a; }
+.lt-label { font-size: calc(11px * var(--lt-f, 1)); font-weight: 500; line-height: 1.2; color: #644219; }
+.lt-rate { font-weight: 600; color: #2f6e1c; }
+.lt-tag { font-size: calc(10px * var(--lt-f, 1)); font-weight: 600; color: #8f531a; }
+/* Line height 1: under it the era bar needs most of the panel's height at 3 CSS px per art px. */
+.lt-date { font-size: calc(13px * var(--lt-f, 1)); font-weight: 600; line-height: 1; }
+.lt-omega-bar { margin-top: 3px; }
+.lt-era-row { margin-top: 3px; }
+
+.lt-chip:focus-visible { outline: 2px dotted #5e3410; outline-offset: -5px; }
+.lt-btn:hover { background: rgba(255, 250, 238, 0.5); }
+.lt-btn:active { background: rgba(94, 52, 16, 0.14); }
+.lt-btn:focus-visible { outline: 2px dotted #5e3410; outline-offset: -2px; }
+.lt-play.paused { background: rgba(246, 204, 106, 0.55); }
+
+/* The hover tip under a chip (the Ω and EP drop-downs remove it while open). */
+.lt-chip[data-tip]:hover::after,
+.lt-chip[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 10px);
+  /* Centred by auto margins in a widened box: translateX(-50%) lands on half
+     pixels and blurs the pixel font. */
+  left: -200px;
+  right: -200px;
+  margin-inline: auto;
+  width: max-content;
+  max-width: 260px;
+  padding: 7px 10px;
+  background: #fdf1d8;
+  border: 2px solid #c27f2a;
+  box-shadow: 0 0 0 2px #36210f, var(--shadow);
+  color: #2a1a0e;
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.35;
+  white-space: normal;
+  z-index: 700;
+  pointer-events: none;
+}
+
+/* Until the atlas has decoded (or if it never does): plain parchment behind the text. */
+#topbar.lt-noart .lt-chip, #topbar.lt-noart .lt-speed, #topbar.lt-noart .lt-gear { background: #f6e2bb; }
