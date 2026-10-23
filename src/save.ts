@@ -236,7 +236,7 @@ namespace SE {
         savedAt: new Date().toISOString(),
         name: w.name,
         seed: w.seed, rngState: w.rng.getState(), ticks: w.ticks, omega: w.omega,
-        co2: w.co2, o2: w.o2, n2: w.n2, vapor: w.vapor, dust: w.dust,
+        co2: w.co2, o2: w.o2, n2: w.n2, ch4: w.ch4, vapor: w.vapor, dust: w.dust,
         oceanIron: w.oceanIron, oceanO2: w.oceanO2,
         timeScale: w.timeScale, absoluteYears: w.absoluteYears, scaleYears: w.scaleYears,
         sentient: w.sentientClass === Life.None ? '' : LIFE[w.sentientClass].id,
@@ -461,6 +461,8 @@ namespace SE {
       w.co2 = num(raw.co2, 0, 5000, 'CO₂');
       w.o2 = num(raw.o2, 0, 40, 'Sauerstoff');
       w.n2 = num(raw.n2, 0, 100, 'Stickstoff');
+      // Optional (no format change): a save from before methane starts at the level the climate was tuned with.
+      w.ch4 = raw.ch4 === undefined ? CH4_BASE : num(raw.ch4, 0, CH4_MAX, 'Methan');
       w.vapor = num(raw.vapor, 0, 1, 'Wasserdampf');
       w.dust = num(raw.dust, 0, 1, 'Staub');
       if ((raw.version as number) >= 6) {

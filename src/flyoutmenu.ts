@@ -6,17 +6,22 @@
  * rail button, below and left of the gear, always inside the viewport. Enter,
  * Space, ↓ or → on a menu button open it with the first row focused; ↑/↓
  * move, Esc (or ←) closes and gives the focus back to the button; a press
- * anywhere else closes it. Position, size and stacking are inline, so a stale
- * stylesheet can never let it overflow; css/rail-living.css paints it.
+ * anywhere else closes it. Vine sprigs grow round its top corners like a
+ * window's, a tendril down the edge by its button. Position, size and stacking
+ * are inline, so a stale stylesheet can never let it overflow;
+ * css/rail-living.css paints it.
  * ========================================================================== */
 
 namespace SE {
   /** CSS px between the menu and its button, and the least margin to the viewport's edges. */
   const FLYOUT_GAP = 8;
+  /** One growth step of the vine sprigs, the windows' pace (src/windowmotion.ts). */
+  const SPRIG_STEP_MS = 80;
 
   interface Flyout {
     readonly root: HTMLElement;
     readonly menu: MenuRows;
+    readonly decor: WindowDecor;
   }
 
   export class FlyoutMenu {
@@ -24,6 +29,7 @@ namespace SE {
     private shown: { def: MenuDef; anchor: HTMLElement; fly: Flyout } | null = null;
     /** The next open comes from a key on its menu button: it focuses the first row. */
     private byKey = false;
+    private sprigTimer = 0;
 
     /** `reduced`: "Effekte reduzieren" or the OS preference, read at each open: the menu shows without its slide. */
     constructor(private readonly reduced: () => boolean) {
@@ -70,9 +76,13 @@ namespace SE {
       this.close(false);
       const fly = this.built.get(def) ?? this.build(def);
       fly.menu.refresh();
-      fly.root.style.animation = this.reduced() ? 'none' : '';
+      const still = this.reduced();
+      fly.root.style.animation = still ? 'none' : '';
       fly.root.style.display = 'block';
       this.place(fly.root, anchor);
+      // The tendril hangs down the edge nearest the button: the rail's on the left, the gear's on the right.
+      fly.decor.side = fly.root.dataset.side === 'right' ? 'l' : 'r';
+      this.sprout(fly.decor, still);
       anchor.setAttribute('aria-haspopup', 'menu');
       anchor.setAttribute('aria-expanded', 'true');
       this.shown = { def, anchor, fly };
@@ -86,6 +96,7 @@ namespace SE {
       const o = this.shown;
       if (!o) return;
       this.shown = null;
+      clearTimeout(this.sprigTimer);
       o.fly.root.style.display = 'none';
       o.anchor.setAttribute('aria-expanded', 'false');
       if (refocus) o.anchor.focus({ preventScroll: true });
@@ -105,9 +116,23 @@ namespace SE {
       const menu = buildMenuRows(list, def.items, (e, row) => this.onKey(e, row), () => this.close(root.contains(document.activeElement)));
       root.append(title, list);
       document.body.appendChild(root);
-      const fly = { root, menu };
+      const fly = { root, menu, decor: new WindowDecor(root, true) };
       this.built.set(def, fly);
       return fly;
+    }
+
+    /** The sprigs grow from a sprout to grown in steps while the menu slides in; still mode shows them grown. */
+    private sprout(decor: WindowDecor, still: boolean): void {
+      clearTimeout(this.sprigTimer);
+      decor.g = still ? decor.full() : 0;
+      decor.draw();
+      const step = (): void => {
+        if (decor.g >= decor.full()) return;
+        decor.g++;
+        decor.draw();
+        this.sprigTimer = window.setTimeout(step, SPRIG_STEP_MS);
+      };
+      if (!still) this.sprigTimer = window.setTimeout(step, SPRIG_STEP_MS);
     }
 
     /** Beside a button in the left half (the rail), else below it and right-aligned (the gear); clamped to the viewport. */

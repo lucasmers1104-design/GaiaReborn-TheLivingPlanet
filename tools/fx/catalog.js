@@ -143,10 +143,11 @@ const SPRITES = [
 
   // The kapok tree (src/kapoklayer.ts, src/kapok.ts): one per planet, an emergent in the heart of the largest
   // rainforest, fixed while its tile stays rainforest. Ceiba pentandra in the map's 3/4 view, lit from the upper left:
-  // a broad, flat, tiered umbrella crown high over the canopy, a tall straight pale grey trunk, plank buttress roots
-  // flaring at the foot. 20 px wide (columns 2–21) and 24 high: the foot on the tile's last row, the crown 8 px into
-  // the tile above and 2 px over the tiles left and right. It stands over the rainforest's own trees. Still: one frame.
-  { id: 'kapok_tree', name: 'Kapokbaum, Urwaldriese', family: 'kapok', w: 24, h: 24, frames: 1, fps: 0, anchor: 'foot', layer: 'object' },
+  // a broad, flat, tiered umbrella crown high over the canopy, a thick straight trunk, plank buttress roots flaring
+  // at the foot, in colours of its own (a sunlit lime crown, a silvery green-grey trunk) so it reads as special.
+  // 32 × 40, twice the canopy trees: the foot on the tile's last row, the crown up to 24 px into the tiles above
+  // and 8 px over the tiles left and right. It stands over the rainforest's own trees. Still: one frame.
+  { id: 'kapok_tree', name: 'Kapokbaum, Urwaldriese', family: 'kapok', w: 32, h: 40, frames: 1, fps: 0, anchor: 'foot', layer: 'object' },
 
   // Sea ice calving off the pack edge (src/icecalving.ts); the runtime picks every frame. Crack and slab come wide
   // (0–3, open water north or south) and tall (4–7, east or west), never rotated. The crack is drawn over the

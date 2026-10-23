@@ -21,7 +21,7 @@ Stand: 2026-10-22 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 8 | `ACH_GAIA_CONTENT` | Gaia lächelt | Gaias Stimmung erreicht „Zufrieden“ | Lächelndes Planetengesicht |
 | 9 | `ACH_EPOCH_TODAY` | Vertrautes Terrain | Eine Partie in der Epoche „Heute“ starten | Die heutigen Kontinente als Pixel-Globus |
 | 10 | `ACH_FILM` | Logenplatz der Evolution | Einen Evolutionsfilm komplett ansehen | Filmrolle mit DNA-Strang |
-| 39 | `ACH_GLOBETROTTER` | Weltreisender | In der Übersichtskarte (Globus-Ansicht) per Klick ans andere Ende der Welt springen | Globus mit gestrichelter Flugbahn und Ortsmarke |
+| 39 | `ACH_GLOBETROTTER` | Weltreisender | In der Übersichtskarte per Klick auf den Globus ans andere Ende der Welt springen | Globus mit gestrichelter Flugbahn und Ortsmarke |
 | 45 | `ACH_GAIA_COUGH` | Dicke Luft | Gaia hustet zum ersten Mal (Luft so verschmutzt, dass Smog um sie kreist: `gaiaFactors().clean < 0.5`, `src/gaia.ts`) | Pixel-Planetengesicht mit zugekniffenen Augen hustet ein graues Smogwölkchen aus |
 | 53 | `ACH_SHARK_FINS` | Haie in Sicht! | Zum ersten Mal kreisende Haiflossen auf der Karte sehen (Zoom ≥ 16 px; erscheinen ab und zu, sobald Haie im Meer leben: `SharkLayer`, `src/sharklayer.ts`) | Zwei dunkle Haiflossen ziehen einen Kreis durch blaues Wasser |
 
@@ -188,7 +188,7 @@ Shared style for all: detailed 16-bit pixel art, bold saturated colors, one cent
 55. A white limestone pyramid with a shining gilded tip standing next to a grey stone wall section with crenellations and a square watchtower, both on warm sand, a low orange evening sun behind them.
 56. A black steam locomotive with a red cowcatcher, a funnel-shaped chimney and big red driving wheels, puffing a white steam cloud, running on a track with wooden sleepers through a cut in a dark green pine forest.
 57. Two black ancient warships with oars and square sails fighting at sea, flaming arrows flying between them, one ship sinking at the bow with fire on deck and a black smoke column, white foam and splashes around it.
-58. A gigantic kapok tree towering high above a dense dark-green rainforest canopy, its broad flat tiered umbrella crown lit golden-green by the sun, a tall smooth pale grey trunk with huge flared plank buttress roots, a tiny red bromeliad in the fork, a soft magnifying-glass glint in the upper corner.
+58. A gigantic kapok tree towering high above a dense dark-green rainforest canopy, its broad tiered crown of bright lime-green leaf clumps lit by the sun, a thick smooth silvery green-grey trunk forking into great limbs, huge flared plank buttress roots, a soft magnifying-glass glint in the upper corner.
 ```
 
 ## Ideen für später (wenn das Feature kommt)

@@ -226,7 +226,8 @@ namespace SE {
       // faster than it warmed it, so the planet *cooled* as CO2 climbed — which
       // both wiped the biosphere within a few hundred ticks and told the player
       // exactly the wrong story about what their factories were doing.
-      atmo.co2Delta += CHEM_RATE * demand * mix.fossilFuel * 0.008;
+      const burnt = CHEM_RATE * demand * mix.fossilFuel * 0.008;
+      atmo.co2Delta += burnt;
       atmo.dustDelta += demand * mix.fossilFuel * 0.000008;
       // Combustion does consume oxygen, but a heavier coefficient let industry
       // outpace the entire biosphere's photosynthesis and strip the air to 7%,
@@ -234,7 +235,10 @@ namespace SE {
       atmo.o2Delta -= CHEM_RATE * demand * mix.fossilFuel * 0.000015;
 
       // Every city also breathes.
-      atmo.co2Delta += CHEM_RATE * (people / TILE_COUNT) * 0.4;
+      const breath = CHEM_RATE * (people / TILE_COUNT) * 0.4;
+      atmo.co2Delta += breath;
+      // Cattle, rice fields and leaking natural gas: methane in step with the carbon.
+      atmo.ch4Delta += CIV_CH4_PER_CO2 * (burnt + breath);
     }
 
     /** At or below this aggression a civilization never starts a nuclear war. */

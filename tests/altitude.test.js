@@ -277,7 +277,7 @@ test('map legend: metre marks from the same conversion', () => {
   globalThis.document = { createElement: node };
   const marks = (mode) => {
     const host = node();
-    SE.renderMapLegend(host, {}, mode, false);
+    SE.renderMapLegend(host, {}, mode);
     return host.children[0].children[1].children.map((s) => s.textContent);
   };
   try {

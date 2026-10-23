@@ -1,0 +1,95 @@
+/* =============================================================================
+   Living interface: the window "Luftzusammensetzung" (src/airpanel.ts) in the
+   status bar's materials: gold-rimmed parchment cards on dark wood planks,
+   dark ink text, hard 2 px edges. The molecules and bars are pixel art on
+   canvases whose sizes, like the tooltip's position, are set inline; this
+   only paints and lays out. Colours: tools/uiart/palette.js via the --rail-*
+   tokens of css/rail-living.css.
+   ========================================================================== */
+
+.win-air .win-body { padding: 10px; background: var(--rail-grain); scrollbar-color: var(--rail-gold-lo) transparent; }
+.air { display: flex; flex-direction: column; gap: 8px; color: var(--rail-ink); }
+
+.air-card {
+  background: var(--rail-parch);
+  border: 2px solid var(--rail-gold);
+  box-shadow: inset 0 2px 0 var(--rail-parch-hi), inset 0 -2px 0 var(--rail-parch-lo), 0 0 0 2px var(--rail-wood-deep);
+}
+.air-card:hover,
+.air-step:hover { border-color: var(--rail-gold-hi); }
+.air-card:focus-visible,
+.air-step:focus-visible { outline: none; border-color: var(--rail-gold-hi); box-shadow: inset 0 0 0 2px var(--rail-gold-hi), 0 0 0 2px var(--rail-wood-deep); }
+.air-card.warn,
+.air-step.warn { border-color: #c4453f; }
+.air-card.warn .air-value,
+.air-step.warn .air-value { color: #8e2f33; }
+
+.air-name { font-family: var(--font-display); font-size: 13.5px; font-weight: 700; line-height: 1.2; }
+.air-formula { margin-left: 6px; color: var(--rail-gold-lo); font-weight: 700; }
+.air-value { font-family: var(--mono); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Pressure and temperature: sprite left, name and value above the bar. */
+.air-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.air-big {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "sprite name value" "sprite bar bar";
+  align-items: center;
+  gap: 4px 10px;
+  padding: 8px 10px;
+}
+.air-big .air-sprite { grid-area: sprite; }
+.air-big .air-name { grid-area: name; }
+.air-big .air-value { grid-area: value; }
+.air-big .air-bar { grid-area: bar; }
+
+.air-mix { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; }
+.air-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.air-legend-item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.air-swatch { width: 10px; height: 10px; box-shadow: 0 0 0 2px var(--rail-wood); }
+
+/* The oxygen's way: three stages side by side with arrows; the stage it is at glows. */
+.air-oxy { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; }
+.air-way { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: center; gap: 4px; }
+.air-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 2px solid transparent;
+  text-align: center;
+}
+.air-step .air-name { font-size: 12.5px; }
+.air-step .air-bar { order: 1; }
+.air-step.now { background: var(--rail-parch-hi); border-color: var(--rail-gold); box-shadow: inset 0 -2px 0 var(--rail-parch-lo); }
+
+/* The gases, one under another: molecule, name with formula, bar, value. */
+.air-list { display: flex; flex-direction: column; gap: 6px; }
+.air-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto 6.2em;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 10px 4px 8px;
+}
+.air-row .air-value { text-align: right; }
+
+.air-key { display: flex; align-items: center; gap: 8px; margin: 2px 0 0; color: var(--rail-text-2); font-size: 12px; }
+.air-key-line { flex: none; width: 18px; height: 2px; background: #72b92e; box-shadow: 0 2px 0 #2f6e1c; }
+
+.air-tip {
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--rail-wood);
+  border: 2px solid var(--rail-gold);
+  box-shadow: 0 0 0 2px var(--rail-wood-deep), 0 10px 22px rgba(0, 0, 0, 0.5);
+  color: var(--rail-text);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.air-tip-title { display: block; color: var(--rail-parch-hi); font-family: var(--font-display); font-size: 13px; }
+.air-tip-scale { display: block; margin-bottom: 4px; color: var(--rail-text-3); font-size: 11.5px; }
+.air-tip-text { margin: 0; }

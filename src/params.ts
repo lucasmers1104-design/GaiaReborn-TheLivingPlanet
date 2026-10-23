@@ -24,10 +24,14 @@ namespace SE {
   export const GH_CO2 = 9;
   /** Greenhouse forcing at full water-vapour saturation. */
   export const GH_VAPOR = 11;
-  /** Pressure broadening per percentage point of N2 off baseline. */
-  export const GH_N2 = 0.02;
   /** CO2 reference concentration (ppm) for the logarithmic forcing curve. */
   export const CO2_REF = 280;
+  /** Greenhouse forcing per doubling of (1 + the methane above CH4_BASE in ppm). */
+  export const GH_CH4 = 0.4;
+  /** Methane (ppm) the climate was calibrated with, the pre-industrial air: no less than it warms nothing. */
+  export const CH4_BASE = 0.7;
+  /** Pressure broadening per bar of air pressure off today's (doubling Earth's nitrogen warms it some 4 K). */
+  export const GH_PRESSURE = 3;
 
   export const OCEAN_INERTIA = 0.05;
   export const LAND_INERTIA = 0.22;
@@ -222,6 +226,30 @@ namespace SE {
   /** Silicate weathering: warm, wet, rocky worlds scrub CO2. */
   export const WEATHERING = 0.0012 * CHEM_RATE;
 
+  /* ------------------------------------------------------------ methane -- */
+  /*
+   * Made by archaea in oxygen-free water, swamps, rock and vents and a
+   * civilization's cattle, rice and gas; destroyed by oxygen (src/methane.ts).
+   * Without oxygen it builds up over some fifty ticks towards the hundreds of
+   * ppm that kept the young Earth warm; in today's air it lasts a few ticks
+   * (about ten years on Earth) and stays under 1 ppm.
+   */
+  /** Share of the methane lost per tick in air without oxygen, and on top of it per percent of air oxygen. */
+  export const CH4_LOSS_ANOXIC = 0.0025 * CHEM_RATE;
+  export const CH4_LOSS_PER_O2 = 0.00125 * CHEM_RATE;
+  /** Methane (ppm per tick) from rock and hydrothermal vents, scaled by the volcano slider. */
+  export const CH4_ABIOTIC = 0.0005 * CHEM_RATE;
+  /** Methane (ppm per tick) from archaea at full density on every tile, in a sea without oxygen. */
+  export const CH4_ARCHAEA = 25 * CHEM_RATE;
+  /** Sea oxygen (% of today's saturation) at which half of the archaea's methane still escapes the water. */
+  export const CH4_SEA_O2_HALF = 10;
+  /** Methane (ppm per tick) if swamps covered the whole planet. */
+  export const CH4_WETLAND = 0.4 * CHEM_RATE;
+  /** Methane a civilization releases per ppm of CO2 it emits: cattle, rice fields, leaking natural gas. */
+  export const CIV_CH4_PER_CO2 = 0.05;
+  /** Most methane the air holds, ppm. */
+  export const CH4_MAX = 20000;
+
   /* ------------------------------------------------ ocean oxygen and iron -- */
   /*
    * Sources represent net oxygen, i.e. buried
@@ -340,7 +368,7 @@ namespace SE {
 
   export const ATMO_SLIDERS: readonly SliderDef<keyof AtmoParams>[] = [
     { key: 'solarInput', label: 'Sonneneinstrahlung', hint: 'Energie, die der Planet von seiner Sonne erhält.' },
-    { key: 'greenhouse', label: 'Treibhauseffekt', hint: 'Wie stark CO₂ und Wasserdampf Wärme halten.' },
+    { key: 'greenhouse', label: 'Treibhauseffekt', hint: 'Wie stark CO₂, Methan und Wasserdampf Wärme halten.' },
     { key: 'cloudAlbedo', label: 'Wolken-Rückstrahlung', hint: 'Wie viel Sonnenlicht Wolken ins All zurückwerfen.' },
     { key: 'surfaceAlbedo', label: 'Boden-Rückstrahlung', hint: 'Wie hell Eis, Wüsten und Wälder reflektieren.' },
     { key: 'thermalTransfer', label: 'Wärmeaustausch Luft/Meer', hint: 'Wie stark Winde und Strömungen Wärme verteilen.' },

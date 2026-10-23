@@ -290,7 +290,8 @@ namespace SE {
     /* ---- global atmosphere ---- */
     co2 = 400;    // parts per million
     o2 = 0;       // percent
-    n2 = 78;      // percent
+    n2 = 78;      // percent of today's air: nitrogen's partial pressure (see airPressure)
+    ch4 = 0;      // parts per million
     vapor = 0.45; // 0 .. 1 saturation
     dust = 0.02;  // 0 .. 1 opacity
 
@@ -429,6 +430,7 @@ namespace SE {
       this.co2 = 400;
       this.o2 = 0;
       this.n2 = 78;
+      this.ch4 = 0;
       this.vapor = 0.45;
       this.dust = 0.02;
       this.oceanIron = 1;
@@ -555,6 +557,7 @@ namespace SE {
       this.co2 = o.co2;
       this.o2 = o.o2;
       this.n2 = o.n2;
+      this.ch4 = o.ch4;
       this.vapor = o.vapor;
       this.dust = o.dust;
       this.oceanIron = o.oceanIron;

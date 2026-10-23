@@ -13,6 +13,8 @@ namespace SE {
     readonly id: string;
     readonly title: string;
     readonly icon: string;
+    /** A UI-atlas sprite drawn in place of `icon` once the atlas has decoded. */
+    readonly sprite?: string;
     /** Default geometry as fractions-or-pixels of the stage; see place(). */
     readonly width: number;
     readonly height: number;
@@ -37,6 +39,8 @@ namespace SE {
     readonly body: HTMLDivElement;
     readonly head: HTMLDivElement;
     private readonly titleText: HTMLHeadingElement;
+    private readonly icon: HTMLElement;
+    private titleSprite: PixelCanvas | null = null;
     private manager: WindowManager | null = null;
     /** Set once the player has moved or resized it; layout resets clear it. */
     userPlaced = false;
@@ -53,7 +57,8 @@ namespace SE {
       this.root.setAttribute('aria-labelledby', `win-title-${opts.id}`);
 
       this.head = make('div', 'win-head');
-      this.head.appendChild(img(opts.icon, 'win-icon'));
+      this.icon = img(opts.icon, 'win-icon');
+      this.head.appendChild(this.icon);
       this.titleText = make('h2', 'win-title', opts.title);
       this.titleText.id = `win-title-${opts.id}`;
       this.titleText.tabIndex = -1;
@@ -77,6 +82,18 @@ namespace SE {
       }).observe(this.root);
     }
 
+    /** The title's pixel icon replaces the SVG once the atlas has decoded; drawn at each show (the device pixel ratio may have changed). */
+    private drawTitleSprite(): void {
+      const id = this.opts.sprite;
+      if (!id || !UiArt.shared().ready || !UiArt.shared().sprite(id)) return;
+      if (!this.titleSprite) {
+        this.titleSprite = new PixelCanvas('win-icon', 0);
+        this.titleSprite.canvas.style.position = 'static';
+        this.icon.replaceWith(this.titleSprite.canvas);
+      }
+      drawUiIcon(this.titleSprite, id, 24);
+    }
+
     attach(manager: WindowManager): void {
       this.manager = manager;
     }
@@ -97,6 +114,7 @@ namespace SE {
       this.shown = true;
       this.root.classList.remove('hidden');
       this.manager?.focus(this);
+      this.drawTitleSprite();
       if (!was) {
         if (this.opts.resetOnOpen) this.manager?.place(this, true);
         this.manager?.clamp(this);
@@ -316,6 +334,8 @@ namespace SE {
   export interface MenuItem {
     readonly label: string;
     readonly icon?: string;
+    /** A UI-atlas sprite drawn in place of `icon` once the atlas has decoded. */
+    readonly sprite?: string;
     readonly action?: () => void;
     /** Shows a check mark and makes the item a checkbox for assistive tech. */
     readonly checked?: () => boolean;
@@ -379,6 +399,10 @@ namespace SE {
   export function buildMenuRows(panel: HTMLElement, items: readonly MenuItem[], onKey: (e: KeyboardEvent, row: number) => void, onPick: () => void): MenuRows {
     const rows: { el: HTMLElement; item: MenuItem }[] = [];
     const sliderSyncs = new Map<HTMLElement, () => void>();
+    const sprites = new Map<PixelCanvas, string>();
+    // Pixel icons fill a 24 CSS px box in whole device px (12 art px at 2 CSS px each): a menu with any gets
+    // the wider icon column, inline, so a stale stylesheet can't misalign it.
+    const columns = items.some((i) => i.sprite) ? '18px 24px 1fr auto' : '';
     for (const item of items) {
       if (item.separator) { panel.appendChild(make('div', 'menu-sep')); continue; }
       if (item.slider) {
@@ -397,11 +421,19 @@ namespace SE {
       row.className = 'menu-item';
       row.setAttribute('role', item.checked ? 'menuitemcheckbox' : 'menuitem');
       row.tabIndex = -1;
+      row.style.gridTemplateColumns = columns;
       const mark = make('span', 'menu-check');
       mark.appendChild(img(uiIcon('check'), 'ico'));
+      let icon: HTMLElement = item.icon ? img(item.icon, 'ico menu-item-icon') : make('span', 'menu-item-icon');
+      if (item.sprite && UiArt.shared().ready && UiArt.shared().sprite(item.sprite)) {
+        const pc = new PixelCanvas('menu-item-icon', 0);
+        pc.canvas.style.position = 'static';
+        sprites.set(pc, item.sprite);
+        icon = pc.canvas;
+      }
       row.append(
         mark,
-        item.icon ? img(item.icon, 'ico menu-item-icon') : make('span', 'menu-item-icon'),
+        icon,
         make('span', 'menu-label', item.label),
         make('span', 'menu-hint', item.hint ?? ''),
       );
@@ -418,6 +450,8 @@ namespace SE {
     return {
       rows,
       refresh: () => {
+        // Drawn at each show: the device pixel ratio may have changed since (another monitor).
+        for (const [pc, id] of sprites) drawUiIcon(pc, id, 24);
         for (const { el, item } of rows) {
           const checked = item.checked?.() ?? false;
           el.classList.toggle('checked', checked);

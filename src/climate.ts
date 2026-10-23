@@ -40,13 +40,21 @@ namespace SE {
       return floor + (1 - floor) * Math.max(0, Math.cos(latRad));
     }
 
+    /** Each part of the greenhouse forcing in degrees, before the "Treibhauseffekt" slider. */
+    static greenhouseTerms(world: WorldState): { co2: number; ch4: number; vapor: number; pressure: number } {
+      return {
+        co2: GH_CO2 * Math.log2(1 + world.co2 / CO2_REF),
+        ch4: GH_CH4 * Math.log2(1 + Math.max(0, world.ch4 - CH4_BASE)),
+        vapor: GH_VAPOR * world.vapor,
+        // Denser air broadens absorption lines a little; thin air loses heat.
+        pressure: clamp(GH_PRESSURE * (airPressure(world) - 1), -4, 4),
+      };
+    }
+
     /** Total greenhouse forcing in degrees, from the global gas mix. */
     static greenhouseForcing(world: WorldState, params: ModelParams): number {
-      const co2Term = GH_CO2 * Math.log2(1 + world.co2 / CO2_REF);
-      const vaporTerm = GH_VAPOR * world.vapor;
-      // Denser air broadens absorption lines a little; thin air loses heat.
-      const pressureTerm = clamp(GH_N2 * (world.n2 - 78), -4, 4);
-      return (co2Term + vaporTerm + pressureTerm) * mul(params.atmo.greenhouse);
+      const t = ClimateSystem.greenhouseTerms(world);
+      return (t.co2 + t.ch4 + t.vapor + t.pressure) * mul(params.atmo.greenhouse);
     }
 
     step(world: WorldState, params: ModelParams): void {
@@ -282,6 +290,8 @@ namespace SE {
     oceanO2Delta = 0;
     co2Delta = 0;
     dustDelta = 0;
+    /** Methane the civilization released this tick, ppm; the biosphere's own is counted in stepMethane. */
+    ch4Delta = 0;
 
     step(world: WorldState, params: ModelParams): void {
       // --- Carbon dioxide ---
@@ -302,6 +312,9 @@ namespace SE {
       const outgassing = OceanChemistry.step(world, params, this.oceanO2Delta);
       const oxidation = world.o2 * OXIDATION * (0.5 + world.o2 / 40);
       world.o2 += this.o2Delta + outgassing - oxidation - OceanChemistry.reducingSink(world.o2);
+
+      // --- Methane --- (after the oxygen, which destroys it)
+      stepMethane(world, params, this.ch4Delta);
 
       // --- Water vapour ---
       // Equilibrium humidity rises with sea area and global temperature. The
@@ -326,6 +339,7 @@ namespace SE {
       this.oceanO2Delta = 0;
       this.co2Delta = 0;
       this.dustDelta = 0;
+      this.ch4Delta = 0;
     }
   }
 }

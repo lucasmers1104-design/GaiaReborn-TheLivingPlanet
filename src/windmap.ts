@@ -18,10 +18,14 @@ namespace SE {
       [Math.round(r * 0.20 + 22), Math.round(g * 0.20 + 22), Math.round(b * 0.20 + 22)]];
   });
 
+  /** The index into WIND_BELTS of the belt tile i lies in. */
+  export function windBelt(i: number): number {
+    return Math.min(5, Math.floor((Math.floor(i / GRID_W) + 0.5) * 6 / GRID_H));
+  }
+
   /** Muted continents keep the wind belts readable over both land and sea. */
   export function windMapColor(world: WorldState, i: number): Rgb {
-    const belt = Math.min(5, Math.floor((Math.floor(i / GRID_W) + 0.5) * 6 / GRID_H));
-    return WIND_BACKGROUNDS[belt][world.isWater(i) ? 0 : 1];
+    return WIND_BACKGROUNDS[windBelt(i)][world.isWater(i) ? 0 : 1];
   }
 
   /** Append a shaft and two open arrowhead strokes to the current path. */

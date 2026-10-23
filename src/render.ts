@@ -4,7 +4,7 @@
  * EditView  a scrollable, zoomed tile view drawn from pixel sprites, with the
  *           five additive data layers and six exclusive climate overlays.
  * MapView   the whole planet at a glance in any of the twelve map modes, flat
- *           or as a globe, with the Edit Window's viewport drawn as a rectangle.
+ *           and on a globe turned to the Edit Window's viewport, which both outline.
  * ========================================================================== */
 
 namespace SE {
@@ -728,10 +728,6 @@ namespace SE {
         if (!previewing) fx.drawShake(ctx, this.base, cam, now);
         fx.drawGround(ctx, world, cam, this.land, now, cities);
       }
-      if (this.pixelTerrain) {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        this.kapok.draw(ctx, cam, world);
-      }
       // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
       if (this.layers.cities) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -759,6 +755,12 @@ namespace SE {
       if (this.layers.cities) {
         this.settlers.draw(ctx, this, world, now, dpr, this.cities);
         this.bands.draw(ctx, this, world, now, dpr);
+      }
+      // Over the creatures and settlers: the crown hides the tile behind it, so nothing there may show through.
+      if (this.pixelTerrain) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.kapok.draw(ctx, cam, world);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       if (fx) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1267,11 +1269,11 @@ namespace SE {
   const NEWS_PULSE_MS = 1400;
   const NEWS_PINGS_MAX = 24;
   const CITY_RIM: Rgb = [10, 14, 12];
+  /** Radians the globe may still be off the viewport and count as turned: under a pixel on its disc. */
+  const GLOBE_SETTLED = 0.003;
 
   export class MapView {
     mode: MapMode = MapMode.Terrain;
-    /** Flat Robinson-ish projection, or the planet as a globe. */
-    globe = false;
     /** Longitude at the globe's centre. */
     spin = 0;
     /** Latitude at the globe's centre. */
@@ -1289,16 +1291,20 @@ namespace SE {
 
     private readonly canvas: HTMLCanvasElement;
     private readonly ctx: CanvasRenderingContext2D;
+    private readonly globeCtx: CanvasRenderingContext2D;
     private readonly buffer: HTMLCanvasElement;
     private readonly bufferCtx: CanvasRenderingContext2D;
     private readonly image: ImageData;
     private readonly winds = new WindMapLayer();
 
-    constructor(canvas: HTMLCanvasElement) {
+    /** `canvas` shows the flat map, `globeCanvas` the globe; both draw from one texture. */
+    constructor(canvas: HTMLCanvasElement, private readonly globeCanvas: HTMLCanvasElement) {
       this.canvas = canvas;
       const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('SimEarth: 2D context unavailable for the Map window');
+      const globeCtx = globeCanvas.getContext('2d');
+      if (!ctx || !globeCtx) throw new Error('SimEarth: 2D context unavailable for the Map window');
       this.ctx = ctx;
+      this.globeCtx = globeCtx;
 
       this.buffer = document.createElement('canvas');
       this.buffer.width = GRID_W;
@@ -1311,26 +1317,10 @@ namespace SE {
       for (let i = 3; i < this.image.data.length; i += 4) this.image.data[i] = 255;
     }
 
-    /** Convert a pointer position to world tile coordinates. */
+    /** Convert a pointer position on the flat map to world tile coordinates. */
     tileAt(clientX: number, clientY: number): { x: number; y: number } | null {
       const rect = this.canvas.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
-      if (this.globe) {
-        const r = Math.min(rect.width, rect.height) * 0.46;
-        const nx = (clientX - rect.left - rect.width / 2) / r;
-        const ny = (clientY - rect.top - rect.height / 2) / r;
-        const d2 = nx * nx + ny * ny;
-        if (d2 > 1) return null;
-        const nz = Math.sqrt(1 - d2);
-        const cosT = Math.cos(this.tilt);
-        const sinT = Math.sin(this.tilt);
-        const lat = Math.asin(clamp(-ny * cosT + nz * sinT, -1, 1));
-        const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
-        return {
-          x: wrapX(Math.floor(((lon / (Math.PI * 2)) + 0.5) * GRID_W)),
-          y: clampY(Math.floor((0.5 - lat / Math.PI) * GRID_H)),
-        };
-      }
       const fx = (clientX - rect.left) / rect.width;
       const fy = (clientY - rect.top) / rect.height;
       if (fx < 0 || fy < 0 || fx >= 1 || fy >= 1) return null;
@@ -1338,6 +1328,32 @@ namespace SE {
         x: clamp(Math.floor(fx * GRID_W), 0, GRID_W - 1),
         y: clamp(Math.floor(fy * GRID_H), 0, GRID_H - 1),
       };
+    }
+
+    /** Convert a pointer position on the globe to world tile coordinates; null beside its disc. */
+    globeTileAt(clientX: number, clientY: number): { x: number; y: number } | null {
+      const rect = this.globeCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const r = Math.min(rect.width, rect.height) * 0.46;
+      const nx = (clientX - rect.left - rect.width / 2) / r;
+      const ny = (clientY - rect.top - rect.height / 2) / r;
+      const d2 = nx * nx + ny * ny;
+      if (d2 > 1) return null;
+      const nz = Math.sqrt(1 - d2);
+      const cosT = Math.cos(this.tilt);
+      const sinT = Math.sin(this.tilt);
+      const lat = Math.asin(clamp(-ny * cosT + nz * sinT, -1, 1));
+      const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
+      return {
+        x: wrapX(Math.floor(((lon / (Math.PI * 2)) + 0.5) * GRID_W)),
+        y: clampY(Math.floor((0.5 - lat / Math.PI) * GRID_H)),
+      };
+    }
+
+    /** The tile in the middle of the Edit window's viewport. */
+    viewCenter(): { x: number; y: number } | null {
+      const e = this.editRect;
+      return e ? { x: wrapX(Math.floor(e.x + Math.min(GRID_W, e.w) / 2)), y: clampY(Math.floor(e.y + e.h / 2)) } : null;
     }
 
     private textureKey = '';
@@ -1359,17 +1375,13 @@ namespace SE {
       const h = this.canvas.height;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.imageSmoothingEnabled = false;
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, w, h);
-
-      if (this.globe) {
-        this.renderGlobe(ctx, w, h);
-      } else {
-        ctx.drawImage(this.buffer, 0, 0, GRID_W, GRID_H, 0, 0, w, h);
-        if (this.mode === MapMode.AirCurrents) this.winds.drawFlat(ctx, w, h, this.pixelScale * (window.devicePixelRatio || 1));
-        this.drawEditRect(ctx, w, h);
-        this.drawPings(ctx, (x, y) => [x * w / GRID_W, y * h / GRID_H]);
-      }
+      ctx.drawImage(this.buffer, 0, 0, GRID_W, GRID_H, 0, 0, w, h);
+      if (this.mode === MapMode.AirCurrents) this.winds.drawFlat(ctx, w, h, this.pixelScale * (window.devicePixelRatio || 1));
+      this.drawEditRect(ctx, w, h);
+      this.drawPings(ctx, (x, y) => [x * w / GRID_W, y * h / GRID_H]);
+      // Folded away the globe has no size, but keeps turning with the view so it shows the right place when it returns.
+      this.aimAtEditRect();
+      if (fitCanvas(this.globeCanvas, this.pixelScale)) this.renderGlobe(this.globeCtx, this.globeCanvas.width, this.globeCanvas.height);
     }
 
     /** Mark the spot of a piece of news. */
@@ -1381,6 +1393,12 @@ namespace SE {
     /** Rings are pulsing: the map wants frames, not just the few a still texture needs. */
     get pulsing(): boolean {
       return this.pings.length > 0;
+    }
+
+    /** The globe still turns towards the Edit window's viewport, so it wants frames too. */
+    get turning(): boolean {
+      const d = this.globeOffset();
+      return !d || Math.abs(d[0]) > GLOBE_SETTLED || Math.abs(d[1]) > GLOBE_SETTLED;
     }
 
     /** The planet in the current mode into the buffer, the technology map's cities stamped large. */
@@ -1472,48 +1490,67 @@ namespace SE {
     private renderGlobe(ctx: CanvasRenderingContext2D, w: number, h: number): void {
       if (!this.globeSrc) this.globeSrc = this.bufferCtx.getImageData(0, 0, GRID_W, GRID_H).data;
       const src = this.globeSrc;
-      const out = ctx.createImageData(w, h);
-      const dst = out.data;
-
       const radius = Math.min(w, h) * 0.46;
       const cx = w / 2;
       const cy = h / 2;
-      this.aimAtEditRect();
+      const look = this.globeLook(ctx, w, h, radius, cx, cy);
+      const dst = look.image.data;
+      for (let p = 0, q = 0; p < look.from.length; p++, q += 4) {
+        const s = look.from[p];
+        if (s < 0) continue;
+        const k = look.shade[p];
+        dst[q] = src[s] * k;
+        dst[q + 1] = src[s + 1] * k;
+        dst[q + 2] = src[s + 2] * k;
+      }
+      ctx.putImageData(look.image, 0, 0);
+      this.decorateGlobe(ctx, w, h, radius, cx, cy);
+      if (this.mode === MapMode.AirCurrents) this.winds.drawGlobe(ctx, radius, cx, cy, this.spin, this.tilt);
+      this.drawGlobeRect(ctx, radius, cx, cy);
+      this.drawPings(ctx, (x, y) => this.globePoint(x, y, radius, cx, cy));
+    }
+
+    private look: { key: string; image: ImageData; from: Int32Array; shade: Float32Array } | null = null;
+
+    /**
+     * Which texture pixel each globe pixel shows (-1 beside the disc) and its
+     * terminator shade. Worked out again only when size, spin or tilt change:
+     * the trigonometry per pixel is most of a globe frame, and a still globe
+     * is redrawn with every tick.
+     */
+    private globeLook(ctx: CanvasRenderingContext2D, w: number, h: number, radius: number, cx: number, cy: number): { image: ImageData; from: Int32Array; shade: Float32Array } {
+      const key = `${w}|${h}|${this.spin}|${this.tilt}`;
+      if (this.look?.key === key) return this.look;
+      // Beside the disc the image stays transparent, so space shows there.
+      const look = this.look && this.look.image.width === w && this.look.image.height === h
+        ? { ...this.look, key }
+        : { key, image: ctx.createImageData(w, h), from: new Int32Array(w * h), shade: new Float32Array(w * h) };
+      this.look = look;
       // Orthographic view tilted to `tilt`: rotate the view ray about the x axis.
       const cosT = Math.cos(this.tilt);
       const sinT = Math.sin(this.tilt);
-
       for (let py = 0; py < h; py++) {
         const ny = (py - cy) / radius;
         for (let px = 0; px < w; px++) {
           const nx = (px - cx) / radius;
           const d2 = nx * nx + ny * ny;
-          const p = (py * w + px) * 4;
+          const p = py * w + px;
           if (d2 > 1) {
-            dst[p + 3] = 0; // outside the disc: leave space black
+            look.from[p] = -1;
             continue;
           }
           const nz = Math.sqrt(1 - d2);
           const lat = Math.asin(clamp(-ny * cosT + nz * sinT, -1, 1));
           const lon = Math.atan2(nx, ny * sinT + nz * cosT) + this.spin;
-
           const tx = wrapX(Math.round(((lon / (Math.PI * 2)) + 0.5) * GRID_W));
           const ty = clampY(Math.round((0.5 - lat / Math.PI) * GRID_H));
-          const s = (ty * GRID_W + tx) * 4;
-
+          look.from[p] = (ty * GRID_W + tx) * 4;
           // A touch of terminator shading so it reads as a sphere.
-          const shadeK = 0.55 + 0.45 * nz;
-          dst[p] = src[s] * shadeK;
-          dst[p + 1] = src[s + 1] * shadeK;
-          dst[p + 2] = src[s + 2] * shadeK;
-          dst[p + 3] = 255;
+          look.shade[p] = 0.55 + 0.45 * nz;
+          look.image.data[p * 4 + 3] = 255;
         }
       }
-      ctx.putImageData(out, 0, 0);
-      this.decorateGlobe(ctx, w, h, radius, cx, cy);
-      if (this.mode === MapMode.AirCurrents) this.winds.drawGlobe(ctx, radius, cx, cy, this.spin, this.tilt);
-      this.drawGlobeRect(ctx, radius, cx, cy);
-      this.drawPings(ctx, (x, y) => this.globePoint(x, y, radius, cx, cy));
+      return look;
     }
 
     /** A tile position on the globe's disc, or null on its far side. */
@@ -1530,19 +1567,27 @@ namespace SE {
       return [cx + x * r, cy - (y * cosT - z * sinT) * r];
     }
 
-    /** Ease the globe towards the Edit window's viewport; idle spin without one. */
-    private aimAtEditRect(): void {
+    /** How far the globe still has to turn to face the Edit window's viewport: [longitude, latitude] in radians; null without one. */
+    private globeOffset(): [number, number] | null {
       const e = this.editRect;
-      if (!e) {
-        this.spin += 0.012;
-        return;
-      }
+      if (!e) return null;
       const lonT = ((e.x + Math.min(GRID_W, e.w) / 2) / GRID_W - 0.5) * Math.PI * 2;
       const latT = (0.5 - (e.y + e.h / 2) / GRID_H) * Math.PI;
       let d = lonT - this.spin;
       d -= Math.round(d / (Math.PI * 2)) * Math.PI * 2;
-      this.spin += d * 0.15;
-      this.tilt += (latT - this.tilt) * 0.15;
+      return [d, latT - this.tilt];
+    }
+
+    /** Ease the globe towards the Edit window's viewport; idle spin without one. */
+    private aimAtEditRect(): void {
+      const d = this.globeOffset();
+      if (!d) {
+        this.spin += 0.012;
+        return;
+      }
+      // The last bit at once, so a still globe keeps its spin and tilt and reuses its projection.
+      this.spin += Math.abs(d[0]) > GLOBE_SETTLED ? d[0] * 0.15 : d[0];
+      this.tilt += Math.abs(d[1]) > GLOBE_SETTLED ? d[1] * 0.15 : d[1];
     }
 
     /** The viewport's outline on the sphere: a lat/lon box, so it narrows towards the poles. */

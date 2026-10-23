@@ -1,8 +1,8 @@
 /* =============================================================================
  * SimEarth 2.0 — small SVG charts
  * -----------------------------------------------------------------------------
- * The few chart shapes the windows share: a ring gauge with a marked target
- * band, a donut, a sparkline and a segmented bar. Each returns SVG markup so
+ * The few chart shapes the windows share: a donut, a sparkline and a
+ * segmented bar. Each returns SVG markup so
  * a panel can rebuild a chart in one assignment; numbers only, any text that
  * goes into markup passes through esc().
  * ========================================================================== */
@@ -31,39 +31,6 @@ namespace SE {
     const span = Math.min(to - from, 0.9999);
     if (span <= 0) return '';
     return `M${polar(cx, cy, r, from)}A${r} ${r} 0 ${span > 0.5 ? 1 : 0} 1 ${polar(cx, cy, r, from + span)}`;
-  }
-
-  export interface GaugeOptions {
-    /** 0..1 along the dial. */
-    readonly value: number;
-    readonly color: string;
-    /** The healthy range, as 0..1 along the dial. */
-    readonly band?: readonly [number, number];
-    /** Marks along the dial, 0..1. */
-    readonly ticks?: readonly number[];
-    readonly size?: number;
-  }
-
-  /** A 270° dial open at the bottom, with its value arc and a target band. */
-  export function gaugeSvg(o: GaugeOptions): string {
-    const s = o.size ?? 120;
-    const c = s / 2;
-    const r = s * 0.4;
-    const w = s * 0.085;
-    const start = 0.625;
-    const sweep = 0.75;
-    const at = (f: number): number => start + clamp(f, 0, 1) * sweep;
-    let out = `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}" class="gauge" aria-hidden="true">`;
-    out += `<path d="${arcPath(c, c, r, at(0), at(1))}" class="gauge-track" stroke-width="${w}"/>`;
-    if (o.band) out += `<path d="${arcPath(c, c, r + w * 0.85, at(o.band[0]), at(o.band[1]))}" class="gauge-band" stroke-width="${w * 0.35}"/>`;
-    const v = clamp(o.value, 0, 1);
-    if (v > 0.002) out += `<path d="${arcPath(c, c, r, at(0), at(v))}" stroke="${o.color}" stroke-width="${w}" class="gauge-value"/>`;
-    for (const t of o.ticks ?? []) {
-      out += `<path d="M${polar(c, c, r - w * 0.9, at(t))}L${polar(c, c, r - w * 0.35, at(t))}" class="gauge-tick"/>`;
-    }
-    const [kx, ky] = polarXY(c, c, r, at(v));
-    out += `<circle cx="${kx.toFixed(2)}" cy="${ky.toFixed(2)}" r="${(w * 0.62).toFixed(2)}" class="gauge-knob" stroke="${o.color}"/>`;
-    return `${out}</svg>`;
   }
 
   export interface Segment {

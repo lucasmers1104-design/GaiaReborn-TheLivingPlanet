@@ -34,7 +34,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['gaia', 'gaiasleep', 'gaiamood', 'gaiamagic', 'scene', 'vine', 'chrome', 'icons', 'magic'];
+const FAMILIES = ['gaia', 'gaiasleep', 'gaiamood', 'gaiamagic', 'scene', 'vine', 'chrome', 'icons', 'magic', 'air'];
 
 /** Every Gaia body sprite shares this box and its foot anchor, so poses swap without a jump. */
 const GAIA_W = 64;
@@ -188,6 +188,9 @@ const SPRITES = [
   // 0 sprout, 1 short, 2 grown with leaves, 3 grown with a flower. `_l` for the top left corner, `_r` mirrored.
   { id: 'win_corner_l', name: 'Rankenzweig an der linken oberen Fensterecke: 0–3 wächst', family: 'chrome', w: 18, h: 14, frames: 4, fps: 0, anchor: 'topleft' },
   { id: 'win_corner_r', name: 'Rankenzweig an der rechten oberen Fensterecke: 0–3 wächst', family: 'chrome', w: 18, h: 14, frames: 4, fps: 0, anchor: 'topleft' },
+  // The handle that folds a window's lower part away (the overview map's globe): a parchment pill in a gold rim
+  // with an ink chevron. 0 chevron up (fold away), 1 the same lit (hover, focus), 2 chevron down (unfold), 3 lit.
+  { id: 'fold_tab', name: 'Klapplasche: 0 Pfeil hoch, 1 hoch beleuchtet, 2 Pfeil runter, 3 runter beleuchtet', family: 'chrome', w: 21, h: 10, frames: 4, fps: 0, anchor: 'topleft' },
 
   // --------------------------------------------------------------- icons ---
   // Rail icons, 14 × 14: 0 dark ink on parchment (normal, hover), 1 pale yellow-green on deep green (selected).
@@ -209,6 +212,19 @@ const SPRITES = [
   { id: 'hud_co2', name: 'Graue Wolke (CO₂)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'hud_temp', name: 'Thermometer (Temperatur)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'hud_time', name: 'Sanduhr mit Blatt (Erdzeit)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  // The altitude brush's choices in the tool dock, 18 × 16, in colour (for the wood tile and the green selected one).
+  { id: 'opt_raise', name: 'Schneeberg mit Pfeil hoch (Anheben)', family: 'icons', w: 18, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'opt_lower', name: 'Grünes Tal mit Fluss und Pfeil runter (Absenken)', family: 'icons', w: 18, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+  // The Planet menu's rows, 12 × 12, in colour with a dark selective outline, read on the flyout's dark wood,
+  // its lit hover row and its green checked row: the four sphere models above, the four diagrams below.
+  { id: 'menu_geo', name: 'Vulkan mit Glut über Gesteinsschichten (Modell Geosphäre)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_atmo', name: 'Sonne hinter einer Wolke (Modell Atmosphäre)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_bio', name: 'Laubbaum auf einem Grashügel (Modell Biosphäre)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_civ', name: 'Häuschen mit rotem Dach und Rauch (Modell Zivilisation)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_air', name: 'Windwirbel mit Luftbläschen (Diagramm Luftzusammensetzung)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_biomes', name: 'Tortendiagramm: Wald, Wüste, Meer, Eis (Diagramm Lebensraumanteile)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_life', name: 'Fisch mit Seetang (Diagramm Lebensformen)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'menu_tech', name: 'Messing-Zahnrad mit Funke (Diagramm Technologie)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   // Controls, 10 × 10, dark ink: 0 normal, 1 lit (pressed or active).
   { id: 'ctl_play', name: 'Weiter', family: 'icons', w: 10, h: 10, frames: 2, fps: 0, anchor: 'topleft' },
   { id: 'ctl_pause', name: 'Pause', family: 'icons', w: 10, h: 10, frames: 2, fps: 0, anchor: 'topleft' },
@@ -228,6 +244,24 @@ const SPRITES = [
   { id: 'glow', name: 'Weiches Leuchten (gerastert): 0 klein, 1 mittel, 2 groß', family: 'magic', w: 17, h: 17, frames: 3, fps: 0, anchor: 'center' },
   { id: 'comet', name: 'Kopf des Energiestroms, flackert', family: 'magic', w: 9, h: 9, frames: 4, fps: 12, anchor: 'center' },
   { id: 'burst', name: 'Lichtausbruch am Ziel: Ring dehnt sich, zerfällt in Funken', family: 'magic', w: 33, h: 33, frames: 7, fps: 10, anchor: 'center' },
+
+  // ----------------------------------------------------------------- air ---
+  // The window "Luftzusammensetzung" (src/airpanel.ts): parchment cards on dark wood, read at 2 CSS px per art px.
+  // Molecules as ball-and-stick models in the usual atom colours (O red, N blue, C dark grey, H white), lit from
+  // the upper left, with a dark selective outline so the white hydrogen reads on parchment; transparent around.
+  { id: 'air_n2', name: 'Stickstoff N₂: zwei blaue Kugeln, Dreifachbindung', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_co2', name: 'Kohlendioxid CO₂: dunkelgraues C zwischen zwei roten O, gerade, Doppelbindungen', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_ch4', name: 'Methan CH₄: dunkelgraues C, vier weiße H als Tetraeder (eins vorn, eins dahinter)', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_h2o', name: 'Wasserdampf H₂O: rotes O, zwei weiße H im Winkel, ein Dampfwölkchen', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_dust', name: 'Staub: schwebende Körner und Flocken in Braun und Grau', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  // The oxygen's way, left to right: iron in the sea binds it first, then it fills the sea, then the air.
+  { id: 'air_fe', name: 'Gelöstes Eisen Fe²⁺: rostorange Kugel im Meerwasser, Rostflocken sinken', family: 'air', w: 24, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_o2_sea', name: 'O₂ im Meer: O₂-Molekül (zwei rote Kugeln) im Meerwasser mit Bläschen', family: 'air', w: 24, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_o2_sky', name: 'O₂ in der Luft: O₂-Molekül vor hellem Himmel mit Wölkchen', family: 'air', w: 24, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_arrow', name: 'Goldener Pfeil nach rechts zwischen den Sauerstoff-Stufen', family: 'air', w: 7, h: 7, frames: 1, fps: 0, anchor: 'topleft' },
+  // The two summary cards above the gases.
+  { id: 'air_baro', name: 'Barometer: runde Messingdose mit Skala und Zeiger (Luftdruck)', family: 'air', w: 16, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'air_temp', name: 'Thermometer mit roter Säule und Kugel (Mitteltemperatur)', family: 'air', w: 16, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
 ];
 
 /** Most colours one frame may use. Gaia's poses need more than an effect. */

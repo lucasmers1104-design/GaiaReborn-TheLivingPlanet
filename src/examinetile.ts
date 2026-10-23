@@ -64,7 +64,7 @@ namespace SE {
     const land = PixelTerrain.shared();
     if (TERRAIN_STYLE !== 'pixel' || !land.ready || !land.art) return null;
     land.ensure(world);
-    // The kapok tree's tile, and the one its crown fills, show the whole tree on its own tile.
+    // The kapok tree's tile, and the ones its crown fills, show the whole tree on its own tile.
     const kapok = onKapok(world, idx(x, y)) ? FxArt.shared().frame(KAPOK_SPRITE, 0, 1) : null;
     const sp = FX_MANIFEST.sprites[KAPOK_SPRITE];
     let box: { left: number; top: number; right: number; bottom: number } | null = null;

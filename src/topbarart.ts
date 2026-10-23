@@ -126,6 +126,15 @@ namespace SE {
     ui.draw(pc.ctx, id, f, sp.ax, sp.ay);
   }
 
+  /** Frame 0 of sprite `id`, as large as fits a `box` CSS px square in whole device px: where an SVG icon stood. */
+  export function drawUiIcon(pc: PixelCanvas, id: string, box: number): void {
+    const sp = UiArt.shared().sprite(id);
+    if (!sp) return;
+    const dpr = window.devicePixelRatio || 1;
+    const s = Math.max(1, Math.floor((box * dpr) / Math.max(sp.w, sp.h)));
+    drawUiSprite(pc, id, 0, { s, dpr, u: s / dpr, beside: false });
+  }
+
   /** `n` speed pips in a row, the first `lit` of them lit: the one button that steps through the speeds. */
   export function drawPipRow(pc: PixelCanvas, n: number, lit: number, sc: UiScale): void {
     const ui = UiArt.shared();

@@ -6,7 +6,8 @@
  * outgrows. Part of the landscape, so it shows with every layer. Visual only:
  * the simulation never reads this.
  *
- * Wiring (render.ts, after the ground): `draw` expects ctx at identity
+ * Wiring (render.ts, after the creatures and settlers, before the disaster
+ * objects and storks): `draw` expects ctx at identity
  * (device pixels) and leaves it there.
  * ========================================================================== */
 

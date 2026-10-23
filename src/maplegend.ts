@@ -3,8 +3,7 @@
  * -----------------------------------------------------------------------------
  * Continuous maps (height, temperature, rain) get a gradient strip with its
  * ends named; habitats, life and eras get icons that switch each category on
- * and off, the other categorical ones (currents, drift) swatches. "Werte"
- * swaps the legend for the planet's headline figures.
+ * and off, the other categorical ones (currents, drift) swatches.
  * ========================================================================== */
 
 namespace SE {
@@ -130,9 +129,9 @@ namespace SE {
     return `${fmt.int(Math.round(elevationMeters(elevation) / 10) * 10).replace('-', '−')} m`;
   }
 
-  export function renderMapLegend(host: HTMLElement, world: WorldState, mode: MapMode, values: boolean,
+  export function renderMapLegend(host: HTMLElement, world: WorldState, mode: MapMode,
     hidden = 0, onToggle: (bit: number) => void = () => {}): void {
-    const items = values ? [] : mode === MapMode.Biomes ? biomeToggles(world) : mode === MapMode.LifeMap ? lifeToggles(world)
+    const items = mode === MapMode.Biomes ? biomeToggles(world) : mode === MapMode.LifeMap ? lifeToggles(world)
       : mode === MapMode.Technology ? techToggles(world) : [];
     if (items.length > 0) {
       toggles(host, mode, items, hidden, onToggle);
@@ -141,32 +140,15 @@ namespace SE {
     delete host.dataset.toggles;
     host.classList.remove('legend-icons');
     host.innerHTML = '';
-    if (values) {
-      const stats: [string, string][] = [
-        [resIcon('temperature'), `${fmt.one(world.globalTemp)} °C`],
-        [resIcon('co2'), `${fmt.int(world.co2)} ppm CO₂`],
-        [resIcon('oxygen'), `${fmt.one(world.o2)} % O₂ Luft`],
-        [uiIcon('layer-oceans'), `${fmt.int(world.oceanO2)} % O₂ Meer`],
-        [resIcon('biomass'), `${fmt.pct(world.lifeCover)} belebt`],
-      ];
-      for (const [icon, s] of stats) {
-        const row = make('div', 'legend-line');
-        row.append(img(icon, 'ico'), make('span', undefined, s));
-        host.appendChild(row);
-      }
-      return;
-    }
     switch (mode) {
       case MapMode.Terrain:
         strip(host, -1, 1, (v) => sampleRamp(v < 0 ? DEPTH_RAMP : ELEV_RAMP, v), [-1, 0, 1].map(metersLabel));
-        swatch(host, 'Flüsse', RIVER_MAP_COLOR);
         break;
       case MapMode.Oceans:
         // Open sea and coastal sea get half the strip each, so the middle label sits on the shelf edge.
         strip(host, 0, 1, (v) => sampleRamp(DEPTH_RAMP, v < 0.5 ? lerp(-1, COAST_DEPTH, v * 2) : lerp(COAST_DEPTH, 0, v * 2 - 1)),
           [-1, COAST_DEPTH, 0].map(metersLabel));
         swatch(host, 'Land', SEAFLOOR_LAND_COLOR);
-        swatch(host, 'Flüsse', RIVER_MAP_COLOR);
         break;
       case MapMode.Technology:
         host.appendChild(make('span', 'legend-line', 'Noch keine Städte'));

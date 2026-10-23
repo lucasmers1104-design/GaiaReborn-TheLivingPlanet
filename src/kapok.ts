@@ -15,7 +15,7 @@ namespace SE {
   /** Tiles from the rainforest's edge (eight neighbours) the tree needs: 3 is a solid 5 × 5 block around it. */
   export const KAPOK_CORE = 3;
 
-  /** The Examine window's card on the tree's tile and the tile its crown reaches into. */
+  /** The Examine window's card on the tree's tile and the tiles its crown fills. */
   export const KAPOK_INFO = {
     title: 'Kapokbaum, ein Urwaldriese', icon: 'broadleaf',
     text: 'Ein Kapokbaum wird bis zu 70 m hoch und ragt weit über das Kronendach. Weil seine Wurzeln im nährstoffarmen Boden flach bleiben, stützen ihn mächtige Brettwurzeln. ' +
@@ -76,9 +76,14 @@ namespace SE {
     }
   }
 
-  /** Whether tile `i` shows the tree: its own, or the one above, which its crown fills. */
+  /** Whether tile `i` shows the tree: its own, or one of the 3 × 2 tiles above that its crown (32 × 40 px) fills. */
   export function onKapok(world: WorldState, i: number): boolean {
-    return world.kapokTree >= 0 && (i === world.kapokTree || i === world.kapokTree - GRID_W);
+    const k = world.kapokTree;
+    if (k < 0) return false;
+    // −1, 0, 1 for the tree's column and its neighbours, across the east-west wrap.
+    const dx = ((i % GRID_W) - (k % GRID_W) + GRID_W + 1) % GRID_W - 1;
+    const dy = ((k / GRID_W) | 0) - ((i / GRID_W) | 0);
+    return dy === 0 ? dx === 0 : (dy === 1 || dy === 2) && Math.abs(dx) <= 1;
   }
 
   /** The chronicle entry for examining tile `at`, or null if the tree isn't there or is in the chronicle. */

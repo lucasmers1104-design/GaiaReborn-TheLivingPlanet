@@ -174,8 +174,8 @@ namespace SE {
 
   /* -------------------------------------------------------------- decor -- */
 
-  /** The sprigs at a window's top corners and, for a special window, its tendril. */
-  class WindowDecor {
+  /** The sprigs at a window's (or a flyout menu's) top corners and, for a special window, its tendril. */
+  export class WindowDecor {
     /** The sprigs' frame: 0 sprout … 2 grown, 3 grown with a flower; -1 none. */
     g = -1;
     /** The side the window came from: its tendril hangs there. */

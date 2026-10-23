@@ -30,8 +30,9 @@ namespace SE {
     const ls = world.landscape[i] as Landscape;
     const dens = DENSITY_NAMES[LANDSCAPE_DENSITIES[ls]]?.[world.landscapeDensity[i]];
     const name = LANDSCAPE_NAMES[ls] + (dens ? ` (${dens})` : '');
-    // Ice and snow are covers, not grounds: they lie on whatever is beneath.
-    return ls === Landscape.Ice || ls === Landscape.Snow ? name : `${name} auf ${SUBSTRATE_NAMES[world.substrate[i]]}`;
+    // Ice and snow are covers, not grounds: they lie on whatever is beneath. Bare rock needs no "auf Fels".
+    const ground = SUBSTRATE_NAMES[world.substrate[i]];
+    return ls === Landscape.Ice || ls === Landscape.Snow || LANDSCAPE_NAMES[ls] === ground ? name : `${name} auf ${ground}`;
   }
 
   export function landDigest(world: WorldState, x: number, y: number): string {

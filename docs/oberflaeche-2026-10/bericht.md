@@ -64,7 +64,13 @@ aus einem Rezept).
 - Zustände: normal, Hover (goldener Rand), gedrückt, gewählt (grün mit Pfeillasche und Leuchten), Tastaturfokus
   (goldener Ring).
 - Die drei Menüs Spiel, Planet und Fenster öffnen sich als Ausklappmenüs neben ihrem Knopf (Spiel am Zahnrad); Inhalte
-  und Tastenbedienung wie bisher, die alte Menüzeile ist entfallen.
+  und Tastenbedienung wie bisher, die alte Menüzeile ist entfallen. Wie an den Fenstern wachsen beim Öffnen Rankenzweige
+  an den oberen Ecken ein (alle 80 ms ein Schritt, bei „Effekte reduzieren“ sofort ausgewachsen), dazu eine Ranke an der
+  Kante zum Knopf.
+- Das Menü Planet hat Pixel-Icons (`menu_*`, 12 × 12, farbig für das dunkle Holz): Vulkan über Gesteinsschichten, Sonne
+  hinter einer Wolke, Laubbaum und Häuschen für die vier Modelle; Windwirbel mit Bläschen, Tortendiagramm der
+  Lebensräume, Fisch mit Seetang und Messing-Zahnrad für die vier Diagramme. Die acht Fenster tragen dasselbe Pixel-Icon
+  in ihrer Titelleiste. Spiel und Fenster zeigen noch die SVG-Icons.
 
 **Fenster (`src/windowmotion.ts`)**
 - Ein Fenster gleitet von der näheren Seite herein; oft genutzte Fenster (Untersuchen, Art, Evolutionsbaum, Lexikon,
@@ -74,6 +80,24 @@ aus einem Rezept).
   also bleiben Tastenkürzel, Esc und Knöpfe so schnell wie bisher.
 - Rahmen aus dunklem Holz mit feiner Goldlinie, warmer Titelleiste und cremefarbenem Titel; die Inhalte bleiben dunkel und
   gut lesbar.
+
+**Übersichtskarte (`src/mapinfo.ts`, `MapView` in `src/render.ts`)**
+- Von oben: flache Karte, die Leiste der zwölf Kartenmodi, die Legende, unten links immer ein Globus über die halbe
+  Fensterbreite im gewählten Modus. Er dreht sich in etwa 2 s zum Ausschnitt der Hauptkarte und zeigt ihn als Rahmen. Die Schalter „Globus“ und „Werte“
+  sind entfallen.
+- Ein Klick auf Karte oder Globus springt dorthin und zeigt das Feld rechts neben dem Globus; ein Klick mit „Untersuchen“
+  auf der Hauptkarte zeigt dort ebenso sein Feld (vor dem ersten Klick und nach einem neuen Planeten die Bildmitte): sein Bild wie im Untersuchen-Fenster, Breiten- und Längengrad, Landschaft, Zustand (karg bis üppig) und
+  Bedeckung, dann grün der Wert des Kartenmodus dort (z. B. 4 °C, Westwinde, Platte zieht nach Osten, Stadtname) und in zwei
+  Spalten, soweit der Modus sie nicht schon nennt, Lebensraum, Höhe oder Tiefe, Temperatur, Niederschlag, vorherrschendes
+  Leben und Pflanzen.
+- Ein stillstehender Globus verwendet seine Projektion wieder (knapp 1 ms je Bild statt 8 ms bei dpr 1,25); neu gerechnet
+  wird nur, während er sich dreht.
+- Eine Klapplasche aus Pergament mit Goldrand (`fold_tab` im UI-Atlas) zwischen Legende und Globus blendet Globus und
+  Feldkarte aus und wieder ein: Pfeil nach oben, solange sie zu sehen sind, nach unten, wenn sie eingeklappt sind; Hover
+  und Tastaturfokus lassen sie aufleuchten. Die Wahl bleibt gespeichert (Einstellung `mapGlobe`).
+- Das Fenster ist ausgeklappt 696 px hoch, eingeklappt 455 px (ein verschobenes oder in der Größe geändertes Fenster wächst
+  und schrumpft um die Globuszeile), und steht 74 px vom rechten Rand, also links neben den Kartenknöpfen, damit es sie
+  auch auf niedrigen Bildschirmen nicht verdeckt; das Gaia-Fenster öffnet darunter.
 
 **Gaias Zauber (`src/gaiamagic.ts`, `src/dnahelix.ts`)**
 - Nur bei den neun großen Schritten: Leben entsteht, Landpflanzen, Gefäßpflanzen, erste Wälder, Blütenpflanzen, erste
@@ -103,9 +127,9 @@ Speicherfeld**; Spielstände bleiben unverändert und sehen nach dem Laden sofor
 
 ## 3. Pixelkunst und Technik
 
-- Alle 80 Sprites kommen aus Rezepten in `tools/uiart/` (`node tools/ui-atlas.js`), Vertrag `tools/uiart/catalog.js`.
+- Alle 102 Sprites kommen aus Rezepten in `tools/uiart/` (`node tools/ui-atlas.js`), Vertrag `tools/uiart/catalog.js`.
   Die Palette ist die der Landschaft plus 88 eigene Farben (Pergament, Gold, Holz, Haut, Haar, Ranken, Welken, Blüten,
-  Zauberlicht), 193 insgesamt (`tools/uiart/palette.js`). Der Atlas (512 × 519, 19 KB) steckt als Daten-URL in
+  Zauberlicht), 193 insgesamt (`tools/uiart/palette.js`). Der Atlas (512 × 532, 21 KB) steckt als Daten-URL in
   `src/uiatlas.ts`, damit er über `file://` ohne Server lädt.
 - Gaias Körper baut `tools/uiart/gaia-body.js` für alle Posen; ihre Posen haben ein leeres Gesicht, Augen, Brauen, Mund und
   Wangenröte setzt das Spiel an den Gesichtspunkt der Pose (zehn Augen, vier Brauen, acht Münder).

@@ -5,11 +5,6 @@
    ========================================================================== */
 
 /* ---- shared chart parts ---- */
-.gauge-track { fill: none; stroke: rgba(255, 255, 255, 0.08); stroke-linecap: butt; }
-.gauge-band { fill: none; stroke: rgba(143, 220, 154, 0.55); stroke-linecap: butt; }
-.gauge-value { fill: none; stroke-linecap: butt; }
-.gauge-tick { stroke: rgba(255, 255, 255, 0.4); stroke-width: 2; stroke-linecap: butt; }
-.gauge-knob { fill: #f6f1df; stroke-width: 2.5; }
 .donut-track { fill: none; stroke: rgba(255, 255, 255, 0.05); }
 .spark { display: block; width: 100%; height: 30px; overflow: visible; }
 
@@ -18,32 +13,6 @@
 
 .seg-bar { display: flex; height: 16px; border-radius: 0; overflow: hidden; gap: 2px; background: rgba(255, 255, 255, 0.05); }
 .seg-bar-part { min-width: 3px; }
-
-/* ---- air: dials ---- */
-.dial-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
-.dial-card {
-  display: grid;
-  grid-template-columns: 104px 1fr;
-  align-items: center;
-  gap: 4px 10px;
-  padding: 8px 12px 8px 6px;
-  border-radius: 0;
-  background: var(--raise);
-  border: 2px solid var(--glass-border);
-  clip-path: var(--px-clip);
-}
-.dial-card.warn { border-color: rgba(255, 122, 107, 0.45); background: rgba(255, 122, 107, 0.07); }
-.dial-face { position: relative; width: 104px; height: 104px; }
-.dial-mid { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
-.dial-mid .ico { width: 18px; height: 18px; opacity: 0.9; }
-.dial-value { font-weight: 800; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.dial-text { min-width: 0; container-type: inline-size; }
-/* Long words shrink to fit instead of breaking mid-word (see .fauna-tile-name). */
-.dial-label { font-weight: 700; font-size: min(13px, 100cqi / var(--chars, 1) * 1.7); overflow-wrap: break-word; hyphens: auto; }
-.dial-scale { font-size: 11.5px; color: var(--ink-3); }
-.dial-note { margin-top: 4px; font-size: 12.5px; color: var(--ink-2); line-height: 1.35; }
-.dial-card.warn .dial-note { color: #ffcfc7; }
-.band-key { display: inline-block; width: 18px; height: 4px; margin-right: 8px; border-radius: 0; background: rgba(143, 220, 154, 0.55); vertical-align: 3px; }
 
 /* ---- habitats: ring ---- */
 .biome-chart { display: grid; grid-template-columns: 176px 1fr; gap: 16px; align-items: center; }

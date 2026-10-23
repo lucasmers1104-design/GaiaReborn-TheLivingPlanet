@@ -47,8 +47,11 @@ test('a large rainforest raises one kapok tree in its heart, found once with the
 
   const tree = w.kapokTree;
   assert.equal(SE.kapokMilestone(w, SE.idx(100, 60)), null, 'only on its tile');
-  const entry = SE.kapokMilestone(w, tree - SE.GRID_W);
-  assert.ok(entry, 'the tile its crown fills finds it too');
+  assert.ok(SE.onKapok(w, tree - 2 * SE.GRID_W + 1), 'its crown spreads over the tiles above and beside');
+  assert.ok(!SE.onKapok(w, tree + 1), 'not beside its foot');
+  assert.ok(!SE.onKapok(w, tree - 3 * SE.GRID_W), 'not above its crown');
+  const entry = SE.kapokMilestone(w, tree - SE.GRID_W - 1);
+  assert.ok(entry, 'the tiles its crown fills find it too');
   assert.equal(entry.at, tree);
   w.evo.chronicle.push(entry);
   assert.equal(SE.kapokMilestone(w, tree), null, 'found once');

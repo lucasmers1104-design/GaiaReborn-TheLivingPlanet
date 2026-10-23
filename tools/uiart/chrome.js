@@ -463,8 +463,38 @@ function winCorner(f, mirrored) {
   return t;
 }
 
+/* ---------------------------------------------------------- fold_tab -- */
+
+// A parchment pill in a bevelled gold rim (light top and left, shade bottom and right), its face lit along the
+// top and shaded along the bottom; the chevron sits on face rows 3..6, two pixels thick, its tip on column 10.
+const FOLD_PILL = [
+  '..kkkkkkkkkkkkkkkkk..',
+  '.khhhhhhhhhhhhhhhhhk.',
+  'khlllllllllllllllllgk',
+  'khpppppppppppppppppgk',
+  'khpppppppppppppppppgk',
+  'khpppppppppppppppppgk',
+  'khpppppppppppppppppgk',
+  'kgdddddddddddddddddsk',
+  '.ksssssssssssssssssk.',
+  '..kkkkkkkkkkkkkkkkk..',
+];
+const FOLD_UP = [[3, [9, 10, 11]], [4, [8, 9, 11, 12]], [5, [7, 8, 12, 13]], [6, [6, 7, 13, 14]]];
+const FOLD_LIGHT = [
+  { k: 'ink0', h: 'gold5', g: 'gold3', s: 'gold1', l: 'parch4', p: 'parch3', d: 'parch2', '#': 'ink1' },
+  { k: 'ink0', h: 'gold5', g: 'gold4', s: 'gold2', l: 'parch5', p: 'parch4', d: 'parch3', '#': 'ink0' },
+];
+
+/** 0 up, 1 up lit, 2 down, 3 down lit: the down chevron is the up one turned over on the same face rows. */
+function foldTab(f) {
+  const rows = FOLD_PILL.map((r) => r.split(''));
+  for (const [y, xs] of FOLD_UP) for (const x of xs) rows[f < 2 ? y : 9 - y][x] = '#';
+  return K.grid(rows.map((r) => r.join('')), FOLD_LIGHT[f % 2]);
+}
+
 module.exports = {
   sprites: {
+    fold_tab: (f) => foldTab(f),
     rail_btn: (f) => railBtn(f),
     rail_focus: () => railFocus(),
     rail_tab: (f) => railTab(f),

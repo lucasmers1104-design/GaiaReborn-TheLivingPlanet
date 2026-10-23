@@ -16,8 +16,14 @@ namespace SE {
   /** Unsaved play is written to the autosave slot this often while running. */
   const AUTOSAVE_MS = 3 * 60 * 1000;
   const SETTINGS_KEY = 'simearth2.settings';
-  /** Minimum gap between flat overview-map redraws. */
+  /** Minimum gap between overview-map redraws while its globe stands still. */
   const MAP_RENDER_MS = 250;
+  /**
+   * The overview map window's default height, its globe half as wide as the window (the Gaia window opens below),
+   * and its height with the globe row folded away: less the 233 px globe and the 8 px gap above it.
+   */
+  const MAP_WINDOW_H = 696;
+  const MAP_WINDOW_FOLDED_H = MAP_WINDOW_H - 241;
   /** A finger held this long without moving starts the terraforming brush. */
   const TOUCH_HOLD_MS = 150;
   /** WASD by KeyboardEvent.code: the direction each key pans the map. */
@@ -80,6 +86,8 @@ namespace SE {
     introSeen: boolean;
     /** Developer mode (INTRO_DEV) only: every "Spiel starten" plays the short intro; otherwise the full one. */
     introDevOff: boolean;
+    /** The overview map shows its globe and field card (the fold tab under the legend). */
+    mapGlobe: boolean;
   }
 
   /** A disaster to fly to: where it started, and its storm's path if it has one. */
@@ -155,6 +163,9 @@ namespace SE {
     private goalNotice!: GoalNotice;
     private hoverTip!: HTMLElement;
     private mapLegendEl!: HTMLElement;
+    private mapInfoEl!: HTMLElement;
+    private mapSight!: HTMLElement;
+    private mapFold!: MapFold;
     private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
     private rail!: LivingRail;
     private readonly layerButtons: HTMLButtonElement[] = [];
@@ -168,8 +179,9 @@ namespace SE {
     private omegaStageSeen = 0;
     private speed = 3;
     private lastRunningSpeed = 3;
-    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false };
-    private mapShowsInfo = false;
+    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true };
+    /** The field last clicked on the overview map, its globe or with Examine, shown on the card beside the globe. */
+    private mapField: { x: number; y: number } | null = null;
     private selection: ToolSelection = {
       tool: Tool.Examine, altitudeRaise: true, flora: Flora.LandPlants, clearing: false,
       life: Life.Prokaryote, tech: Tech.Stone, terraformer: Terraformer.OxygenGenerator,
@@ -537,7 +549,7 @@ namespace SE {
       const ov = this.editView.overlay;
       const mode = ov === Overlay.None ? null : OVERLAY_LEGEND_MODES[ov];
       host.hidden = ov === Overlay.None;
-      if (mode !== null) { renderMapLegend(host, this.world, mode, false); return; }
+      if (mode !== null) { renderMapLegend(host, this.world, mode); return; }
       host.innerHTML = '';
       if (ov === Overlay.Magma) {
         const box = make('div', 'legend-strip');
@@ -728,14 +740,27 @@ namespace SE {
     /* ======================================================== windows === */
 
     private buildMapWindow(): void {
+      // 12 px clear of the map controls (50 px wide, 12 px from the right edge): as tall as it is, it would cover them.
+      const folded = (): boolean => !this.settings.mapGlobe;
       const win = this.windows.create({
         id: 'map', title: 'Übersichtskarte', icon: uiIcon('map'),
-        x: -12, y: 12, width: 500, height: 436, cls: 'win-map',
+        x: -74, y: 12, width: 500, cls: 'win-map',
+        // Read at every reset and screen change, so the window fits its globe row shown or folded away.
+        get height() { return folded() ? MAP_WINDOW_FOLDED_H : MAP_WINDOW_H; },
       });
       const layout = make('div', 'map-layout');
       const canvas = make('canvas', 'map-canvas');
-      canvas.setAttribute('aria-label', 'Übersichtskarte – tippen, um dorthin zu springen');
-      layout.appendChild(canvas);
+      canvas.setAttribute('aria-label', 'Übersichtskarte – tippen, um das Feld anzusehen und dorthin zu springen');
+      canvas.title = 'Klicken: Feld ansehen und dorthin springen';
+      const globe = make('canvas', 'map-globe');
+      globe.setAttribute('aria-label', 'Globus – tippen, um das Feld anzusehen und dorthin zu springen');
+      globe.title = canvas.title;
+      // Half the window, the field card takes the rest. Sized here: under an old cached stylesheet the canvas would grow with its own backing store.
+      globe.style.cssText = 'flex: none; width: calc(50% - 5px); aspect-ratio: 1 / 1';
+      this.mapInfoEl = make('div', 'map-facts');
+      this.mapSight = make('div', 'map-sight');
+      this.mapSight.append(globe, this.mapInfoEl);
+      this.mapFold = new MapFold(() => this.setMapGlobe(!this.settings.mapGlobe));
 
       const modes = make('div', 'map-modes');
       for (const groupName of MAP_GROUPS) {
@@ -756,27 +781,24 @@ namespace SE {
       }
       const footer = make('div', 'map-footer');
       this.mapLegendEl = make('div', 'map-legend');
-      const buttons = make('div', 'map-buttons');
-      const globeBtn = button({
-        label: 'Globus', icon: uiIcon('globe'), cls: 'btn btn-small btn-ghost',
-        onClick: () => { this.mapView.globe = !this.mapView.globe; setPressed(globeBtn, this.mapView.globe); },
-      });
-      const infoBtn = button({
-        label: 'Werte', icon: uiIcon('info'), cls: 'btn btn-small btn-ghost',
-        onClick: () => { this.mapShowsInfo = !this.mapShowsInfo; setPressed(infoBtn, this.mapShowsInfo); this.refreshMapLegend(); },
-      });
-      setPressed(globeBtn, false);
-      setPressed(infoBtn, false);
-      buttons.append(globeBtn, infoBtn);
-      footer.append(this.mapLegendEl, buttons);
-      layout.append(modes, footer);
+      footer.append(this.mapLegendEl);
+      layout.append(canvas, modes, footer, this.mapFold.button, this.mapSight);
       win.body.appendChild(layout);
+      this.mapSight.style.display = folded() ? 'none' : '';
+      this.mapFold.set(!folded());
 
-      this.mapView = new MapView(canvas);
-      canvas.addEventListener('pointerdown', (e) => {
-        const tile = this.mapView.tileAt(e.clientX, e.clientY);
-        if (tile) this.editView.centerOn(tile.x, tile.y);
-      });
+      this.mapView = new MapView(canvas, globe);
+      const wire = (target: HTMLCanvasElement, tileAt: (x: number, y: number) => { x: number; y: number } | null): void => {
+        target.addEventListener('pointerdown', (e) => {
+          const tile = tileAt(e.clientX, e.clientY);
+          if (!tile) return;
+          this.mapField = tile;
+          this.editView.centerOn(tile.x, tile.y);
+          this.refreshMapInfo();
+        });
+      };
+      wire(canvas, (x, y) => this.mapView.tileAt(x, y));
+      wire(globe, (x, y) => this.mapView.globeTileAt(x, y));
       this.setMapMode(MapMode.Terrain);
     }
 
@@ -789,26 +811,55 @@ namespace SE {
 
     private refreshMapLegend(): void {
       const mode = this.mapView.mode;
-      renderMapLegend(this.mapLegendEl, this.world, mode, this.mapShowsInfo, this.mapView.hidden[mode], (bit) => {
+      renderMapLegend(this.mapLegendEl, this.world, mode, this.mapView.hidden[mode], (bit) => {
         this.mapView.hidden[mode] ^= 1 << bit;
         this.refreshMapLegend();
       });
     }
 
+    /** Show or fold away the overview map's globe and field card; the window grows or shrinks by their row. */
+    private setMapGlobe(show: boolean): void {
+      const win = this.windows.get('map');
+      if (!win) return;
+      // The row and the layout gap above it (.map-layout), as tall as the globe is wide.
+      const row = (): number => this.mapSight.offsetHeight + 8;
+      const before = show ? 0 : row();
+      this.settings.mapGlobe = show;
+      this.saveSettings();
+      this.mapSight.style.display = show ? '' : 'none';
+      this.mapFold.set(show);
+      this.refreshMapInfo();
+      // A window the player never moved takes its default height; a moved or resized one changes by the row.
+      if (!win.userPlaced) {
+        this.windows.place(win, false);
+        return;
+      }
+      const change = show ? row() : -before;
+      win.root.style.height = `${Math.max(160, win.root.offsetHeight + change)}px`;
+      this.windows.clamp(win);
+    }
+
+    /** The field card beside the globe: the field last clicked on the map or globe, else the middle of the view. */
+    private refreshMapInfo(): void {
+      if (!this.settings.mapGlobe) return;
+      const at = this.mapField ?? this.mapView.viewCenter();
+      if (at) renderMapInfo(this.mapInfoEl, this.world, this.mapView.mode, at.x, at.y, !!this.mapField);
+    }
+
     private buildInfoWindows(): void {
-      // Gaia: bottom right, 12 px clear of the map controls (50 px wide, 12 px from the right edge).
-      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -74, y: 456, width: 300, height: 396 });
+      // Gaia: below the overview map, 12 px clear of the map controls (50 px wide, 12 px from the right edge).
+      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -74, y: 12 + MAP_WINDOW_H + 8, width: 300, height: 396 });
       const gaiaWrap = make('div', 'gaia-layout');
       gaia.body.appendChild(gaiaWrap);
       this.gaiaPanel = new GaiaPanel(gaiaWrap);
 
       // History: 4 px clear of the tool card (beside the rail, 340 px wide)
-      // and of the overview map (500 px wide, 12 px from the right), down to
+      // and of the overview map (500 px wide, 74 px from the right), down to
       // just above the bottom.
       const histX = this.rail.width + 344;
       const hist = this.windows.create({
         id: 'history', title: 'Verlauf', icon: uiIcon('history'), resetOnOpen: true,
-        x: histX, y: 12, width: -(histX + 516), height: -(12 + 27),
+        x: histX, y: 12, width: -(histX + 578), height: -(12 + 27),
       });
       const histWrap = make('div', 'hist-layout');
       hist.body.appendChild(histWrap);
@@ -869,7 +920,7 @@ namespace SE {
 
     private buildModelWindows(): void {
       const add = (id: string, title: string, kind: ModelKind, height: number, parts: (onChange: (group: string) => () => void) => SliderPanel[]): void => {
-        const win = this.windows.create({ id, title, icon: uiIcon('menu-models'), x: 0.2, y: 0.06, width: 460, height, cls: `win-model model-${kind}` });
+        const win = this.windows.create({ id, title, icon: uiIcon('menu-models'), sprite: `menu_${kind}`, x: 0.2, y: 0.06, width: 460, height, cls: `win-model model-${kind}` });
         const hero = new ModelHero(kind, this.params, () => this.world);
         this.modelHeroes.set(id, hero);
         win.body.append(hero.el, make('p', 'model-intro', 'Die Marke auf jedem Regler zeigt den kalibrierten Ausgangswert. Änderungen wirken sofort – Doppelklick setzt einen Regler zurück.'));
@@ -895,13 +946,16 @@ namespace SE {
 
     private buildGraphWindows(): void {
       const specs: [string, string, GraphKind, string, number, number][] = [
-        ['graph-air', 'Luftzusammensetzung', 'air', 'overlay-wind', 540, 560],
+        ['graph-air', 'Luftzusammensetzung', 'air', 'overlay-wind', 540, 660],
         ['graph-biomes', 'Lebensraumanteile', 'biomes', 'layer-biomes', 520, 380],
         ['graph-life', 'Lebensformen', 'life', 'layer-life', 460, 600],
         ['graph-tech', 'Technologie', 'tech', 'layer-cities', 560, 360],
       ];
       specs.forEach(([id, title, kind, icon, width, height], k) => {
-        const win = this.windows.create({ id, title, icon: uiIcon(icon), x: 0.22 + k * 0.03, y: 0.1 + k * 0.03, width, height });
+        const win = this.windows.create({
+          id, title, icon: uiIcon(icon), sprite: `menu_${kind}`, x: 0.22 + k * 0.03, y: 0.1 + k * 0.03, width, height,
+          cls: kind === 'air' ? 'win-air' : undefined,
+        });
         const body = make('div', 'graph-body');
         win.body.appendChild(body);
         this.graphs.set(kind, new GraphPanel(body, kind));
@@ -954,13 +1008,13 @@ namespace SE {
     /* ========================================================== menus === */
 
     private buildMenus(): void {
-      const winItem = (label: string, id: string, icon: string, hint?: string): MenuItem => ({
-        label, icon: uiIcon(icon), hint,
+      const winItem = (label: string, id: string, icon: string, hint?: string, sprite?: string): MenuItem => ({
+        label, icon: uiIcon(icon), hint, sprite,
         action: () => this.windows.toggle(id),
         checked: () => this.windows.isVisible(id),
       });
-      const modelItem = (label: string, id: string): MenuItem => ({
-        label, icon: uiIcon('menu-models'), hint: `${MODEL_PANEL_COST} Ω einmalig`,
+      const modelItem = (label: string, id: string, sprite: string): MenuItem => ({
+        label, icon: uiIcon('menu-models'), sprite, hint: `${MODEL_PANEL_COST} Ω einmalig`,
         action: () => {
           if (this.windows.isVisible(id)) { this.windows.hide(id); return; }
           // Paid once per planet (simcore.ts): closing it by accident must not cost again.
@@ -1013,15 +1067,15 @@ namespace SE {
         planet: {
           title: 'Planet', icon: uiIcon('menu-models'),
           items: [
-            modelItem('Modell Geosphäre', 'model-geo'),
-            modelItem('Modell Atmosphäre', 'model-atmo'),
-            modelItem('Modell Biosphäre', 'model-bio'),
-            modelItem('Modell Zivilisation', 'model-civ'),
+            modelItem('Modell Geosphäre', 'model-geo', 'menu_geo'),
+            modelItem('Modell Atmosphäre', 'model-atmo', 'menu_atmo'),
+            modelItem('Modell Biosphäre', 'model-bio', 'menu_bio'),
+            modelItem('Modell Zivilisation', 'model-civ', 'menu_civ'),
             { separator: true, label: '' },
-            winItem('Luftzusammensetzung', 'graph-air', 'overlay-wind'),
-            winItem('Lebensraumanteile', 'graph-biomes', 'layer-biomes'),
-            winItem('Lebensformen', 'graph-life', 'layer-life'),
-            winItem('Technologie', 'graph-tech', 'layer-cities'),
+            winItem('Luftzusammensetzung', 'graph-air', 'overlay-wind', undefined, 'menu_air'),
+            winItem('Lebensraumanteile', 'graph-biomes', 'layer-biomes', undefined, 'menu_biomes'),
+            winItem('Lebensformen', 'graph-life', 'layer-life', undefined, 'menu_life'),
+            winItem('Technologie', 'graph-tech', 'layer-cities', undefined, 'menu_tech'),
           ],
         },
       };
@@ -1236,8 +1290,19 @@ namespace SE {
       list.setAttribute('role', 'listbox');
       list.setAttribute('aria-label', TOOL_NAMES[s.tool]);
       type Option = {
-        label: string; icon: string; cost?: number; active: boolean; locked?: string; sub?: string;
+        label: string; icon: string; sprite?: string; cost?: number; active: boolean; locked?: string; sub?: string;
         onPick: () => void;
+      };
+      // A UI-atlas sprite fills the 40 px icon box in whole device pixels; the SVG stands in until the atlas has decoded.
+      const optIcon = (o: Option): HTMLElement => {
+        const sp = o.sprite ? UiArt.shared().sprite(o.sprite) : null;
+        if (!o.sprite || !sp || !UiArt.shared().ready) return img(o.icon, 'opt-icon');
+        const dpr = window.devicePixelRatio || 1;
+        const s = Math.max(1, Math.floor((40 * dpr) / Math.max(sp.w, sp.h)));
+        const pc = new PixelCanvas('opt-icon', 0);
+        pc.canvas.style.position = 'static';
+        drawUiSprite(pc, o.sprite, 0, { s, dpr, u: s / dpr, beside: false });
+        return pc.canvas;
       };
       const costTag = (n: number): HTMLElement => {
         const cost = make('span', 'opt-cost');
@@ -1258,7 +1323,7 @@ namespace SE {
         b.setAttribute('role', 'option');
         b.setAttribute('aria-selected', o.active ? 'true' : 'false');
         b.title = o.sub ? `${o.label} – ${o.sub}` : o.label;
-        b.append(img(o.icon, 'opt-icon'), make('span', 'opt-label', o.label));
+        b.append(optIcon(o), make('span', 'opt-label', o.label));
         if (o.cost !== undefined && o.cost > 0) b.appendChild(costTag(o.cost));
         b.addEventListener('click', () => { o.onPick(); this.buildToolOptions(); });
         list.appendChild(b);
@@ -1278,8 +1343,8 @@ namespace SE {
 
       switch (s.tool) {
         case Tool.SetAltitude:
-          option({ label: 'Anheben', icon: uiIcon('tool-altitude'), active: s.altitudeRaise, sub: 'Land steigt aus dem Meer, hohe Gipfel tragen Schnee', onPick: () => { s.altitudeRaise = true; } });
-          option({ label: 'Absenken', icon: uiIcon('chevron-down'), active: !s.altitudeRaise, sub: 'Täler und Buchten, tief unten quillt Grundwasser', onPick: () => { s.altitudeRaise = false; } });
+          option({ label: 'Anheben', icon: uiIcon('tool-altitude'), sprite: 'opt_raise', active: s.altitudeRaise, sub: 'Land steigt aus dem Meer, hohe Gipfel tragen Schnee', onPick: () => { s.altitudeRaise = true; } });
+          option({ label: 'Absenken', icon: uiIcon('chevron-down'), sprite: 'opt_lower', active: !s.altitudeRaise, sub: 'Täler und Buchten, tief unten quillt Grundwasser', onPick: () => { s.altitudeRaise = false; } });
           break;
 
         case Tool.PlantBiome: {
@@ -1556,6 +1621,8 @@ namespace SE {
             this.examinePanel.update(w, x, y);
             this.windows.show('examine');
           }
+          this.mapField = { x, y };
+          this.refreshMapInfo();
           this.watchMigration(here);
           break;
 
@@ -2079,6 +2146,7 @@ namespace SE {
       this.fateResume = null;
       this.setSpeed(0, true);
       this.examineTile = null;
+      this.mapField = null;
       this.windows.hide('examine');
       this.sim.run({ type: 'newPlanet', seed, ocean: this.settings.oceanShare, epoch: this.settings.epoch }, () => {
         this.seenTicks = this.world.ticks;
@@ -2237,14 +2305,18 @@ namespace SE {
       if (this.windows.isVisible('spaceport')) this.spaceportPanel.update(w);
       if (this.windows.isVisible('lexicon')) this.lexicon.update();
       if (this.windows.isVisible('species')) this.speciesInfo.update();
-      if (this.mapShowsInfo || this.mapView.mode === MapMode.LifeMap || this.mapView.mode === MapMode.Biomes || this.mapView.mode === MapMode.Technology) {
-        if ((w.ticks & 15) === 0 || this.mapShowsInfo) this.refreshMapLegend();
+      if (this.mapView.mode === MapMode.LifeMap || this.mapView.mode === MapMode.Biomes || this.mapView.mode === MapMode.Technology) {
+        if ((w.ticks & 15) === 0) this.refreshMapLegend();
+      }
+      if (this.windows.isVisible('map')) {
+        this.refreshMapInfo();
+        this.mapFold.render();
       }
       if (this.examineTile && this.windows.isVisible('examine')) {
         this.examinePanel.update(w, this.examineTile.x, this.examineTile.y);
       }
       for (const [kind, graph] of this.graphs) {
-        if (this.windows.isVisible(`graph-${kind === 'biomes' ? 'biomes' : kind}`)) graph.render(w);
+        if (this.windows.isVisible(`graph-${kind === 'biomes' ? 'biomes' : kind}`)) graph.render(w, this.params);
       }
       this.flushChronicle();
       if (this.fauna.pending.length > 0) this.discoveries.push(this.fauna.pending.splice(0));
@@ -2334,7 +2406,7 @@ namespace SE {
       this.bubbling.update(this.bubblingTarget, delta, now);
       this.stormWind.update(this.stormWindTarget, delta, now);
       if (this.windows.isVisible('map')) {
-        if (this.mapView.globe || this.mapView.pulsing) {
+        if (this.mapView.turning || this.mapView.pulsing) {
           if (now - this.lastMapRender > 50) {
             this.mapView.render(this.world);
             this.lastMapRender = now;
@@ -2394,6 +2466,7 @@ namespace SE {
         if (typeof s.reduceEffects === 'boolean') this.settings.reduceEffects = s.reduceEffects;
         if (typeof s.introSeen === 'boolean') this.settings.introSeen = s.introSeen;
         if (typeof s.introDevOff === 'boolean') this.settings.introDevOff = s.introDevOff;
+        if (typeof s.mapGlobe === 'boolean') this.settings.mapGlobe = s.mapGlobe;
       } catch {
         // Settings are a convenience; defaults are fine.
       }
@@ -2517,6 +2590,7 @@ namespace SE {
       this.accumulator = 0;
       this.editView.tickPhase = 0;
       this.examineTile = null;
+      this.mapField = null;
       this.windows.hide('examine');
       this.sliderPanels.forEach((p) => p.sync());
       this.editView.markDirty();

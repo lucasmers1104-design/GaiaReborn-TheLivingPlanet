@@ -20,3 +20,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-22 v0.11.0 feat(civ): wood, fields, discovery voyage, ships, railway and wonders
 - 2026-10-23 v0.91.0 feat(ui): living UI with Gaia companion, living rail and top bar
 - 2026-10-23 v0.92.0 chore(release): release the mega UI update as 0.92.0
+- 2026-10-23 v0.92.1 feat(ui): air panel with methane, overview map with globe, menu icons
