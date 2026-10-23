@@ -70601,7 +70601,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.91.0';
+    SE.APP_VERSION = '0.92.0';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
