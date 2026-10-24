@@ -254,6 +254,8 @@
     "src/icecalving.ts",
     "src/oxygenbubbles.ts",
     "src/reefswell.ts",
+    "src/waterfxgl.ts",
+    "src/waterfx.ts",
     "src/clownfishlayer.ts",
     "src/windmap.ts",
     "src/render.ts",

@@ -2038,7 +2038,8 @@ var SE;
  * Frame, tick, redraw, chunk and terrain-field timings, averaged over the
  * last second with their maximum. app.ts, render.ts and landview.ts report
  * here; hidden, every report returns at once, and the text is rewritten at
- * most twice a second.
+ * most twice a second. The frame rate alone can stay on in the top left
+ * corner (setting "Bildrate (FPS) oben links anzeigen").
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -2067,6 +2068,11 @@ var SE;
             this.older = perfWindow();
             this.newer = perfWindow();
             this.cur = perfWindow();
+            /** The frame rate alone, top left ("Einstellungen"); hidden while the F3 display shows it. */
+            this.fpsEl = null;
+            this.fpsOn = false;
+            this.fpsFrames = 0;
+            this.fpsAt = 0;
         }
         toggle() {
             this.on = !this.on;
@@ -2079,9 +2085,35 @@ var SE;
             this.at = performance.now();
             if (this.on)
                 this.el.textContent = '…';
+            this.showFps(this.fpsOn);
+        }
+        showFps(on) {
+            this.fpsOn = on;
+            if (on && !this.fpsEl) {
+                // Inline, safe with a stale stylesheet: on the empty wood at the status bar's left end.
+                this.fpsEl = document.body.appendChild(SE.make('div', 'fps-counter'));
+                this.fpsEl.style.cssText = 'position:fixed;top:14px;left:14px;z-index:1000;padding:3px 7px;background:rgba(31,18,10,0.85);'
+                    + 'border:2px solid #5e3410;color:#f6cc6a;font:700 13px/1.2 var(--mono, Consolas, monospace);'
+                    + 'font-variant-numeric:tabular-nums;white-space:pre;pointer-events:none';
+            }
+            if (!this.fpsEl)
+                return;
+            this.fpsEl.hidden = !on || this.on;
+            this.fpsEl.textContent = '– FPS';
+            this.fpsFrames = 0;
+            this.fpsAt = performance.now();
         }
         /** End of a frame: ms since the last one began, ms this one worked. */
         frame(gap, work) {
+            if (this.fpsEl && !this.fpsEl.hidden) {
+                this.fpsFrames++;
+                const now = performance.now();
+                if (now - this.fpsAt >= PERF_WINDOW_MS) {
+                    this.fpsEl.textContent = `${Math.round((this.fpsFrames * 1000) / (now - this.fpsAt))} FPS`;
+                    this.fpsFrames = 0;
+                    this.fpsAt = now;
+                }
+            }
             if (!this.on)
                 return;
             this.cur.gap.add(gap);
@@ -44181,6 +44213,14 @@ var SE;
             const c = this.chunks.get(cy * CHUNKS_X + cx);
             return c && c.sig !== -1 ? c.motion : null;
         }
+        /** Tiles of chunk (cx, cy) from its corner whose picture is dissolving now, x0, y0, x1, y1 inclusive; null for none. */
+        dissolving(cx, cy) {
+            const f = this.chunks.get(cy * CHUNKS_X + cx)?.fade;
+            if (!f || f.settled)
+                return null;
+            const tile = (p) => Math.floor((p - MARGIN) / 16);
+            return [tile(f.x0), tile(f.y0), tile(f.x1 - 1), tile(f.y1 - 1)];
+        }
         /**
          * Draw the terrain into `ctx` (device pixels, identity transform), only
          * where it meets the device-pixel rectangle [x0, x1) × [y0, y1).
@@ -56834,6 +56874,745 @@ var SE;
     SE.ReefSwell = ReefSwell;
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — the WebGL2 stage of the water effects (waterfx.ts)
+ * -----------------------------------------------------------------------------
+ * One small program on a canvas of its own, never in the page: a picture with
+ * one pixel (or k × k, see WaterFxFrame.scale) per art pixel of the tiles in view, transparent except where a
+ * caustic line or a glint lifts the composed sea's colour to a palette
+ * colour. Its inputs are textures that change only when the map does:
+ *   - mask:  the composed palette index of the sea per art pixel
+ *            (LandMotion.sea), one 256 × 256 slot per chunk in view;
+ *   - owner: which chunk each slot holds now (chunk number + 1, 0 for none),
+ *            so a slot not yet filled never shows another chunk's sea;
+ *   - tiles: per tile in view, bit 1 sheltered water (reef or lagoon),
+ *            bit 2 covered (event icon, tidal wave, a dissolving picture),
+ *            bit 4 a city;
+ *   - lut:   per palette index the caustic colour (row 0), the glint
+ *            colour (row 1) and the glint's brighter core (row 2), alpha 0
+ *            for none.
+ * Everything else follows from world pixel coordinates and the clock, with
+ * every lattice wrapping at the world's width, so the pattern runs on over
+ * tile, chunk and world seams.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const CHUNK_PX = SE.LAND_CHUNK * 16;
+    const VERTEX = `#version 300 es
+void main() {
+  vec2 v = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(v * 2.0 - 1.0, 0.0, 1.0);
+}`;
+    const FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp usampler2D;
+precision highp sampler2D;
+uniform usampler2D uMask;
+uniform usampler2D uOwner;
+uniform usampler2D uTiles;
+uniform sampler2D uLut;
+uniform ivec2 uOrigin;
+uniform ivec2 uTileOrigin;
+uniform ivec2 uTileSize;
+uniform ivec2 uSlots;
+uniform int uHeight;
+uniform int uScale;
+uniform float uTime;
+uniform float uStrength;
+out vec4 outColor;
+
+const int WORLD_PX = ${SE.GRID_W * 16};
+const int WORLD_H = ${SE.GRID_H * 16};
+const int CHUNK_PX = ${CHUNK_PX};
+const int CHUNKS_X = ${SE.GRID_W / SE.LAND_CHUNK};
+const float TAU = 6.2831853;
+
+// Every integer handed in is >= 0: x runs from WORLD_PX on, y is offset where it can be negative.
+float rnd(ivec2 c, int salt) {
+  uvec3 u = uvec3(uint(c.x), uint(c.y), uint(salt));
+  uint h = u.x * 0x8da6b343u ^ u.y * 0xd8163841u ^ u.z * 0xcb1ab31fu;
+  h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+  return float(h >> 8) * (1.0 / 16777216.0);
+}
+
+// Value noise on a lattice of cell px, wrapping at the world's width.
+float noise(vec2 p, vec2 cell, int salt) {
+  vec2 q = p / cell;
+  ivec2 c = ivec2(floor(q));
+  vec2 f = q - vec2(c);
+  f = f * f * (3.0 - 2.0 * f);
+  int n = WORLD_PX / int(cell.x);
+  int xa = c.x % n;
+  int xb = (xa + 1) % n;
+  int y = c.y + 4096;
+  return mix(mix(rnd(ivec2(xa, y), salt), rnd(ivec2(xb, y), salt), f.x),
+             mix(rnd(ivec2(xa, y + 1), salt), rnd(ivec2(xb, y + 1), salt), f.x), f.y);
+}
+
+uint seaAt(ivec2 p) {
+  if (p.y < 0 || p.y >= WORLD_H) return 0u;
+  int x = p.x % WORLD_PX;
+  ivec2 c = ivec2(x / CHUNK_PX, p.y / CHUNK_PX);
+  ivec2 slot = ivec2(c.x % uSlots.x, c.y % uSlots.y);
+  if (texelFetch(uOwner, slot, 0).r != uint(c.y * CHUNKS_X + c.x + 1)) return 0u;
+  return texelFetch(uMask, slot * CHUNK_PX + ivec2(x % CHUNK_PX, p.y % CHUNK_PX), 0).r;
+}
+
+ivec2 tileOf(ivec2 p) {
+  return ivec2(p.x / 16, p.y < 0 ? -1 : p.y / 16);
+}
+
+uint tileAt(ivec2 t) {
+  return texelFetch(uTiles, clamp(t - uTileOrigin, ivec2(0), uTileSize - 1), 0).r;
+}
+
+// Drawn over by the base picture: an event icon, a tidal wave, a dissolving
+// chunk on its tile, or a city's picture (its tile, 2 px either side, 8 px above).
+bool covered(ivec2 p) {
+  ivec2 t = tileOf(p);
+  if ((tileAt(t) & 2u) != 0u) return true;
+  ivec2 l = p - t * 16;
+  for (int dy = 0; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      if ((tileAt(t + ivec2(dx, dy)) & 4u) == 0u) continue;
+      ivec2 b = l - 16 * ivec2(dx, dy);
+      if (b.x >= -2 && b.x < 18 && b.y >= -8 && b.y < 16) return true;
+    }
+  }
+  return false;
+}
+
+// Sheltered water between the tile centres, 0..1.
+float shelter(vec2 p) {
+  vec2 u = p / 16.0 - 0.5;
+  ivec2 t = ivec2(floor(u));
+  vec2 f = u - vec2(t);
+  float a = float(tileAt(t) & 1u);
+  float b = float(tileAt(t + ivec2(1, 0)) & 1u);
+  float c = float(tileAt(t + ivec2(0, 1)) & 1u);
+  float d = float(tileAt(t + ivec2(1, 1)) & 1u);
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// 1 where ground touches p, 2 where it lies 2 px off along an axis, else 3.
+int dryWithin(ivec2 p) {
+  for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++)
+      if ((i != 0 || j != 0) && seaAt(p + ivec2(i, j)) == 0u) return 1;
+  if (seaAt(p + ivec2(2, 0)) == 0u || seaAt(p - ivec2(2, 0)) == 0u ||
+      seaAt(p + ivec2(0, 2)) == 0u || seaAt(p - ivec2(0, 2)) == 0u) return 2;
+  return 3;
+}
+
+// Ground within 5 px: the surf's rings and the swell's foam live there.
+bool nearShore(ivec2 p) {
+  for (int k = 0; k < 8; k++) {
+    float a = float(k) * (TAU / 8.0);
+    vec2 d = vec2(cos(a), sin(a));
+    if (seaAt(p + ivec2(round(d * 3.0))) == 0u || seaAt(p + ivec2(round(d * 5.0))) == 0u) return true;
+  }
+  return false;
+}
+
+// Of a jittered lattice of cell px whose sites circle slowly: half the gap
+// between the nearest and the second nearest site (about the px to a cell's
+// edge), and between the nearest and the third (small where three cells meet).
+vec2 edge(vec2 p, vec2 cell, float t, int salt) {
+  vec2 q = p / cell;
+  ivec2 c = ivec2(floor(q));
+  vec2 f = q - vec2(c);
+  int n = WORLD_PX / int(cell.x);
+  float d1 = 1e9;
+  float d2 = 1e9;
+  float d3 = 1e9;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      ivec2 k = ivec2((c.x + i) % n, c.y + j + 4096);
+      float a = TAU * (rnd(k, salt + 2) + t / (11.0 + 6.0 * rnd(k, salt + 3)));
+      vec2 s = 0.2 + 0.6 * vec2(rnd(k, salt), rnd(k, salt + 1)) + 0.12 * vec2(cos(a), sin(a));
+      vec2 o = (vec2(i, j) + s - f) * cell;
+      float d = dot(o, o);
+      if (d < d1) { d3 = d2; d2 = d1; d1 = d; } else if (d < d2) { d3 = d2; d2 = d; } else if (d < d3) { d3 = d; }
+    }
+  }
+  float r = sqrt(d1);
+  return 0.5 * vec2(sqrt(d2) - r, sqrt(d3) - r);
+}
+
+void main() {
+  ivec2 frag = ivec2(gl_FragCoord.xy) / uScale;
+  ivec2 p = uOrigin + ivec2(frag.x, uHeight - 1 - frag.y);
+  outColor = vec4(0.0);
+  uint own = seaAt(p);
+  if (own == 0u || covered(p)) return;
+  vec2 pc = vec2(p) + 0.5;
+  float sh = shelter(pc);
+  vec4 caustic = texelFetch(uLut, ivec2(int(own), 0), 0);
+  if (sh > 0.3 && caustic.a > 0.0) {
+    int dry = dryWithin(p);
+    if (dry == 1) return;
+    // The lattice through a slow warp of a few px bends its edges into the round cells of caustics.
+    vec2 warp = vec2(noise(pc + vec2(uTime * 0.9, 0.0), vec2(16.0, 12.0), 60),
+                     noise(pc + vec2(0.0, uTime * 0.7), vec2(16.0, 12.0), 61)) - 0.5;
+    vec2 e = edge(pc + 5.0 * warp + vec2(0.25, 0.15) * uTime, vec2(16.0, 14.0), uTime, 10);
+    float spread = smoothstep(0.15, 0.5, noise(pc + vec2(uTime * 0.8, 0.0), vec2(64.0, 48.0), 40));
+    // Thin filaments, thicker where three cells meet.
+    float w = uStrength * spread * smoothstep(0.3, 0.9, sh) * (0.5 + 0.9 * exp(-e.y / 2.0));
+    if (dry == 2) w *= 0.5;
+    if (e.x < w) outColor = vec4(caustic.rgb, 1.0);
+    return;
+  }
+  vec4 glint = texelFetch(uLut, ivec2(int(own), 1), 0);
+  if (sh >= 0.5 || glint.a == 0.0 || p.y < 0) return;
+  // One short crest per cell of 16 x 6 px at most, now and then, in drifting bright zones.
+  ivec2 gc = ivec2(p.x / 16, p.y / 6);
+  ivec2 gk = ivec2(gc.x % (WORLD_PX / 16), gc.y);
+  float period = 5.0 + 3.0 * rnd(gk, 31);
+  float cycle = uTime / period + rnd(gk, 32);
+  float ph = fract(cycle);
+  if (ph >= 0.4) return;
+  // The zone as it was when this crest rose, so it never vanishes half way.
+  float born = (floor(cycle) - rnd(gk, 32)) * period;
+  vec2 centre = vec2(gc * ivec2(16, 6)) + vec2(8.0, 3.0);
+  float zone = smoothstep(0.3, 0.65, noise(centre + vec2(born * 2.0, born * 0.7), vec2(128.0, 64.0), 50));
+  if (rnd(gk + ivec2(0, int(floor(cycle)) & 1023), 30) >= 0.8 * zone * uStrength * (1.0 - 2.0 * sh)) return;
+  float life = ph / 0.4;
+  float rise = sin(3.14159 * life);
+  int len = 1 + int(floor((1.0 + 3.0 * rnd(gk, 33)) * rise + 0.5));
+  int x0 = 3 + int(rnd(gk, 34) * 7.0) + int(life * 3.0) - len / 2;
+  int y0 = 1 + int(rnd(gk, 35) * 4.0);
+  ivec2 l = p - gc * ivec2(16, 6);
+  if (l.y != y0 || l.x < x0 || l.x >= x0 + len || nearShore(p)) return;
+  // The middle of a long crest at its height a step brighter still.
+  vec4 core = texelFetch(uLut, ivec2(int(own), 2), 0);
+  outColor = vec4(rise > 0.7 && len >= 3 && l.x == x0 + len / 2 && core.a > 0.0 ? core.rgb : glint.rgb, 1.0);
+}`;
+    class WaterFxGl {
+        constructor(canvas, gl, program) {
+            this.uniforms = new Map();
+            this.slotsX = 0;
+            this.slotsY = 0;
+            this.tilesW = 0;
+            this.tilesH = 0;
+            this.lost = false;
+            this.canvas = canvas;
+            this.gl = gl;
+            this.program = program;
+            const tex = () => {
+                const t = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, t);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                return t;
+            };
+            this.mask = tex();
+            this.owner = tex();
+            this.tiles = tex();
+            this.lut = tex();
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+            gl.useProgram(program);
+            for (const [name, unit] of [['uMask', 0], ['uOwner', 1], ['uTiles', 2], ['uLut', 3]])
+                gl.uniform1i(this.at(name), unit);
+            canvas.addEventListener('webglcontextlost', () => { this.lost = true; });
+        }
+        /**
+         * The stage on a canvas of its own, or why there is none. Software
+         * rendering counts as none (failIfMajorPerformanceCaveat): the map would
+         * pay for the water with its frame rate.
+         */
+        static create(canvas) {
+            let gl = null;
+            try {
+                gl = canvas.getContext('webgl2', {
+                    alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false,
+                    // Drawn once per picture, copied into the map every frame.
+                    preserveDrawingBuffer: true, failIfMajorPerformanceCaveat: true,
+                });
+            }
+            catch {
+                gl = null;
+            }
+            if (!gl)
+                return 'nowebgl';
+            const program = WaterFxGl.link(gl);
+            // Slots span the world's width at the widest view; the floor WebGL2 guarantees is 2048.
+            const roomy = gl.getParameter(gl.MAX_TEXTURE_SIZE) >= SE.GRID_W * 16;
+            if (program && roomy)
+                return new WaterFxGl(canvas, gl, program);
+            gl.getExtension('WEBGL_lose_context')?.loseContext();
+            return program ? 'nowebgl' : 'shader';
+        }
+        static link(gl) {
+            const shader = (type, src) => {
+                const s = gl.createShader(type);
+                if (!s)
+                    return null;
+                gl.shaderSource(s, src);
+                gl.compileShader(s);
+                if (gl.getShaderParameter(s, gl.COMPILE_STATUS))
+                    return s;
+                console.warn('Wassereffekte: Shader nicht übersetzt', gl.getShaderInfoLog(s));
+                return null;
+            };
+            const vs = shader(gl.VERTEX_SHADER, VERTEX);
+            const fs = shader(gl.FRAGMENT_SHADER, FRAGMENT);
+            const p = vs && fs ? gl.createProgram() : null;
+            if (!p || !vs || !fs)
+                return null;
+            gl.attachShader(p, vs);
+            gl.attachShader(p, fs);
+            gl.linkProgram(p);
+            if (gl.getProgramParameter(p, gl.LINK_STATUS))
+                return p;
+            console.warn('Wassereffekte: Shader nicht gebunden', gl.getProgramInfoLog(p));
+            return null;
+        }
+        at(name) {
+            if (!this.uniforms.has(name))
+                this.uniforms.set(name, this.gl.getUniformLocation(this.program, name));
+            return this.uniforms.get(name);
+        }
+        /** Room for nx × ny chunks; a new size starts empty (every slot owned by none). */
+        slots(nx, ny) {
+            const gl = this.gl;
+            this.slotsX = nx;
+            this.slotsY = ny;
+            gl.bindTexture(gl.TEXTURE_2D, this.mask);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, nx * CHUNK_PX, ny * CHUNK_PX, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, null);
+            this.owners(new Uint8Array(nx * ny));
+        }
+        /** One chunk's sea into slot (sx, sy): CHUNK_PX rows of CHUNK_PX palette indices. */
+        chunk(sx, sy, sea) {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.mask);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, sx * CHUNK_PX, sy * CHUNK_PX, CHUNK_PX, CHUNK_PX, gl.RED_INTEGER, gl.UNSIGNED_BYTE, sea);
+        }
+        owners(owner) {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.owner);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, this.slotsX, this.slotsY, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, owner);
+        }
+        tileBits(bits, w, h) {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.tiles);
+            if (w !== this.tilesW || h !== this.tilesH) {
+                this.tilesW = w;
+                this.tilesH = h;
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, w, h, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, bits);
+            }
+            else {
+                gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, gl.RED_INTEGER, gl.UNSIGNED_BYTE, bits);
+            }
+        }
+        /** 256 × 3 RGBA: caustic colours, glint colours, the glints' cores. */
+        colors(rgba) {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.lut);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 3, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+        }
+        /** False when the browser would not give the canvas that size (a view wider than its drawing buffer). */
+        render(f) {
+            const gl = this.gl;
+            const w = f.width * f.scale;
+            const h = f.height * f.scale;
+            if (this.canvas.width !== w || this.canvas.height !== h) {
+                this.canvas.width = w;
+                this.canvas.height = h;
+            }
+            if (gl.drawingBufferWidth !== w || gl.drawingBufferHeight !== h)
+                return false;
+            gl.viewport(0, 0, w, h);
+            gl.useProgram(this.program);
+            const units = [this.mask, this.owner, this.tiles, this.lut];
+            for (let u = 0; u < units.length; u++) {
+                gl.activeTexture(gl.TEXTURE0 + u);
+                gl.bindTexture(gl.TEXTURE_2D, units[u]);
+            }
+            gl.activeTexture(gl.TEXTURE0);
+            gl.uniform2i(this.at('uOrigin'), f.originX, f.originY);
+            gl.uniform2i(this.at('uTileOrigin'), f.tileX, f.tileY);
+            gl.uniform2i(this.at('uTileSize'), this.tilesW, this.tilesH);
+            gl.uniform2i(this.at('uSlots'), this.slotsX, this.slotsY);
+            gl.uniform1i(this.at('uHeight'), f.height);
+            gl.uniform1i(this.at('uScale'), f.scale);
+            gl.uniform1f(this.at('uTime'), f.time);
+            gl.uniform1f(this.at('uStrength'), f.strength);
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+            return true;
+        }
+        /** Give the textures and the picture back (switched off); `slots` must run again before the next frame. */
+        release() {
+            const gl = this.gl;
+            gl.bindTexture(gl.TEXTURE_2D, this.mask);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, 1, 1, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, null);
+            this.slotsX = this.slotsY = 0;
+            this.canvas.width = this.canvas.height = 1;
+        }
+    }
+    SE.WaterFxGl = WaterFxGl;
+})(SE || (SE = {}));
+/* =============================================================================
+ * Gaia Reborn — water effects (experimental): caustics and a glint
+ * -----------------------------------------------------------------------------
+ * Optional, off by default ("Wassereffekte verbessern (experimentell)"):
+ *   - caustics: slow, wandering lines of light on the corals, the reef sand
+ *     and the water of reefs and lagoons, so they read as lying under water;
+ *   - glint: now and then a short crest a step lighter on the open sea, in
+ *     broad zones drifting over it; never within 5 px of ground, where the
+ *     surf (watermotion.ts) and the reef swell (reefswell.ts) live.
+ * Both only lift the composed colour to a palette colour, one art pixel
+ * each, on the terrain's pixel grid; the picture comes from WebGL2
+ * (waterfxgl.ts) and is copied into the map right over the cached terrain,
+ * under the surf, the swell and everything standing or moving on the map.
+ * Its masks are the composed chunks' own (LandMotion.sea: corals and reef
+ * sand under water are sea there; cays, palms, beaches and ice are not),
+ * uploaded when a chunk is composed anew, and per tile the field's reefs and
+ * lagoons and what the base picture paints over the sea (cities, event
+ * icons) or what moves there (a tidal wave, a dissolving chunk).
+ * A new picture every STEP_MS (with the surf's) or when the view moves a
+ * tile; weaker zoomed out, gone below MIN_TILE. Nothing runs while off, with
+ * "Effekte reduzieren", prefers-reduced-motion, the oceans hidden or a
+ * climate overlay; without WebGL2, a failed shader or a lost context the
+ * map keeps its water as before, for the session.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Seven pictures a second, in step with the surf. */
+    const STEP_MS = 140;
+    /** CSS px per tile from which the effects show, at LOW strength, full from FULL_TILE. */
+    const MIN_TILE = 16;
+    const FULL_TILE = 32;
+    const LOW = 0.35;
+    /** Chunks (64 KiB each) uploaded per picture at most: a first view fills in over a few frames, never in one long one. */
+    const UPLOADS_PER_PICTURE = 8;
+    /** The shader's clock starts over after this long, s: a float on the GPU loses its fractions with hours. */
+    const CLOCK_WRAP_S = 7200;
+    const CHUNK_PX = SE.LAND_CHUNK * 16;
+    const CHUNKS_X = SE.GRID_W / SE.LAND_CHUNK;
+    /** For tools/perf-bench.js: counters that only grow. */
+    SE.waterFxStats = { active: false, renders: 0, chunkUploads: 0, uploadBytes: 0, tileUploads: 0, canvasPx: 0 };
+    /** `?waterfx=on|off`: the switch's value for this page load only, or null. */
+    function waterFxQuery(search) {
+        const m = /[?&]waterfx=(on|off)(&|$)/.exec(search);
+        return m ? m[1] === 'on' : null;
+    }
+    SE.waterFxQuery = waterFxQuery;
+    /** How strongly the effects show at a zoom, 0..1. */
+    function waterFxStrength(tilePx) {
+        if (tilePx < MIN_TILE)
+            return 0;
+        return LOW + (1 - LOW) * SE.clamp((tilePx - MIN_TILE) / (FULL_TILE - MIN_TILE), 0, 1);
+    }
+    SE.waterFxStrength = waterFxStrength;
+    /**
+     * 256 × 3 RGBA: per palette index the colour a caustic lifts it to (the
+     * reef swell's lift, reefSwellLift), the colour a glint lifts open water
+     * to (a step up its ramp) and its core (two steps); none onto foam, ice or
+     * white.
+     */
+    function waterFxColors(art) {
+        const pal = art.manifest.palette;
+        const out = new Uint8Array(256 * 3 * 4);
+        const lift = SE.reefSwellLift(art);
+        const up = art.shift[SE.LAND_SHIFT_MAX + 1];
+        const up2 = art.shift[SE.LAND_SHIFT_MAX + 2];
+        const glare = new Uint8Array(256);
+        glare[art.water[art.water.length - 1]] = 1;
+        for (const i of [...(art.manifest.ramps.ice ?? []), ...(art.manifest.ramps.white ?? [])])
+            glare[i] = 1;
+        const put = (row, i, c) => {
+            out.set([pal[c][0], pal[c][1], pal[c][2], 255], (row * 256 + i) * 4);
+        };
+        for (let i = 1; i < pal.length; i++) {
+            if (lift[i] !== 0 && !glare[lift[i]])
+                put(0, i, lift[i]);
+            if (!art.isWater[i] || up[i] === i || glare[up[i]])
+                continue;
+            put(1, i, up[i]);
+            if (up2[i] !== up[i] && !glare[up2[i]])
+                put(2, i, up2[i]);
+        }
+        return out;
+    }
+    SE.waterFxColors = waterFxColors;
+    /**
+     * FNV-1a over a chunk's sea mask. A running planet recomposes chunks many
+     * times a second for their land and plants (bio scenario: ~70 a second in
+     * view); their sea mostly stays the same and needs no upload.
+     */
+    function seaHash(sea) {
+        let h = 0x811c9dc5;
+        if ((sea.byteOffset & 3) === 0) {
+            const words = new Uint32Array(sea.buffer, sea.byteOffset, sea.length >> 2);
+            for (let i = 0; i < words.length; i++)
+                h = Math.imul(h ^ words[i], 0x01000193);
+        }
+        else {
+            for (let i = 0; i < sea.length; i++)
+                h = Math.imul(h ^ sea[i], 0x01000193);
+        }
+        return h >>> 0;
+    }
+    /** The settings dialog's line under the switch, '' when there is nothing to say. */
+    function waterFxNote(state) {
+        switch (state) {
+            case 'nowebgl': return 'Standardwasser aktiv: WebGL2 ist hier nicht verfügbar.';
+            case 'shader': return 'Standardwasser aktiv: der Wasser-Shader ließ sich nicht starten.';
+            case 'lost': return 'Standardwasser aktiv: die Grafikkarte hat den Wasser-Shader beendet.';
+            case 'reduced': return 'Standardwasser aktiv, solange Effekte oder Bewegung reduziert sind.';
+            default: return '';
+        }
+    }
+    SE.waterFxNote = waterFxNote;
+    class WaterFx {
+        constructor() {
+            /** "Effekte reduzieren". */
+            this.still = false;
+            this.on = false;
+            this.stage = null;
+            this.failure = null;
+            this.motionQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+            this.key = '';
+            this.colorsOf = null;
+            /** Per slot: the chunk number + 1 whose sea it shows (the owner texture), 0 for none. */
+            this.owner = new Uint8Array(0);
+            /** Per slot: the chunk and the composition its state came from. */
+            this.slotChunk = new Int16Array(0);
+            this.slotMotion = [];
+            this.slotHash = new Uint32Array(0);
+            /** Chunks waited for the upload budget: the next frame goes on. */
+            this.pending = false;
+            /** Any chunk in view shows sea; without, nothing is rendered or drawn. */
+            this.seaInView = false;
+            /** The last picture came out (the browser gave its canvas the size asked for). */
+            this.shown = false;
+            this.bits = new Uint8Array(0);
+        }
+        get enabled() {
+            return this.on;
+        }
+        /** Switch on or off at once; the first switch on makes the stage, once. */
+        set enabled(v) {
+            this.on = v;
+            if (v)
+                this.start();
+            else
+                this.stop();
+        }
+        get state() {
+            if (!this.on)
+                return 'off';
+            if (this.failure)
+                return this.failure;
+            return this.still || this.motionQuery?.matches ? 'reduced' : 'on';
+        }
+        start() {
+            if (this.stage || this.failure)
+                return;
+            const made = SE.WaterFxGl.create(WaterFx.makeCanvas());
+            if (typeof made === 'string')
+                this.fail(made);
+            else
+                this.stage = made;
+        }
+        stop() {
+            this.stage?.release();
+            this.key = '';
+            this.owner = new Uint8Array(0);
+            this.slotChunk = new Int16Array(0);
+            this.slotMotion = [];
+            this.slotHash = new Uint32Array(0);
+            this.colorsOf = null;
+            SE.waterFxStats.active = false;
+        }
+        fail(why) {
+            this.failure = why;
+            this.stage = null;
+            SE.waterFxStats.active = false;
+            console.warn(`Wassereffekte aus (${why}): Standardwasser.`);
+        }
+        /** Over the cached terrain, before the surf (`ctx` in any transform; left at identity when it draws). */
+        draw(ctx, cam, cols, rows, world, land, layers, overlay, now) {
+            const stage = this.stage;
+            SE.waterFxStats.active = false;
+            if (!stage || !this.on)
+                return;
+            if (stage.lost) {
+                this.fail('lost');
+                return;
+            }
+            const strength = waterFxStrength(cam.tilePx);
+            const art = land.art;
+            if (this.still || this.motionQuery?.matches || !layers.oceans || overlay || strength === 0 || !land.ready || !art)
+                return;
+            if (this.colorsOf !== art) {
+                stage.colors(waterFxColors(art));
+                this.colorsOf = art;
+            }
+            const tx0 = Math.floor(cam.scrollX);
+            const tx1 = tx0 + Math.ceil(cols) + 1;
+            const ty0 = Math.max(0, Math.floor(cam.scrollY));
+            const ty1 = Math.min(SE.GRID_H, Math.floor(cam.scrollY) + Math.ceil(rows) + 1);
+            if (ty1 <= ty0)
+                return;
+            // The chunks of the tiles and one tile around: the shader reads a pixel's neighbours.
+            const cu0 = Math.floor((tx0 - 1) / SE.LAND_CHUNK);
+            const cu1 = Math.floor(tx1 / SE.LAND_CHUNK);
+            const cy0 = Math.floor(Math.max(0, ty0 - 1) / SE.LAND_CHUNK);
+            const cy1 = Math.floor(Math.min(SE.GRID_H - 1, ty1) / SE.LAND_CHUNK);
+            // Slots by chunk column modulo a power of two, so the world's seam keeps neighbours apart.
+            let nx = 1;
+            while (nx < Math.min(CHUNKS_X, cu1 - cu0 + 1))
+                nx *= 2;
+            const ny = cy1 - cy0 + 1;
+            if (nx > stage.slotsX || ny > stage.slotsY) {
+                stage.slots(Math.max(nx, stage.slotsX), Math.max(ny, stage.slotsY));
+                this.owner = new Uint8Array(stage.slotsX * stage.slotsY);
+                this.slotChunk = new Int16Array(this.owner.length).fill(-1);
+                this.slotMotion = new Array(this.owner.length).fill(null);
+                this.slotHash = new Uint32Array(this.owner.length);
+            }
+            const filled = this.fill(stage, land, cu0, cu1, cy0, cy1);
+            if (!this.seaInView)
+                return;
+            // Scaled like the terrain (landview.ts): whole multiples of 16 device px per tile sharp; between them
+            // the picture is made k times larger (nearest) and smoothly scaled down, so art pixels keep their edges.
+            const T = cam.tilePx * cam.dpr;
+            const k = T > 16 ? Math.ceil(T / 16 - 1e-6) : 1;
+            const sharp = Math.abs(T - 16 * k) < 1e-6;
+            const scale = sharp ? 1 : k;
+            const step = Math.floor(now / STEP_MS);
+            const key = `${step}|${tx0}|${ty0}|${tx1}|${ty1}|${strength}|${scale}`;
+            if (filled || key !== this.key) {
+                this.key = key;
+                const originX = (((tx0 % SE.GRID_W) + SE.GRID_W) % SE.GRID_W) * 16 + SE.GRID_W * 16;
+                this.tileBits(stage, world, land, layers, tx0, ty0, tx1, ty1, cu0, cu1, cy0, cy1);
+                this.shown = stage.render({
+                    originX, originY: ty0 * 16, width: (tx1 - tx0) * 16, height: (ty1 - ty0) * 16, scale,
+                    tileX: originX / 16 - 1, tileY: ty0 - 1, time: ((step * STEP_MS) / 1000) % CLOCK_WRAP_S, strength,
+                });
+                SE.waterFxStats.renders++;
+                SE.waterFxStats.canvasPx = (tx1 - tx0) * (ty1 - ty0) * 256 * scale * scale;
+            }
+            if (stage.lost) {
+                this.fail('lost');
+                return;
+            }
+            if (!this.shown)
+                return;
+            SE.waterFxStats.active = true;
+            const s = T / 16;
+            const smooth = ctx.imageSmoothingEnabled;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.imageSmoothingEnabled = !sharp;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(stage.canvas, (tx0 - cam.scrollX) * T, (ty0 - cam.scrollY) * T, (tx1 - tx0) * 16 * s, (ty1 - ty0) * 16 * s);
+            ctx.imageSmoothingEnabled = smooth;
+        }
+        /** Bring the slots up to the chunks composed now; true when any slot changed. */
+        fill(stage, land, cu0, cu1, cy0, cy1) {
+            let budget = UPLOADS_PER_PICTURE;
+            let changed = this.pending;
+            this.pending = false;
+            this.seaInView = false;
+            for (let cy = cy0; cy <= cy1; cy++) {
+                for (let cu = cu0; cu <= cu1; cu++) {
+                    const cw = ((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X;
+                    const s = (cy % stage.slotsY) * stage.slotsX + (cw % stage.slotsX);
+                    const n = cy * CHUNKS_X + cw;
+                    const m = land.motion(cw, cy);
+                    if (this.slotChunk[s] === n && this.slotMotion[s] === m) {
+                        if (this.owner[s] !== 0)
+                            this.seaInView = true;
+                        continue;
+                    }
+                    const sea = m && m.sea && m.w === CHUNK_PX && m.sea.length === CHUNK_PX * CHUNK_PX ? m.sea : null;
+                    const h = sea ? seaHash(sea) : 0;
+                    if (this.slotChunk[s] === n && (sea ? this.owner[s] === n + 1 && this.slotHash[s] === h : this.owner[s] === 0)) {
+                        // Composed anew for its land: the slot shows this sea already.
+                        this.slotMotion[s] = m;
+                        if (sea)
+                            this.seaInView = true;
+                        continue;
+                    }
+                    changed = true;
+                    if (sea && budget === 0) {
+                        // Shown as no sea until its turn, never as the slot's last chunk.
+                        this.owner[s] = 0;
+                        this.slotChunk[s] = -1;
+                        this.pending = true;
+                        this.seaInView = true;
+                        continue;
+                    }
+                    if (sea) {
+                        stage.chunk(cw % stage.slotsX, cy % stage.slotsY, sea);
+                        budget--;
+                        this.slotHash[s] = h;
+                        SE.waterFxStats.chunkUploads++;
+                        SE.waterFxStats.uploadBytes += sea.length;
+                    }
+                    this.owner[s] = sea ? n + 1 : 0;
+                    if (sea)
+                        this.seaInView = true;
+                    this.slotChunk[s] = n;
+                    this.slotMotion[s] = m;
+                }
+            }
+            if (changed)
+                stage.owners(this.owner);
+            return changed;
+        }
+        /** The tiles texture over [tx0 - 1, tx1] × [ty0 - 1, ty1]: see waterfxgl.ts. */
+        tileBits(stage, world, land, layers, tx0, ty0, tx1, ty1, cu0, cu1, cy0, cy1) {
+            const f = land.field;
+            const W = tx1 - tx0 + 2;
+            const H = ty1 - ty0 + 2;
+            if (this.bits.length < W * H)
+                this.bits = new Uint8Array(W * H);
+            const bits = this.bits.subarray(0, W * H);
+            bits.fill(0);
+            for (let y = 0; y < H; y++) {
+                const ty = ty0 - 1 + y;
+                if (ty < 0 || ty >= SE.GRID_H)
+                    continue;
+                for (let x = 0; x < W; x++) {
+                    const j = ty * SE.GRID_W + SE.wrapX(tx0 - 1 + x);
+                    let b = f.key[j] === 0 && (f.reef[j] !== 0 || f.lagoon[j] > 0) ? 1 : 0;
+                    if ((layers.events && world.eventTtl[j] > 0) || SE.shoreBusy[j])
+                        b |= 2;
+                    if (layers.cities && world.tech[j] !== SE.Tech.None)
+                        b |= 4;
+                    bits[y * W + x] = b;
+                }
+            }
+            for (let cy = cy0; cy <= cy1; cy++) {
+                for (let cu = cu0; cu <= cu1; cu++) {
+                    const box = land.dissolving(((cu % CHUNKS_X) + CHUNKS_X) % CHUNKS_X, cy);
+                    if (!box)
+                        continue;
+                    for (let ty = cy * SE.LAND_CHUNK + box[1]; ty <= cy * SE.LAND_CHUNK + box[3]; ty++) {
+                        for (let tu = cu * SE.LAND_CHUNK + box[0]; tu <= cu * SE.LAND_CHUNK + box[2]; tu++) {
+                            const x = tu - (tx0 - 1);
+                            const y = ty - (ty0 - 1);
+                            if (x >= 0 && x < W && y >= 0 && y < H)
+                                bits[y * W + x] |= 2;
+                        }
+                    }
+                }
+            }
+            stage.tileBits(bits, W, H);
+            SE.waterFxStats.tileUploads++;
+        }
+    }
+    /** Makes the stage's canvas (tests hand in their own). */
+    WaterFx.makeCanvas = () => document.createElement('canvas');
+    SE.WaterFx = WaterFx;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — clownfish slipping out of the corals
  * -----------------------------------------------------------------------------
  * On every reef, at any time (kept simple on purpose: no date, no grazing
@@ -57766,6 +58545,14 @@ var SE;
             this.ambient = new SE.AmbientLayer();
             this.waterMotion = new SE.WaterMotion();
             this.reefSwell = new SE.ReefSwell();
+            /** Caustics and glint, experimental and off unless switched on (waterfx.ts). */
+            this.waterFx = new SE.WaterFx();
+            /**
+             * Pins the clock of everything animated on the map, ms on performance.now()'s scale
+             * (screenshots and comparisons: `?animclock=<ms>`, or set it); null lets them run.
+             */
+            this.animClock = typeof location !== 'undefined' && /[?&]animclock=\d/.test(location.search)
+                ? Number(new URLSearchParams(location.search).get('animclock')) : null;
             this.clownfish = new SE.ClownfishLayer();
             this.herds = new SE.HerdLayer();
             this.whales = new SE.WhaleLayer();
@@ -57844,6 +58631,7 @@ var SE;
             this.fx.reduce = on;
             this.waterMotion.still = on;
             this.reefSwell.still = on;
+            this.waterFx.still = on;
             this.clownfish.still = on;
             this.whales.still = on;
             this.dolphins.still = on;
@@ -58084,6 +58872,8 @@ var SE;
                 ctx.drawImage(this.base, 0, 0);
             }
             const cam = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr };
+            // Animations run on their own clock, which a test may pin; the camera and the redraw logic keep real time.
+            const t = this.animClock ?? now;
             if (this.pixelTerrain) {
                 if (world.seed !== this.motionSeed) {
                     this.motion.reset();
@@ -58098,18 +58888,20 @@ var SE;
                     this.cities.draw(ctx, cam, world, this.land.field, x0, y0, x1, y1);
             };
             if (this.pixelTerrain && !previewing) {
-                this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, now);
-                this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, now);
+                // Right over the cached terrain: the surf, the swell and all that stands or moves on the sea stay on top.
+                this.waterFx.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers, this.overlay !== SE.Overlay.None, t);
+                this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
+                this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
                 // Over the swell: a crest paints the composed sea's colour and would cut holes into a fish.
                 if (this.layers.life)
-                    this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, now);
+                    this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
                 // Under the creatures, so an animal near a calving stays on top.
                 if (this.layers.oceans) {
                     ctx.setTransform(1, 0, 0, 1, 0, 0);
-                    this.calving.draw(ctx, cam, now);
+                    this.calving.draw(ctx, cam, t);
                 }
                 if (this.layers.life)
-                    this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, now);
+                    this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
             }
             if (!fx)
                 this.fx.show.flush(world);
@@ -58117,38 +58909,38 @@ var SE;
             if (!this.land.pending && !this.land.composing)
                 this.fx.baseTick = this.baseTick;
             if (fx) {
-                fx.update(world, cam, this.cols, this.rows, now, this.tickPhase);
+                fx.update(world, cam, this.cols, this.rows, t, this.tickPhase);
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
                 if (!previewing)
-                    fx.drawShake(ctx, this.base, cam, now);
-                fx.drawGround(ctx, world, cam, this.land, now, cities);
+                    fx.drawShake(ctx, this.base, cam, t);
+                fx.drawGround(ctx, world, cam, this.land, t, cities);
             }
             // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
             if (this.layers.cities) {
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
                 this.cities.drawCamps(ctx, cam, world, this.land.field, this.cols, this.rows);
-                this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, now);
-                this.oilRigs.draw(ctx, cam, world, now);
-                this.spaceport.draw(ctx, cam, world, now);
-                this.wonders.draw(ctx, cam, world, this.land.field, now);
-                this.trains.draw(ctx, cam, world, this.land.field, now);
-                this.ships.draw(ctx, cam, world, now, this.cities);
+                this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, t);
+                this.oilRigs.draw(ctx, cam, world, t);
+                this.spaceport.draw(ctx, cam, world, t);
+                this.wonders.draw(ctx, cam, world, this.land.field, t);
+                this.trains.draw(ctx, cam, world, this.land.field, t);
+                this.ships.draw(ctx, cam, world, t, this.cities);
             }
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             if (this.layers.life) {
-                this.herds.update(world, now);
+                this.herds.update(world, t);
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.termites.draw(ctx, cam, world, now);
-                this.bubbles.draw(ctx, cam, this.cols, this.rows, world, now);
-                this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
-                this.dolphins.draw(ctx, cam, this.herds.markers, world, now);
-                this.sharks.draw(ctx, cam, this.herds.markers, world, now);
+                this.termites.draw(ctx, cam, world, t);
+                this.bubbles.draw(ctx, cam, this.cols, this.rows, world, t);
+                this.whales.draw(ctx, cam, this.herds.markers, world, this.land, t, this.regions);
+                this.dolphins.draw(ctx, cam, this.herds.markers, world, t);
+                this.sharks.draw(ctx, cam, this.herds.markers, world, t);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                this.herds.draw(ctx, this, world, now, this.tiles, this.regions, (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
+                this.herds.draw(ctx, this, world, t, this.tiles, this.regions, (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
             }
             if (this.layers.cities) {
-                this.settlers.draw(ctx, this, world, now, dpr, this.cities);
-                this.bands.draw(ctx, this, world, now, dpr);
+                this.settlers.draw(ctx, this, world, t, dpr, this.cities);
+                this.bands.draw(ctx, this, world, t, dpr);
             }
             // Over the creatures and settlers: the crown hides the tile behind it, so nothing there may show through.
             if (this.pixelTerrain) {
@@ -58163,12 +58955,12 @@ var SE;
             }
             if (this.layers.life) {
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.storks.draw(ctx, cam, this.cols, this.rows, world, now);
+                this.storks.draw(ctx, cam, this.cols, this.rows, world, t);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             }
             if (this.layers.cities)
                 SE.drawCityNames(ctx, this, world);
-            this.ambient.draw(ctx, this, world, now, this.layers.oceans, this.layers.clouds);
+            this.ambient.draw(ctx, this, world, t, this.layers.oceans, this.layers.clouds);
             if (fx) {
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
                 fx.drawTop(ctx, cam);
@@ -58176,7 +58968,7 @@ var SE;
             }
             if (this.decor) {
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.decor(ctx, cam, now);
+                this.decor(ctx, cam, t);
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             }
             else {
@@ -58329,8 +59121,14 @@ var SE;
                 return false;
             this.tiles.setDeviceTile(size * dpr);
             this.regions.refresh(world);
-            this.swap.width = this.base.width;
-            this.swap.height = this.base.height;
+            // Assigning a canvas size clears it and resets its context even when the
+            // size is unchanged. No clear is needed: the base is opaque everywhere
+            // (drawBase and the fill below paint it first), so it covers the old
+            // swap content. 'copy' instead measured as slow as the reset in Chrome.
+            if (this.swap.width !== this.base.width || this.swap.height !== this.base.height) {
+                this.swap.width = this.base.width;
+                this.swap.height = this.base.height;
+            }
             this.swapCtx.drawImage(this.base, 0, 0);
             const ctx = this.baseCtx;
             ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -62212,6 +63010,28 @@ var SE;
         return key;
     }
     SE.groupLabel = groupLabel;
+    /** The picture that stands for a group of a share, the class's or plant group's own icon; none for a group with no single species or plant behind it. */
+    function groupIcon(key) {
+        const [kind, n] = key.split(':');
+        if (kind === 'life') {
+            const art = SE.SPECIES[Number(n)]?.stages[0]?.art;
+            return art ? { art, look: SE.CREATURE_LOOK } : null;
+        }
+        if (kind === 'flora' && Number(n) !== SE.Flora.None) {
+            const art = SE.FLORA_ART[Number(n)]?.dense;
+            return art ? { art, look: SE.PLANT_LOOK } : null;
+        }
+        if (key === 'plankton') {
+            const art = SE.SPECIES[SE.Life.Prokaryote]?.stages.find((s) => s.name === 'Cyanobakterien')?.art;
+            return art ? { art, look: SE.CREATURE_LOOK } : null;
+        }
+        if (key === 'algae') {
+            const art = SE.FLORA_ART[SE.Flora.MarineAlgae]?.dense;
+            return art ? { art, look: SE.PLANT_LOOK } : null;
+        }
+        return null;
+    }
+    SE.groupIcon = groupIcon;
     /** How a process's groups were split, as the window says it. */
     const GROUP_NOTES = {
         o2: {
@@ -62235,7 +63055,7 @@ var SE;
         }
         return Object.entries(groups)
             .filter(([, v]) => v !== 0)
-            .map(([key, value]) => ({ key, label: groupLabel(key), value, share: value > 0 ? value / plus : value / minus }))
+            .map(([key, value]) => ({ key, label: groupLabel(key), icon: groupIcon(key), value, share: value > 0 ? value / plus : value / minus }))
             .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
     }
     /** Whether process `id` of `gas` has groups to show in the last tick's balance. */
@@ -62441,6 +63261,25 @@ var SE;
     function setText(el, text) {
         if (el.textContent !== text)
             el.textContent = text;
+    }
+    /** A group with an icon shows only the icon, its name as the hover title; one without keeps its name as text. */
+    function setLabel(el, l) {
+        if (!l.icon) {
+            if (el.dataset.icon) {
+                delete el.dataset.icon;
+                el.removeAttribute('title');
+                el.removeAttribute('aria-label');
+            }
+            setText(el, l.label);
+            return;
+        }
+        if (el.dataset.icon !== l.key) {
+            el.textContent = '';
+            el.appendChild(SE.pixelArt(SE.artSvg(l.icon.art, l.icon.look), 18, 'gas-group-icon'));
+            el.dataset.icon = l.key;
+        }
+        el.title = l.label;
+        el.setAttribute('aria-label', l.label);
     }
     function row(label) {
         const r = SE.make('div', 'gas-detail-row');
@@ -62679,7 +63518,7 @@ var SE;
                 }
                 seen.add(l.key);
                 r.row.hidden = false;
-                setText(r.label, l.label);
+                setLabel(r.label, l);
                 setText(r.share, sea ? '' : shareText(l.share));
                 setText(r.value, `${SE.fmtChange(l.value)} ${names.unit}`);
             }
@@ -72178,6 +73017,7 @@ var SE;
         const inputs = [];
         const icons = [];
         const sliders = [];
+        const notes = [];
         const sync = () => {
             for (const i of inputs)
                 i.input.checked = i.on();
@@ -72185,6 +73025,11 @@ var SE;
                 s.input.disabled = !s.on();
             for (const i of icons)
                 i.el.src = i.on() ? i.src : i.off;
+            for (const n of notes) {
+                n.el.textContent = n.text();
+                // Not `hidden`: the row's display rule would win over it.
+                n.el.style.display = n.el.textContent === '' ? 'none' : '';
+            }
         };
         const row = (type, label, icon, on, change, name, iconOff) => {
             const id = `setting-${++settingSeq}`;
@@ -72209,6 +73054,13 @@ var SE;
                 const line = row('checkbox', d.label, d.icon, d.on, d.toggle, undefined, d.iconOff);
                 line.classList.toggle('settings-group', !!d.group);
                 body.appendChild(line);
+                if (d.note) {
+                    // Inline, safe with a stale stylesheet: a quiet line under its switch.
+                    const el = SE.make('div', 'settings-row settings-note');
+                    el.style.cssText = 'font-size:0.85em;opacity:0.75;padding-left:2.2em';
+                    notes.push({ el, text: d.note });
+                    body.appendChild(el);
+                }
                 if (d.volume) {
                     const { input, percent } = SE.volumeSlider(`${d.label}: Lautstärke`, d.volume);
                     sliders.push({ input, on: d.on });
@@ -72461,7 +73313,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.92.3';
+    SE.APP_VERSION = '0.92.4';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -79034,16 +79886,11 @@ var SE;
      * counts how many are gone. 'label' also shortens the era names, 'pips'
      * leaves the one button that steps through the speeds.
      */
-    const GIVE_WAY = ['spark', 'label', 'sea', 'temp', 'co2', 'life', 'detail', 'air', 'pips', 'time', 'brand'];
+    const GIVE_WAY = ['spark', 'label', 'temp', 'co2', 'detail', 'air', 'pips', 'time', 'brand'];
     const CHIPS = [
         { key: 'omega', icon: 'hud_energy', name: 'Energie (Ω)', tip: 'Energie (Ω) für Werkzeuge – füllt sich, während die Zeit läuft', minW: 46 },
-        { key: 'ep', icon: 'hud_ep', name: 'Evolutionspunkte', tip: 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', minW: 28 },
-        { key: 'life', icon: 'hud_life', name: 'Leben', tip: 'Leben: wie viel der Planetenoberfläche belebt ist', label: 'belebt', series: 5, still: 0.002, minW: 54 },
+        { key: 'ep', icon: 'hud_ep', name: 'Evolutionspunkte', tip: 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', minW: 46 },
         { key: 'air', icon: 'hud_air', name: 'O₂ Luft', tip: 'O₂ Luft: Sauerstoff in der Atmosphäre, in Prozent', label: 'O₂ Luft', series: 2, still: 0.1, minW: 48, air: true },
-        {
-            key: 'sea', icon: 'hud_sea', name: 'O₂ Meer', label: 'O₂ Meer', series: 8, still: 0.5, minW: 41, air: true,
-            tip: 'O₂ Meer: gelöster Sauerstoff, in Prozent der heutigen Sättigung. Er steigt erst, wenn das gelöste Eisen im Meer verbraucht ist.',
-        },
         { key: 'co2', icon: 'hud_co2', name: 'CO₂', tip: 'Kohlendioxid in der Atmosphäre', label: 'CO₂', series: 1, still: 2, minW: 72, air: true },
         { key: 'temp', icon: 'hud_temp', name: 'Temperatur', tip: 'Mittlere Temperatur des Planeten', label: 'Temperatur', series: 0, still: 0.1, minW: 54 },
     ];
@@ -79078,7 +79925,6 @@ var SE;
             this.eraRow = SE.make('div', 'lt-era-row');
             this.eraBar = inline('lt-era');
             this.scale = SE.make('span', 'lt-label lt-scale');
-            this.omegaBar = inline('lt-omega-bar');
             this.devTag = SE.make('span', 'lt-tag', 'DEV'); // DEVMODE
             this.speedBox = SE.make('div', 'lt-speed');
             this.play = SE.make('button', 'lt-btn lt-play');
@@ -79117,19 +79963,11 @@ var SE;
             css(top, { position: 'relative', zIndex: '600', padding: `0 ${ap(2)}`, gap, background: ui.color('wood1') });
             // 'safe': content too wide overflows to the right, where fit() sees it in scrollWidth (and is never pushed off the left edge).
             css(hud, { display: 'flex', alignItems: 'center', justifyContent: 'safe flex-end', flex: '1 1 auto', minWidth: '0', marginLeft: '0', gap });
-            top.prepend(this.brand);
-            top.prepend(this.bg.canvas);
-            const logo = ui.sprite('logo');
-            this.brand.setAttribute('role', 'img');
-            this.brand.setAttribute('aria-label', 'Gaia Reborn');
-            css(this.brand, { ...PANEL, flex: 'none', width: ap(BRAND_PAD[0] + (logo?.w ?? 88) + BRAND_PAD[1]) });
-            this.panels.push(this.brand);
-            this.part('brand', this.brand, 'flex');
+            top.prepend(this.bg.canvas); // the GAIA REBORN plaque (this.brand) is no longer shown
             for (const spec of CHIPS)
                 this.chips[spec.key] = this.chip(spec);
             const c = this.chips;
             c.omega.value.after(this.devTag); // DEVMODE
-            c.omega.value.parentElement?.after(this.omegaBar.canvas);
             this.info.attach(c.omega.el, (pop) => hooks.fillOmega(pop));
             this.info.attach(c.ep.el, (pop) => hooks.fillEp(pop));
             this.buildTime();
@@ -79185,9 +80023,7 @@ var SE;
             put(c.ep.value, ep);
             if (c.ep.sub)
                 put(c.ep.sub, epRate > 0 ? `+${SE.fmt.two(epRate)}` : '');
-            put(c.life.value, SE.fmt.pct(w.lifeCover));
             put(c.air.value, `${SE.fmt.one(w.o2)} %`);
-            put(c.sea.value, `${SE.fmt.int(w.oceanO2)} %`);
             put(c.co2.value, `${SE.fmt.int(w.co2)} ppm`);
             put(c.temp.value, `${SE.fmt.one(w.globalTemp)} °C`);
             for (const spec of CHIPS) {
@@ -79202,7 +80038,6 @@ var SE;
             this.relativeDate = relativeDate;
             this.writeDate();
             const sc = SE.uiScale();
-            this.omegaSig = SE.drawOmegaBar(this.omegaBar, fill, sc, this.omegaSig);
             if (this.age >= 0)
                 this.eraSig = SE.drawEraBar(this.eraBar, this.age, sc, this.eraSig);
             const n = history.years.length;
@@ -79238,7 +80073,7 @@ var SE;
         /* ------------------------------------------------------------ build -- */
         chip(spec) {
             const el = SE.make('div', `lt-chip lt-${spec.key}`);
-            css(el, { ...PANEL, flex: '1 0 auto', maxWidth: ap(112), padding: `0 ${ap(PAD)}`, gap: ap(3) });
+            css(el, { ...PANEL, flex: 'none', padding: `0 ${ap(PAD)}`, gap: ap(3) });
             // Focusable, so the explanation is reachable by keyboard, not only by hovering.
             el.dataset.tip = spec.tip;
             el.tabIndex = 0;
@@ -83262,7 +84097,7 @@ var SE;
             this.omegaStageSeen = 0;
             this.speed = 3;
             this.lastRunningSpeed = 3;
-            this.settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true };
+            this.settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true, waterFx: false, showFps: false };
             /** The field last clicked on the overview map, its globe or with Examine, shown on the card beside the globe. */
             this.mapField = null;
             this.selection = {
@@ -83421,6 +84256,7 @@ var SE;
             this.stage = SE.el('desktop');
             SE.Modal.attach(SE.el('modal-root'));
             this.loadSettings();
+            SE.perfHud.showFps(this.settings.showFps);
             this.music = new SE.MusicPlayer(this.settings.music, this.settings.musicVolume);
             SE.SFX.volume = () => (this.settings.sound ? this.settings.soundVolume : 0);
             // Every press anywhere, UI or map: capture phase, so stopPropagation can't swallow it.
@@ -83522,6 +84358,7 @@ var SE;
             this.stage.appendChild(canvas);
             this.editView = new SE.EditView(canvas);
             this.editView.reduceEffects = this.settings.reduceEffects;
+            this.editView.waterFx.enabled = SE.waterFxQuery(location.search) ?? this.settings.waterFx;
             this.wireCanvas(canvas);
             /* ---- the living rail (tools, a knot, Evolution, Planet, Fenster) and the active tool's card ---- */
             const dock = SE.make('aside', 'dock');
@@ -84275,6 +85112,17 @@ var SE;
                     kind: 'toggle', group: true, label: 'Effekte reduzieren (kein Wackeln, keine Blitze)', icon: SE.uiIcon('layer-events'),
                     on: () => this.settings.reduceEffects,
                     toggle: () => { this.settings.reduceEffects = !this.settings.reduceEffects; this.editView.reduceEffects = this.settings.reduceEffects; this.saveSettings(); },
+                },
+                {
+                    kind: 'toggle', label: 'Wassereffekte verbessern (experimentell)', icon: SE.uiIcon('layer-oceans'),
+                    on: () => this.editView.waterFx.enabled,
+                    toggle: () => { this.settings.waterFx = this.editView.waterFx.enabled = !this.editView.waterFx.enabled; this.saveSettings(); },
+                    note: () => SE.waterFxNote(this.editView.waterFx.state),
+                },
+                {
+                    kind: 'toggle', label: 'Bildrate (FPS) oben links anzeigen', icon: SE.uiIcon('menu-speed'),
+                    on: () => this.settings.showFps,
+                    toggle: () => { this.settings.showFps = !this.settings.showFps; SE.perfHud.showFps(this.settings.showFps); this.saveSettings(); },
                 },
                 {
                     kind: 'toggle', label: SE.INTRO_DEV ? 'Studio- und Logo-Intro bei jedem Start zeigen (Dev)' : 'Ganzes Intro beim nächsten „Spiel starten“ zeigen', icon: SE.uiIcon('play'),
@@ -85683,6 +86531,10 @@ var SE;
                     this.settings.introDevOff = s.introDevOff;
                 if (typeof s.mapGlobe === 'boolean')
                     this.settings.mapGlobe = s.mapGlobe;
+                if (typeof s.waterFx === 'boolean')
+                    this.settings.waterFx = s.waterFx;
+                if (typeof s.showFps === 'boolean')
+                    this.settings.showFps = s.showFps;
             }
             catch {
                 // Settings are a convenience; defaults are fine.

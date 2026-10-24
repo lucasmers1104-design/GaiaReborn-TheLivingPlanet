@@ -4,7 +4,8 @@
  * Frame, tick, redraw, chunk and terrain-field timings, averaged over the
  * last second with their maximum. app.ts, render.ts and landview.ts report
  * here; hidden, every report returns at once, and the text is rewritten at
- * most twice a second.
+ * most twice a second. The frame rate alone can stay on in the top left
+ * corner (setting "Bildrate (FPS) oben links anzeigen").
  * ========================================================================== */
 
 namespace SE {
@@ -32,6 +33,11 @@ namespace SE {
     private older = perfWindow();
     private newer = perfWindow();
     private cur = perfWindow();
+    /** The frame rate alone, top left ("Einstellungen"); hidden while the F3 display shows it. */
+    private fpsEl: HTMLElement | null = null;
+    private fpsOn = false;
+    private fpsFrames = 0;
+    private fpsAt = 0;
 
     toggle(): void {
       this.on = !this.on;
@@ -42,10 +48,36 @@ namespace SE {
       this.cur = perfWindow();
       this.at = performance.now();
       if (this.on) this.el.textContent = '…';
+      this.showFps(this.fpsOn);
+    }
+
+    showFps(on: boolean): void {
+      this.fpsOn = on;
+      if (on && !this.fpsEl) {
+        // Inline, safe with a stale stylesheet: on the empty wood at the status bar's left end.
+        this.fpsEl = document.body.appendChild(make('div', 'fps-counter'));
+        this.fpsEl.style.cssText = 'position:fixed;top:14px;left:14px;z-index:1000;padding:3px 7px;background:rgba(31,18,10,0.85);'
+          + 'border:2px solid #5e3410;color:#f6cc6a;font:700 13px/1.2 var(--mono, Consolas, monospace);'
+          + 'font-variant-numeric:tabular-nums;white-space:pre;pointer-events:none';
+      }
+      if (!this.fpsEl) return;
+      this.fpsEl.hidden = !on || this.on;
+      this.fpsEl.textContent = '– FPS';
+      this.fpsFrames = 0;
+      this.fpsAt = performance.now();
     }
 
     /** End of a frame: ms since the last one began, ms this one worked. */
     frame(gap: number, work: number): void {
+      if (this.fpsEl && !this.fpsEl.hidden) {
+        this.fpsFrames++;
+        const now = performance.now();
+        if (now - this.fpsAt >= PERF_WINDOW_MS) {
+          this.fpsEl.textContent = `${Math.round((this.fpsFrames * 1000) / (now - this.fpsAt))} FPS`;
+          this.fpsFrames = 0;
+          this.fpsAt = now;
+        }
+      }
       if (!this.on) return;
       this.cur.gap.add(gap);
       this.cur.frame.add(work);

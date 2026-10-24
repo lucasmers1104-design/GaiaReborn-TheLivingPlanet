@@ -654,6 +654,14 @@ namespace SE {
       return c && c.sig !== -1 ? c.motion : null;
     }
 
+    /** Tiles of chunk (cx, cy) from its corner whose picture is dissolving now, x0, y0, x1, y1 inclusive; null for none. */
+    dissolving(cx: number, cy: number): [number, number, number, number] | null {
+      const f = this.chunks.get(cy * CHUNKS_X + cx)?.fade;
+      if (!f || f.settled) return null;
+      const tile = (p: number): number => Math.floor((p - MARGIN) / 16);
+      return [tile(f.x0), tile(f.y0), tile(f.x1 - 1), tile(f.y1 - 1)];
+    }
+
     /**
      * Draw the terrain into `ctx` (device pixels, identity transform), only
      * where it meets the device-pixel rectangle [x0, x1) × [y0, y1).

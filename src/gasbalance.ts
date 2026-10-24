@@ -59,6 +59,28 @@ namespace SE {
     return key;
   }
 
+  /** The picture that stands for a group of a share, the class's or plant group's own icon; none for a group with no single species or plant behind it. */
+  export function groupIcon(key: string): { readonly art: Art; readonly look: ArtLook } | null {
+    const [kind, n] = key.split(':');
+    if (kind === 'life') {
+      const art = SPECIES[Number(n) as Life]?.stages[0]?.art;
+      return art ? { art, look: CREATURE_LOOK } : null;
+    }
+    if (kind === 'flora' && Number(n) !== Flora.None) {
+      const art = FLORA_ART[Number(n) as Flora]?.dense;
+      return art ? { art, look: PLANT_LOOK } : null;
+    }
+    if (key === 'plankton') {
+      const art = SPECIES[Life.Prokaryote]?.stages.find((s) => s.name === 'Cyanobakterien')?.art;
+      return art ? { art, look: CREATURE_LOOK } : null;
+    }
+    if (key === 'algae') {
+      const art = FLORA_ART[Flora.MarineAlgae]?.dense;
+      return art ? { art, look: PLANT_LOOK } : null;
+    }
+    return null;
+  }
+
   /** How a process's groups were split, as the window says it. */
   const GROUP_NOTES: Readonly<Record<GasId, Partial<Record<GasProcess, string>>>> = {
     o2: {
@@ -75,6 +97,7 @@ namespace SE {
   export interface GroupLine {
     readonly key: string;
     readonly label: string;
+    readonly icon: ReturnType<typeof groupIcon>;
     readonly value: number;
     /** Of all lines with the same sign, 0..1. */
     readonly share: number;
@@ -102,7 +125,7 @@ namespace SE {
     }
     return Object.entries(groups)
       .filter(([, v]) => v !== 0)
-      .map(([key, value]) => ({ key, label: groupLabel(key), value, share: value > 0 ? value / plus : value / minus }))
+      .map(([key, value]) => ({ key, label: groupLabel(key), icon: groupIcon(key), value, share: value > 0 ? value / plus : value / minus }))
       .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
   }
 

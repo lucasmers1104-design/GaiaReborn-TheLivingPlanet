@@ -99,6 +99,91 @@ Die Korallen wirkten wie auf die Wasseroberfläche geklebt. Drei Änderungen, al
 - **Tests:** `tests/reefswell.test.js` (2), `tests/clownfish.test.js` (8); dazu Riff-, Terrain-, Effekt- und Stadt-Atlas-Tests grün (48), `test:quick` grün.
 - **Geprüft** in headless Chrome am angelegten Riff (Erde „Heute“, Great Barrier Reef) bei 16, 32 und 48 px pro Feld. Bekannt: Die großen Tier-Symbole der Ebene „Leben“ liegen über den Fischen; ein Fisch kann darunter hervorschwimmen.
 
+## Wassereffekte, experimentell (24. 10. 2026)
+
+Prototyp, **standardmäßig aus**. Einschalten unter Einstellungen → „Wassereffekte verbessern (experimentell)“ (sofort, ohne Neustart, Kamera bleibt). Gespeichert in `simearth2.settings` (`waterFx`); ältere Einstellungen ohne das Feld laden als „aus“. `?waterfx=on|off` setzt den Startwert nur für diesen Seitenaufruf und speichert nichts; der Schalter bleibt bedienbar.
+
+- **Kaustiken:** langsam wandernde Lichtnetze auf Korallen, Riffsand und Wasser in Riffen und Lagunen. Farben wie bei der Dünung (`reefSwellLift`): Wasser eine Rampenstufe heller, Korallen ihre Glanzfarbe. Das Netz besteht aus runden Zellen von etwa 16 × 14 px, langsam verbogen, an Knoten dicker. Es fließt in Flecken über das Riff und wird zum Land hin schmaler; das letzte Pixel vor dem Trockenen bleibt frei.
+- **Glanz:** kurze waagrechte Lichtkämme von 1–4 px auf offener See, eine Stufe heller, die Mitte langer Kämme zwei Stufen. Sie liegen in breiten, langsam ziehenden Zonen, erscheinen über rund 2–3 s und vergehen wieder. Sie lesen sich wie die gebackenen Rippelstriche, die sich bewegen. Der Glanz kommt nie näher als 5 px ans Ufer (dort sind Brandung und Dünung) und wird nie zu Schaum, Eis oder Weiß. Die funkelnden Sterne aus `ambient.ts` bleiben unverändert.
+- **Aufbau:**
+  - `src/waterfxgl.ts`: WebGL2-Programm auf eigener Leinwand, die nicht in der Seite hängt. Ein Pixel ist ein Atlaspixel.
+  - `src/waterfx.ts`: Schalter, Masken und die Kopie ins Kartenbild. Sie liegt direkt über dem gecachten Gelände (`EditView.render`) und unter Brandung, Dünung, Clownfischen, Tieren, Schiffen, Ereignissen und Beschriftung.
+  - Masken: `LandMotion.sea` jedes Chunks, also die komponierte Farbe, wo Meer sichtbar ist. Untergetauchte Korallen und Riffsand gehören dazu, Sandinseln, Palmen, Strand und Meereis nicht. Je Chunk ein 256 × 256-Platz. Ein Chunk wird nur hochgeladen, wenn er neu komponiert ist und sich sein Meer geändert hat (Prüfsumme), höchstens 8 je Bild. Ohne die Prüfsumme lud das laufende Spiel rund 70 Chunks je Sekunde hoch, weil die Landschaft Chunks für Pflanzen und Land laufend neu komponiert. Ein Besitzerfeld verhindert, dass ein noch leerer Platz einen fremden Chunk zeigt.
+  - Je Feld: Riff oder Lagune aus `TerrainField`, bilinear zwischen den Feldmitten. Gesperrt sind Felder mit Ereignis-Symbol oder Flutwelle und solche, deren Bild gerade überblendet (Pinsel, Meereis); bei Städten ihr Bildkasten (2 px seitlich, 8 px nach oben).
+  - Alle Gitter wickeln an der Weltbreite. Darum gibt es keine Naht an Feld-, Chunk- und Weltgrenzen, und der Effekt bleibt beim Verschieben ortsfest.
+- **Takt und Zoom:** Ein neues Bild entsteht alle 140 ms im Takt der Brandung oder wenn die Ansicht ein Feld weiterrückt; dazwischen wird nur kopiert. Ab 16 px pro Feld zeigt sich der Effekt mit 35 %, ab 32 px voll, darunter gar nicht. Skaliert wird wie das Gelände: bei ganzzahligem Faktor scharf. Dazwischen (z. B. 24 px oder DPR 1,5) entsteht das Bild k-fach mit scharfen Blöcken und wird dann glatt verkleinert, wie bei `landview.blit`. Ein einfaches weiches Vergrößern machte die Linien sichtbar unschärfer als das Gelände.
+- **Wann nichts läuft:** AUS, „Effekte reduzieren“, `prefers-reduced-motion`, Ebene „Ozeane“ aus, Klimaüberlagerung und Zoom-Vorschau. AUS legt keinen WebGL-Kontext an; Zurückschalten gibt Texturen und Bild frei.
+- **Ohne WebGL2:** Gilt auch für reines Software-WebGL (`failIfMajorPerformanceCaveat`), einen Shaderfehler und einen Kontextverlust. Dann bleibt für die Sitzung das Standardwasser, es kommt eine Warnung und kein neuer Versuch. Der Dialog zeigt „Standardwasser aktiv: …“.
+- **Prüfhilfen:**
+  - `?animclock=<ms>` hält alle Kartenanimationen an einer Zeit fest; `SE.app.editView.animClock` schaltet sie weiter.
+  - `tools/save-scene.js` macht aus einem Spielstand eine Szene: geladen, pausiert, nur die Karte, Kamera gesetzt.
+  - `tools/ui-shot.js` hat neu `--each` (viele Ansichten in einer Seite), `--init` (vor dem Start, z. B. kein WebGL2 oder gesperrter Speicher), `--media` (reduzierte Bewegung) und `@datei`.
+  - `tools/perf-bench.js` hat die Szenarien `reef` und `reefpan` und die Tabelle `water fx`.
+- **Vergleich reproduzieren** (Spielstand `reef`: Erde „Heute“, Seed 12345, 1500 Ticks, Great Barrier Reef 232/77, 32 px):
+  ```
+  node tools/perf-bench.js saves
+  node tools/save-scene.js tmp/perf/reef.save <dir>/reef.js --x 232 --y 77 --zoom 32
+  node tools/ui-shot.js --page index --query "animclock=20000" --w 1280 --h 800 --eval @<dir>/reef.js --wait2 2500 \
+    --frames 2 --gap 2000 --each "SE.app.editView.waterFx.enabled = f === 1; SE.app.editView.markDirty()" --out <dir>/wfx.png
+  ```
+- **Bilder** (Spielstand `reef`, Uhr fest; AUS | EIN | geänderte Pixel rot):
+  - `riffe-10-wasser-aus-ein-zoom32.png`: Lagune und Riff bei 32 px.
+  - `riffe-11-wasser-aus-ein-zoom48.png`: dasselbe bei 48 px.
+  - `riffe-12-wasser-aus-ein-zoom16.png`: dasselbe bei 16 px.
+  - `riffe-13-wasser-zoom16-dpr15.png`: 16 px bei DPR 1,5, geglättet.
+  - `riffe-14-wasser-weltnaht-zoom32.png`: Riff über der Weltnaht.
+  - `riffe-15-wasser-meereis-zoom32.png`: Meereis bleibt frei.
+  - `riffe-16-wasser-ablauf-riff-zoom32.gif` und `riffe-17-wasser-ablauf-see-zoom32.gif`: je 22 Schritte zu 140 ms.
+  - `riffe-18-wasser-terraforming-zoom48.png`: vor dem Pinselstrich, beim Überblenden und danach.
+- **Geprüft** (headless Chrome, Windows, GPU):
+  - Zoom 12 (keine Änderung), 16, 24, 32 und 48 bei DPR 1, 1,5 und 2.
+  - Ortsfest: Eine Verschiebung um 1 Feld, ½ Feld und 3 Felder über die Weltnaht ist pixelgleich; Abweichungen gibt es nur am bildschirmfesten Rahmen.
+  - Ruhe: Pro 140-ms-Schritt wechseln 10–12 % der Effektpixel, jedes Pixel leuchtet im Mittel rund 1,3 s.
+  - Masken: Meereis, Land, Inseln, Tiere, Clownfische und Küstenstadt mit Namen bleiben unberührt.
+  - Terraforming: Eine neue Insel bleibt frei, auch während des Überblendens.
+  - Umschalten: über 40-mal im Wechsel in einer Seite (AUS gibt frei, EIN lädt neu).
+  - `file://` ohne `--allow-file-access-from-files`.
+  - Fehlerfälle: kein WebGL2 beim Start, Kontextverlust (`WEBGL_lose_context`), gesperrter Einstellungsspeicher (Schalter wirkt), `prefers-reduced-motion`. `?waterfx=on` lässt den gespeicherten Wert unverändert.
+  - Simulation: Hash über alle Weltfelder nach 400 Ticks vor und nach der Änderung gleich.
+  - Tests: `tests/waterfx.test.js` (10), Riff-, Dünungs- und Landschaftstests sowie `test:quick` grün.
+- **Messung** (`tools/perf-bench.js`, headless Chrome mit GPU, 1920 × 1080 CSS-Pixel, je Konfiguration 3 Wiederholungen mit 3 s Aufwärmen und 10 s Messzeit; Median aus 3; „vorher“ = Build v0.92.3; `reef` und `reefpan` pausiert, `bio` läuft auf „Schnell“):
+
+  | Szene | DPR | Arbeit p95 ms<br>vorher / AUS / EIN | Frames > 16,7 ms %<br>vorher / AUS / EIN | Abstand p95 ms<br>vorher / AUS / EIN |
+  |---|---|---|---|---|
+  | `reef` (stehend) | 1 | 4,9 / 5,3 / 4,6 | 0,3 / 0,3 / 0,3 | 26,7 / 26,7 / 26,7 |
+  | `reefpan` (WASD, Ziehen, Zoom) | 1 | 10,7 / 9,9 / 10,9 | 0,4 / 0,3 / 0,3 | 26,7 / 26,6 / 26,6 |
+  | `bio` (dicht, läuft) | 1 | 11,6 / 11,5 / 13,0 | 1,7 / 2,0 / 2,1 | 13,5 / 13,6 / 13,5 |
+  | `reef` | 1,5 | 6,6 / 6,4 / 6,8 | 1,6 / 2,1 / 1,9 | 40,1 / 44,4 / 44,3 |
+  | `reefpan` | 1,5 | 17,9 / 19,3 / 17,5 | 8,1 / 11,7 / 6,1 | 40,1 / 44,5 / 44,0 |
+  | `bio` | 1,5 | 16,5 / 17,6 / 17,3 | 4,6 / 5,9 / 5,3 | 44,7 / 45,2 / 44,8 |
+
+  - AUS kostet nichts Messbares; die Abweichungen liegen in der Streuung zwischen den Wiederholungen.
+  - EIN: In der dichten laufenden Szene steigt bei DPR 1 die Arbeit p95 um etwa 1,5 ms, verpasste Frames und Simulationstempo (6,7 Ticks/s) bleiben gleich. In den Riffszenen gibt es keinen messbaren Unterschied.
+  - DPR 1,5 liegt auf diesem Rechner schon vorher an der Grenze, das Rauschen ist dort größer als jeder Effekt.
+  - Uploads bei EIN: `reef` 7,2 Bilder/s ohne Chunk-Uploads. `reefpan` 18 Bilder/s und 15 Chunks (0,9 MiB) in 10 s. `bio` 12 Bilder/s und 55 Chunks (3,5 MiB) in 10 s.
+  - Vor der Prüfsumme (Zwischenstand) waren es in `bio` 50 Bilder/s und rund 900 Chunks (57 MiB) in 10 s, und 3,0 % statt 2,1 % der Frames lagen über 16,7 ms.
+  - Je Bild wird das Feldmuster (unter 10 KiB) neu geladen.
+  - Seiten-Heap 16–41 MB in allen Konfigurationen, ohne systematischen Unterschied.
+  - GPU-Zeit und GPU-Speicher sind nicht gemessen, die Arbeitszeit erfasst die Grafikkarte nur zum Teil. Die Speicherschätzung steht unter „Grenzen“.
+- **Bewertung:**
+  - Gewinn: Bei 24–48 px pro Feld liegen Riffe und Lagunen sichtbar unter Wasser, denn das Lichtnetz läuft ruhig über Korallen und Sand. Bei 16 px ist es bewusst schwach. Auf offener See ist der Glanz zurückhaltend: Er belebt die gebackenen Rippelstriche, auf dem tiefsten Blau sieht man ihn kaum.
+  - Artefakte:
+    - Das Netz besteht aus einer Zellschicht und wirkt in großen Lagunen etwas regelmäßig.
+    - Die Kaustiken folgen der Riff- und Lagunenlage je Feld. An deren Rand blenden sie weich aus und enden dadurch teils mitten im türkisen Flachwasser.
+    - Beim Pinsel und beim Gefrieren oder Tauen von Meereis setzt der Effekt im überblendeten Teil aus, bis die Überblendung fertig ist (etwa 1,5 s).
+    - Gesperrt wird nach dem aktuellen Weltstand, das Basisbild hängt bis zu 250 ms nach (beim Pinseln länger). Endet eine Stadt oder ein Ereignis, kann der Effekt kurz über ihr altes Bild laufen. Die Dünung hat dasselbe Muster.
+    - Während des Zoomens (Vorschau) gibt es keinen Effekt, wie bei der Brandung.
+  - Grenzen:
+    - Software-WebGL wird bewusst abgelehnt; ohne GPU-Beschleunigung bleibt das Standardwasser.
+    - Nach EIN → AUS bleibt der eine WebGL-Kontext erhalten, Texturen und Bild werden freigegeben. So verbraucht erneutes Einschalten keinen weiteren Kontext.
+    - Speicher: Effektbild bis 3872 × 2208 px (≈ 34 MiB bei 1920 × 1080, DPR 1,5, 16 px), Masken bis 4096 × 1536 Byte (6 MiB).
+    - Der Uhrumlauf nach 2 h lässt das Muster einmal springen.
+  - Empfehlung: als experimentelle Option behalten, nicht standardmäßig einschalten, bis echte Hardware gemessen ist (integrierte Grafik, 4K, Firefox und Safari). Nächste Schritte nach Nutzen:
+    1. Das Effektbild auf den sichtbaren Ausschnitt begrenzen und bei DPR ≥ 1,5 und 16–24 px eine Stufe gröber rechnen.
+    2. Bei Überblendungen die alte Maske weiterlaufen lassen statt auszusetzen.
+    3. Sperren nach dem Stand des Basisbilds statt live.
+    4. Eine zweite, gröbere Zellschicht nur in großen Lagunen.
+
 ## Offene Entscheidungen
 
 - **Palmen-Quote:** Fuß 1–2 px hinter der nassen Linie, Streifen ≥ 2 px und Krone 3–6 px über dem Wasser lassen sich an vielen Küsten nicht zugleich erfüllen.
@@ -108,6 +193,7 @@ Die Korallen wirkten wie auf die Wasseroberfläche geklebt. Drei Änderungen, al
 ## Nicht geprüft
 
 - andere Browser als headless Chrome
+- Wassereffekte: echte Monitore und Grafikkarten (nur headless Chrome mit GPU), integrierte Grafik, 4K, Windows-Skalierung im Fenster; GPU-Zeit nicht direkt gemessen; Langzeitbetrieb über den Uhrumlauf; Klimaüberlagerungen und Ebene „Ozeane“ aus nur im Code geprüft
 - Titel-Globus, Übersichtskarte „Lebensräume“ und Speicherstand-Vorschaubilder nur im Code; beim Laden keine Seitenfehler
 - Untersuchen-Fenster und Chronik-Texte nur per Test, nicht im Bild
 - die alte Kachelansicht (`?terrain=legacy`)

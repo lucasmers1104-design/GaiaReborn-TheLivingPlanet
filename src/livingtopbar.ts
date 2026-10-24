@@ -43,10 +43,10 @@ namespace SE {
    * counts how many are gone. 'label' also shortens the era names, 'pips'
    * leaves the one button that steps through the speeds.
    */
-  const GIVE_WAY = ['spark', 'label', 'sea', 'temp', 'co2', 'life', 'detail', 'air', 'pips', 'time', 'brand'] as const;
+  const GIVE_WAY = ['spark', 'label', 'temp', 'co2', 'detail', 'air', 'pips', 'time', 'brand'] as const;
   type Part = typeof GIVE_WAY[number];
 
-  type ChipKey = 'omega' | 'ep' | 'life' | 'air' | 'sea' | 'co2' | 'temp';
+  type ChipKey = 'omega' | 'ep' | 'air' | 'co2' | 'temp';
 
   interface ChipSpec {
     readonly key: ChipKey;
@@ -66,13 +66,8 @@ namespace SE {
 
   const CHIPS: readonly ChipSpec[] = [
     { key: 'omega', icon: 'hud_energy', name: 'Energie (Ω)', tip: 'Energie (Ω) für Werkzeuge – füllt sich, während die Zeit läuft', minW: 46 },
-    { key: 'ep', icon: 'hud_ep', name: 'Evolutionspunkte', tip: 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', minW: 28 },
-    { key: 'life', icon: 'hud_life', name: 'Leben', tip: 'Leben: wie viel der Planetenoberfläche belebt ist', label: 'belebt', series: 5, still: 0.002, minW: 54 },
+    { key: 'ep', icon: 'hud_ep', name: 'Evolutionspunkte', tip: 'Evolutionspunkte – entstehen aus der Vielfalt lebender Gruppen', minW: 46 },
     { key: 'air', icon: 'hud_air', name: 'O₂ Luft', tip: 'O₂ Luft: Sauerstoff in der Atmosphäre, in Prozent', label: 'O₂ Luft', series: 2, still: 0.1, minW: 48, air: true },
-    {
-      key: 'sea', icon: 'hud_sea', name: 'O₂ Meer', label: 'O₂ Meer', series: 8, still: 0.5, minW: 41, air: true,
-      tip: 'O₂ Meer: gelöster Sauerstoff, in Prozent der heutigen Sättigung. Er steigt erst, wenn das gelöste Eisen im Meer verbraucht ist.',
-    },
     { key: 'co2', icon: 'hud_co2', name: 'CO₂', tip: 'Kohlendioxid in der Atmosphäre', label: 'CO₂', series: 1, still: 2, minW: 72, air: true },
     { key: 'temp', icon: 'hud_temp', name: 'Temperatur', tip: 'Mittlere Temperatur des Planeten', label: 'Temperatur', series: 0, still: 0.1, minW: 54 },
   ];
@@ -116,7 +111,6 @@ namespace SE {
     private readonly eraRow = make('div', 'lt-era-row');
     private readonly eraBar = inline('lt-era');
     private readonly scale = make('span', 'lt-label lt-scale');
-    private readonly omegaBar = inline('lt-omega-bar');
     private readonly devTag = make('span', 'lt-tag', 'DEV'); // DEVMODE
     private readonly speedBox = make('div', 'lt-speed');
     private readonly play = make('button', 'lt-btn lt-play');
@@ -157,20 +151,11 @@ namespace SE {
       css(top, { position: 'relative', zIndex: '600', padding: `0 ${ap(2)}`, gap, background: ui.color('wood1') });
       // 'safe': content too wide overflows to the right, where fit() sees it in scrollWidth (and is never pushed off the left edge).
       css(hud, { display: 'flex', alignItems: 'center', justifyContent: 'safe flex-end', flex: '1 1 auto', minWidth: '0', marginLeft: '0', gap });
-      top.prepend(this.brand);
-      top.prepend(this.bg.canvas);
-
-      const logo = ui.sprite('logo');
-      this.brand.setAttribute('role', 'img');
-      this.brand.setAttribute('aria-label', 'Gaia Reborn');
-      css(this.brand, { ...PANEL, flex: 'none', width: ap(BRAND_PAD[0] + (logo?.w ?? 88) + BRAND_PAD[1]) });
-      this.panels.push(this.brand);
-      this.part('brand', this.brand, 'flex');
+      top.prepend(this.bg.canvas); // the GAIA REBORN plaque (this.brand) is no longer shown
 
       for (const spec of CHIPS) this.chips[spec.key] = this.chip(spec);
       const c = this.chips;
       c.omega.value.after(this.devTag); // DEVMODE
-      c.omega.value.parentElement?.after(this.omegaBar.canvas);
       this.info.attach(c.omega.el, (pop) => hooks.fillOmega(pop));
       this.info.attach(c.ep.el, (pop) => hooks.fillEp(pop));
 
@@ -222,9 +207,7 @@ namespace SE {
       put(c.omega.value, omega);
       put(c.ep.value, ep);
       if (c.ep.sub) put(c.ep.sub, epRate > 0 ? `+${fmt.two(epRate)}` : '');
-      put(c.life.value, fmt.pct(w.lifeCover));
       put(c.air.value, `${fmt.one(w.o2)} %`);
-      put(c.sea.value, `${fmt.int(w.oceanO2)} %`);
       put(c.co2.value, `${fmt.int(w.co2)} ppm`);
       put(c.temp.value, `${fmt.one(w.globalTemp)} °C`);
       for (const spec of CHIPS) {
@@ -239,7 +222,6 @@ namespace SE {
       this.writeDate();
 
       const sc = uiScale();
-      this.omegaSig = drawOmegaBar(this.omegaBar, fill, sc, this.omegaSig);
       if (this.age >= 0) this.eraSig = drawEraBar(this.eraBar, this.age, sc, this.eraSig);
       const n = history.years.length;
       const sig = `${n}|${history.years[n - 1]}|${sc.s}|${sc.dpr}|${ui.version}`;
@@ -273,7 +255,7 @@ namespace SE {
 
     private chip(spec: ChipSpec): Chip {
       const el = make('div', `lt-chip lt-${spec.key}`);
-      css(el, { ...PANEL, flex: '1 0 auto', maxWidth: ap(112), padding: `0 ${ap(PAD)}`, gap: ap(3) });
+      css(el, { ...PANEL, flex: 'none', padding: `0 ${ap(PAD)}`, gap: ap(3) });
       // Focusable, so the explanation is reachable by keyboard, not only by hovering.
       el.dataset.tip = spec.tip;
       el.tabIndex = 0;

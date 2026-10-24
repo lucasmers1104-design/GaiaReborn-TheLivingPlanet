@@ -88,6 +88,10 @@ namespace SE {
     introDevOff: boolean;
     /** The overview map shows its globe and field card (the fold tab under the legend). */
     mapGlobe: boolean;
+    /** "Wassereffekte verbessern (experimentell)": caustics and glint (waterfx.ts); `?waterfx=on|off` overrides it for one page load. */
+    waterFx: boolean;
+    /** The frame rate in the top left corner (perfhud.ts). */
+    showFps: boolean;
   }
 
   /** A disaster to fly to: where it started, and its storm's path if it has one. */
@@ -179,7 +183,7 @@ namespace SE {
     private omegaStageSeen = 0;
     private speed = 3;
     private lastRunningSpeed = 3;
-    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true };
+    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true, waterFx: false, showFps: false };
     /** The field last clicked on the overview map, its globe or with Examine, shown on the card beside the globe. */
     private mapField: { x: number; y: number } | null = null;
     private selection: ToolSelection = {
@@ -250,6 +254,7 @@ namespace SE {
       this.stage = el<HTMLElement>('desktop');
       Modal.attach(el<HTMLElement>('modal-root'));
       this.loadSettings();
+      perfHud.showFps(this.settings.showFps);
       this.music = new MusicPlayer(this.settings.music, this.settings.musicVolume);
       SFX.volume = () => (this.settings.sound ? this.settings.soundVolume : 0);
       // Every press anywhere, UI or map: capture phase, so stopPropagation can't swallow it.
@@ -348,6 +353,7 @@ namespace SE {
       this.stage.appendChild(canvas);
       this.editView = new EditView(canvas);
       this.editView.reduceEffects = this.settings.reduceEffects;
+      this.editView.waterFx.enabled = waterFxQuery(location.search) ?? this.settings.waterFx;
       this.wireCanvas(canvas);
 
       /* ---- the living rail (tools, a knot, Evolution, Planet, Fenster) and the active tool's card ---- */
@@ -1105,6 +1111,17 @@ namespace SE {
           kind: 'toggle', group: true, label: 'Effekte reduzieren (kein Wackeln, keine Blitze)', icon: uiIcon('layer-events'),
           on: () => this.settings.reduceEffects,
           toggle: () => { this.settings.reduceEffects = !this.settings.reduceEffects; this.editView.reduceEffects = this.settings.reduceEffects; this.saveSettings(); },
+        },
+        {
+          kind: 'toggle', label: 'Wassereffekte verbessern (experimentell)', icon: uiIcon('layer-oceans'),
+          on: () => this.editView.waterFx.enabled,
+          toggle: () => { this.settings.waterFx = this.editView.waterFx.enabled = !this.editView.waterFx.enabled; this.saveSettings(); },
+          note: () => waterFxNote(this.editView.waterFx.state),
+        },
+        {
+          kind: 'toggle', label: 'Bildrate (FPS) oben links anzeigen', icon: uiIcon('menu-speed'),
+          on: () => this.settings.showFps,
+          toggle: () => { this.settings.showFps = !this.settings.showFps; perfHud.showFps(this.settings.showFps); this.saveSettings(); },
         },
         {
           kind: 'toggle', label: INTRO_DEV ? 'Studio- und Logo-Intro bei jedem Start zeigen (Dev)' : 'Ganzes Intro beim nächsten „Spiel starten“ zeigen', icon: uiIcon('play'),
@@ -2467,6 +2484,8 @@ namespace SE {
         if (typeof s.introSeen === 'boolean') this.settings.introSeen = s.introSeen;
         if (typeof s.introDevOff === 'boolean') this.settings.introDevOff = s.introDevOff;
         if (typeof s.mapGlobe === 'boolean') this.settings.mapGlobe = s.mapGlobe;
+        if (typeof s.waterFx === 'boolean') this.settings.waterFx = s.waterFx;
+        if (typeof s.showFps === 'boolean') this.settings.showFps = s.showFps;
       } catch {
         // Settings are a convenience; defaults are fine.
       }

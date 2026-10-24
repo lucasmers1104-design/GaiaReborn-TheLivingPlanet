@@ -54,6 +54,26 @@ namespace SE {
     if (el.textContent !== text) el.textContent = text;
   }
 
+  /** A group with an icon shows only the icon, its name as the hover title; one without keeps its name as text. */
+  function setLabel(el: HTMLElement, l: GroupLine): void {
+    if (!l.icon) {
+      if (el.dataset.icon) {
+        delete el.dataset.icon;
+        el.removeAttribute('title');
+        el.removeAttribute('aria-label');
+      }
+      setText(el, l.label);
+      return;
+    }
+    if (el.dataset.icon !== l.key) {
+      el.textContent = '';
+      el.appendChild(pixelArt(artSvg(l.icon.art, l.icon.look), 18, 'gas-group-icon'));
+      el.dataset.icon = l.key;
+    }
+    el.title = l.label;
+    el.setAttribute('aria-label', l.label);
+  }
+
   function row(label: string): Row {
     const r = make('div', 'gas-detail-row');
     const l = make('span', 'gas-pop-label', label);
@@ -284,7 +304,7 @@ namespace SE {
         }
         seen.add(l.key);
         r.row.hidden = false;
-        setText(r.label, l.label);
+        setLabel(r.label, l);
         setText(r.share, sea ? '' : shareText(l.share));
         setText(r.value, `${fmtChange(l.value)} ${names.unit}`);
       }

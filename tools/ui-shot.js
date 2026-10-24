@@ -12,17 +12,27 @@
  * console errors and warnings are printed as they come.
  *
  *   node tools/ui-shot.js [--bundle file.js] [--page preview|index] [--query "ticks=400&seed=7"]
- *        [--w 1440] [--h 900] [--dpr 1] [--wait ms] [--eval js] [--wait2 ms] [--eval2 js]
- *        [--clip x,y,w,h[,scale]] [--frames n] [--gap ms] [--out file.png] [--timeout ms]
+ *        [--w 1440] [--h 900] [--dpr 1] [--init js] [--media name=value,…] [--wait ms] [--eval js] [--wait2 ms] [--eval2 js]
+ *        [--clip x,y,w,h[,scale]] [--frames n] [--gap ms] [--each js] [--out file.png] [--timeout ms]
  *
  *     --bundle   a bundle instead of the repository's simulation.js: the page is
  *                copied next to it with <base> on the repository
  *     --page     preview (default, ready when document.title is 'ready') or
  *                index (ready when SE.app exists; the title screen stays up)
+ *     --init     runs in the page before its own scripts (e.g. storage that
+ *                throws, or no WebGL2), @file too
+ *     --media    emulated CSS media features, e.g. prefers-reduced-motion=reduce
  *     --wait     ms after ready (default 500); --eval runs then (awaited, its
- *                value printed as JSON), then --wait2 and --eval2
+ *                value printed as JSON), then --wait2 and --eval2; @file reads
+ *                a script (also for --each) from a file
  *     --clip     CSS px of the viewport, optional scale (default 1)
  *     --frames   n screenshots --gap ms apart (default 200) as file-0.png …
+ *     --each     runs before every frame as the body of an async function of
+ *                the frame number f, then --gap ms pass before the shot; a
+ *                returned { dpr } switches the device pixel ratio first, any
+ *                other value is printed. One page, many views: e.g. the same
+ *                world with the water effects off and on (`?animclock=` pins
+ *                the map's animations, SE.app.editView.animClock steps them)
  *     --out      default <OS temp>/gaia-ui-shot.png
  *     --timeout  whole run (default 180000 ms)
  * ========================================================================== */
@@ -71,7 +81,7 @@ process.on('unhandledRejection', (e) => fail((e && e.stack) || String(e)));
 
 function parseArgs(argv) {
   const a = {
-    bundle: null, page: 'preview', query: '', w: 1440, h: 900, dpr: 1, wait: 500, eval: '', wait2: 0, eval2: '',
+    bundle: null, page: 'preview', query: '', w: 1440, h: 900, dpr: 1, wait: 500, eval: '', wait2: 0, eval2: '', each: '', init: '', media: '',
     clip: null, frames: 1, gap: 200, out: path.join(os.tmpdir(), 'gaia-ui-shot.png'), timeout: 180000,
   };
   const num = ['w', 'h', 'dpr', 'wait', 'wait2', 'frames', 'gap', 'timeout'];
@@ -86,6 +96,9 @@ function parseArgs(argv) {
     } else if (key === 'clip') {
       a.clip = v.split(',').map(Number);
       if (a.clip.length < 4 || a.clip.some((n) => !Number.isFinite(n))) fail('--clip is x,y,w,h[,scale]');
+    } else if (['eval', 'eval2', 'each', 'init'].includes(key) && v.startsWith('@')) {
+      // A script from a file: a whole save does not fit on a command line.
+      a[key] = fs.readFileSync(v.slice(1), 'utf8');
     } else a[key] = v;
   }
   if (a.page !== 'preview' && a.page !== 'index') fail('--page is preview or index');
@@ -223,6 +236,11 @@ async function main() {
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: a.w, height: a.h, deviceScaleFactor: a.dpr, mobile: false });
   // As a focused window: headless pages get no focus events otherwise, and keyboard paths could not be checked.
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  if (a.init) await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: a.init });
+  if (a.media) {
+    const features = a.media.split(',').map((m) => { const [name, value] = m.split('='); return { name, value }; });
+    await cdp.send('Emulation.setEmulatedMedia', { features });
+  }
   await cdp.send('Page.navigate', { url });
   const ready = a.page === 'index' ? '!!(window.SE && SE.app)' : "document.title === 'ready'";
   for (;;) {
@@ -237,13 +255,21 @@ async function main() {
   if (a.eval2) await runEval(cdp, 'eval2', a.eval2);
   fs.mkdirSync(path.dirname(a.out), { recursive: true });
   for (let f = 0; f < a.frames; f++) {
+    if (a.each) {
+      let r;
+      try { r = await cdp.evaluate(`(async (f) => { ${a.each}
+})(${f})`); } catch (e) { r = { error: e.message }; }
+      if (r && typeof r === 'object' && r.dpr) await cdp.send('Emulation.setDeviceMetricsOverride', { width: a.w, height: a.h, deviceScaleFactor: r.dpr, mobile: false });
+      if (r !== undefined) console.log(`each ${f}: ${JSON.stringify(r)}`);
+      await sleep(a.gap);
+    }
     const p = { format: 'png' };
     if (a.clip) p.clip = { x: a.clip[0], y: a.clip[1], width: a.clip[2], height: a.clip[3], scale: a.clip[4] || 1 };
     const shot = await cdp.send('Page.captureScreenshot', p);
     const file = a.frames > 1 ? a.out.replace(/(\.png)?$/i, `-${f}.png`) : a.out;
     fs.writeFileSync(file, Buffer.from(shot.data, 'base64'));
     console.log(`saved ${file}`);
-    if (f < a.frames - 1) await sleep(a.gap);
+    if (!a.each && f < a.frames - 1) await sleep(a.gap);
   }
   cdp.ws.close();
 }

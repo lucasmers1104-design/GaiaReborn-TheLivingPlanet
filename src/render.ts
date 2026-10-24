@@ -370,6 +370,14 @@ namespace SE {
     private readonly ambient = new AmbientLayer();
     private readonly waterMotion = new WaterMotion();
     private readonly reefSwell = new ReefSwell();
+    /** Caustics and glint, experimental and off unless switched on (waterfx.ts). */
+    readonly waterFx = new WaterFx();
+    /**
+     * Pins the clock of everything animated on the map, ms on performance.now()'s scale
+     * (screenshots and comparisons: `?animclock=<ms>`, or set it); null lets them run.
+     */
+    animClock: number | null = typeof location !== 'undefined' && /[?&]animclock=\d/.test(location.search)
+      ? Number(new URLSearchParams(location.search).get('animclock')) : null;
     private readonly clownfish = new ClownfishLayer();
     private readonly herds = new HerdLayer();
     private readonly whales = new WhaleLayer();
@@ -454,6 +462,7 @@ namespace SE {
       this.fx.reduce = on;
       this.waterMotion.still = on;
       this.reefSwell.still = on;
+      this.waterFx.still = on;
       this.clownfish.still = on;
       this.whales.still = on;
       this.dolphins.still = on;
@@ -695,6 +704,8 @@ namespace SE {
       }
 
       const cam: LandCamera = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr };
+      // Animations run on their own clock, which a test may pin; the camera and the redraw logic keep real time.
+      const t = this.animClock ?? now;
       if (this.pixelTerrain) {
         if (world.seed !== this.motionSeed) {
           this.motion.reset();
@@ -708,53 +719,55 @@ namespace SE {
         if (this.layers.cities) this.cities.draw(ctx, cam, world, this.land.field, x0, y0, x1, y1);
       };
       if (this.pixelTerrain && !previewing) {
-        this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, now);
-        this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, now);
+        // Right over the cached terrain: the surf, the swell and all that stands or moves on the sea stay on top.
+        this.waterFx.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers, this.overlay !== Overlay.None, t);
+        this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
+        this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
         // Over the swell: a crest paints the composed sea's colour and would cut holes into a fish.
-        if (this.layers.life) this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, now);
+        if (this.layers.life) this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
         // Under the creatures, so an animal near a calving stays on top.
         if (this.layers.oceans) {
           ctx.setTransform(1, 0, 0, 1, 0, 0);
-          this.calving.draw(ctx, cam, now);
+          this.calving.draw(ctx, cam, t);
         }
-        if (this.layers.life) this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, now);
+        if (this.layers.life) this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
       }
       if (!fx) this.fx.show.flush(world);
       // Only a finished base counts: while the terrain is still composing it shows older ground.
       if (!this.land.pending && !this.land.composing) this.fx.baseTick = this.baseTick;
       if (fx) {
-        fx.update(world, cam, this.cols, this.rows, now, this.tickPhase);
+        fx.update(world, cam, this.cols, this.rows, t, this.tickPhase);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        if (!previewing) fx.drawShake(ctx, this.base, cam, now);
-        fx.drawGround(ctx, world, cam, this.land, now, cities);
+        if (!previewing) fx.drawShake(ctx, this.base, cam, t);
+        fx.drawGround(ctx, world, cam, this.land, t, cities);
       }
       // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
       if (this.layers.cities) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.cities.drawCamps(ctx, cam, world, this.land.field, this.cols, this.rows);
-        this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, now);
-        this.oilRigs.draw(ctx, cam, world, now);
-        this.spaceport.draw(ctx, cam, world, now);
-        this.wonders.draw(ctx, cam, world, this.land.field, now);
-        this.trains.draw(ctx, cam, world, this.land.field, now);
-        this.ships.draw(ctx, cam, world, now, this.cities);
+        this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, t);
+        this.oilRigs.draw(ctx, cam, world, t);
+        this.spaceport.draw(ctx, cam, world, t);
+        this.wonders.draw(ctx, cam, world, this.land.field, t);
+        this.trains.draw(ctx, cam, world, this.land.field, t);
+        this.ships.draw(ctx, cam, world, t, this.cities);
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (this.layers.life) {
-        this.herds.update(world, now);
+        this.herds.update(world, t);
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        this.termites.draw(ctx, cam, world, now);
-        this.bubbles.draw(ctx, cam, this.cols, this.rows, world, now);
-        this.whales.draw(ctx, cam, this.herds.markers, world, this.land, now, this.regions);
-        this.dolphins.draw(ctx, cam, this.herds.markers, world, now);
-        this.sharks.draw(ctx, cam, this.herds.markers, world, now);
+        this.termites.draw(ctx, cam, world, t);
+        this.bubbles.draw(ctx, cam, this.cols, this.rows, world, t);
+        this.whales.draw(ctx, cam, this.herds.markers, world, this.land, t, this.regions);
+        this.dolphins.draw(ctx, cam, this.herds.markers, world, t);
+        this.sharks.draw(ctx, cam, this.herds.markers, world, t);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        this.herds.draw(ctx, this, world, now, this.tiles, this.regions,
+        this.herds.draw(ctx, this, world, t, this.tiles, this.regions,
           (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
       }
       if (this.layers.cities) {
-        this.settlers.draw(ctx, this, world, now, dpr, this.cities);
-        this.bands.draw(ctx, this, world, now, dpr);
+        this.settlers.draw(ctx, this, world, t, dpr, this.cities);
+        this.bands.draw(ctx, this, world, t, dpr);
       }
       // Over the creatures and settlers: the crown hides the tile behind it, so nothing there may show through.
       if (this.pixelTerrain) {
@@ -769,11 +782,11 @@ namespace SE {
       }
       if (this.layers.life) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        this.storks.draw(ctx, cam, this.cols, this.rows, world, now);
+        this.storks.draw(ctx, cam, this.cols, this.rows, world, t);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       if (this.layers.cities) drawCityNames(ctx, this, world);
-      this.ambient.draw(ctx, this, world, now, this.layers.oceans, this.layers.clouds);
+      this.ambient.draw(ctx, this, world, t, this.layers.oceans, this.layers.clouds);
       if (fx) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         fx.drawTop(ctx, cam);
@@ -781,7 +794,7 @@ namespace SE {
       }
       if (this.decor) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        this.decor(ctx, cam, now);
+        this.decor(ctx, cam, t);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       } else {
         this.drawCursor(ctx, this.tilePx);
@@ -928,8 +941,14 @@ namespace SE {
       this.tiles.setDeviceTile(size * dpr);
       this.regions.refresh(world);
 
-      this.swap.width = this.base.width;
-      this.swap.height = this.base.height;
+      // Assigning a canvas size clears it and resets its context even when the
+      // size is unchanged. No clear is needed: the base is opaque everywhere
+      // (drawBase and the fill below paint it first), so it covers the old
+      // swap content. 'copy' instead measured as slow as the reset in Chrome.
+      if (this.swap.width !== this.base.width || this.swap.height !== this.base.height) {
+        this.swap.width = this.base.width;
+        this.swap.height = this.base.height;
+      }
       this.swapCtx.drawImage(this.base, 0, 0);
       const ctx = this.baseCtx;
       ctx.setTransform(1, 0, 0, 1, 0, 0);

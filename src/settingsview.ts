@@ -15,7 +15,7 @@ namespace SE {
 
   /** A yes/no preference, or one choice among options. `group` starts a new block. */
   export type SettingDef = { readonly group?: boolean } & (
-    | { readonly kind: 'toggle'; readonly label: string; readonly icon: string; readonly iconOff?: string; readonly on: () => boolean; readonly toggle: () => void; readonly volume?: VolumeControl }
+    | { readonly kind: 'toggle'; readonly label: string; readonly icon: string; readonly iconOff?: string; readonly on: () => boolean; readonly toggle: () => void; readonly volume?: VolumeControl; readonly note?: () => string }
     | { readonly kind: 'choice'; readonly label: string; readonly options: readonly SettingOption[] }
   );
 
@@ -27,10 +27,16 @@ namespace SE {
     const inputs: { input: HTMLInputElement; on: () => boolean }[] = [];
     const icons: { el: HTMLImageElement; on: () => boolean; src: string; off: string }[] = [];
     const sliders: { input: HTMLInputElement; on: () => boolean }[] = [];
+    const notes: { el: HTMLElement; text: () => string }[] = [];
     const sync = (): void => {
       for (const i of inputs) i.input.checked = i.on();
       for (const s of sliders) s.input.disabled = !s.on();
       for (const i of icons) i.el.src = i.on() ? i.src : i.off;
+      for (const n of notes) {
+        n.el.textContent = n.text();
+        // Not `hidden`: the row's display rule would win over it.
+        n.el.style.display = n.el.textContent === '' ? 'none' : '';
+      }
     };
 
     const row = (type: 'checkbox' | 'radio', label: string, icon: string, on: () => boolean, change: () => void, name?: string, iconOff?: string): HTMLElement => {
@@ -55,6 +61,13 @@ namespace SE {
         const line = row('checkbox', d.label, d.icon, d.on, d.toggle, undefined, d.iconOff);
         line.classList.toggle('settings-group', !!d.group);
         body.appendChild(line);
+        if (d.note) {
+          // Inline, safe with a stale stylesheet: a quiet line under its switch.
+          const el = make('div', 'settings-row settings-note');
+          el.style.cssText = 'font-size:0.85em;opacity:0.75;padding-left:2.2em';
+          notes.push({ el, text: d.note });
+          body.appendChild(el);
+        }
         if (d.volume) {
           const { input, percent } = volumeSlider(`${d.label}: Lautstärke`, d.volume);
           sliders.push({ input, on: d.on });
