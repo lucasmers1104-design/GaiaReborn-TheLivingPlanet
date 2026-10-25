@@ -1046,7 +1046,7 @@ namespace SE {
             need: `lebende ${form}`,
             met: developed && ready,
             detail: !developed ? `${p.name} zuerst entwickeln`
-              : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
+              : !living ? (hardStepLost(world, p) ? `${p.name} sind für immer ausgestorben` : `${p.name} sind ausgestorben – neu ansiedeln`)
                 : !ready ? `${form} leben noch nicht – sie entstehen als letzte Unterart der ${p.name}`
                   : `${form} leben auf dem Planeten`,
           });
@@ -1057,7 +1057,7 @@ namespace SE {
             need: p.name,
             met: developed && living,
             detail: !developed ? `${p.name} zuerst entwickeln`
-              : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
+              : !living ? (hardStepLost(world, p) ? `${p.name} sind für immer ausgestorben` : `${p.name} sind ausgestorben – neu ansiedeln`)
                 : 'Vorfahren leben auf dem Planeten',
           });
         }
@@ -1406,7 +1406,8 @@ namespace SE {
       return mul(params.bio.evolutionRate) * (EP_BASE + EP_PER_GROUP * d);
     }
 
-    step(world: WorldState, params: ModelParams): void {
+    /** `spontaneous`: steps may arise without points; the test harness keeps them on every level (SimCore.harnessTick). */
+    step(world: WorldState, params: ModelParams, spontaneous = canSpontaneouslyEvolve(world)): void {
       const evo = world.evo;
       evo.ep = Math.min(EP_MAX, evo.ep + this.epRate(world, params));
 
@@ -1419,12 +1420,14 @@ namespace SE {
           if (!alive && !evo.extinct.has(id)) {
             evo.extinct.add(id);
             // Its R.I.P. notice came when the era ended (lycopsidMilestones).
-            if (n.flora !== undefined && floraGone(world, n.flora)) continue;
+            if ((n.flora !== undefined && floraGone(world, n.flora)) || hardStepLost(world, n)) continue;
             this.record(world, {
               key: `extinct:${id}:${world.ticks}`, kind: 'extinction', nodeId: id,
               title: `${n.name} ausgestorben`,
               text: 'Auf dem ganzen Planeten lebt keine Population mehr.',
-              change: n.life !== undefined
+              change: hardExtinctionWatches(world, n)
+                ? 'Siedle sie bald wieder an, sonst sterben sie für immer aus.'
+                : n.life !== undefined
                 ? 'Du kannst sie mit „Leben ansiedeln“ an einem geeigneten Ort neu ansiedeln.'
                 : 'Du kannst sie mit dem Werkzeug „Pflanzen“ an einem geeigneten Ort neu ansiedeln.',
               icon: 'assets/events/extinction.svg', tick: world.ticks, years: world.absoluteYears,
@@ -1450,7 +1453,7 @@ namespace SE {
       // few times a second of fast play, and on demand after any action.
       if (world.ticks % SPONTANEOUS_EVERY === 0) {
         this.refresh(world, params, true);
-        this.spontaneous(world, params, (k) => spontaneousRoll(world.seed, world.ticks, k));
+        if (spontaneous) this.spontaneous(world, params, (k) => spontaneousRoll(world.seed, world.ticks, k));
       }
     }
   }

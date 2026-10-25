@@ -67,7 +67,8 @@ namespace SE {
       const scratch = this.tempScratch;
 
       const solar = SOLAR_INPUT_BASE * mul(params.atmo.solarInput);
-      const greenhouse = ClimateSystem.greenhouseForcing(world, params);
+      // The level's thermostat and, on hard, its tipping points (hardclimate.ts); 0 on normal inside its band.
+      const greenhouse = ClimateSystem.greenhouseForcing(world, params) + climateDifficultyForcing(world, params);
       const surfAlb = mul(params.atmo.surfaceAlbedo);
       const cloudAlb = 0.28 * mul(params.atmo.cloudAlbedo);
       const diffusion = clamp(TEMP_DIFFUSION_BASE * mul(params.atmo.thermalTransfer), 0, 0.24);

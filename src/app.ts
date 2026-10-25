@@ -80,6 +80,8 @@ namespace SE {
     oceanShare: number;
     /** The planet new games start on: random, or the Earth in an epoch. */
     epoch: EpochId;
+    /** The difficulty new games start on (difficulty.ts). */
+    difficulty: Difficulty;
     /** "Effekte reduzieren": disasters without shaking or flashes, no surf or river current. */
     reduceEffects: boolean;
     /** The full intro has played (or been skipped); it only comes before the first world, later ones get the short intro. */
@@ -183,7 +185,7 @@ namespace SE {
     private omegaStageSeen = 0;
     private speed = 3;
     private lastRunningSpeed = 3;
-    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true, waterFx: false, showFps: false };
+    private settings: Settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: OCEAN_FRACTION, epoch: 'random', difficulty: 'normal', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true, waterFx: false, showFps: false };
     /** The field last clicked on the overview map, its globe or with Examine, shown on the card beside the globe. */
     private mapField: { x: number; y: number } | null = null;
     private selection: ToolSelection = {
@@ -1020,7 +1022,7 @@ namespace SE {
         checked: () => this.windows.isVisible(id),
       });
       const modelItem = (label: string, id: string, sprite: string): MenuItem => ({
-        label, icon: uiIcon('menu-models'), sprite, hint: `${MODEL_PANEL_COST} Ω einmalig`,
+        label, icon: uiIcon('menu-models'), sprite, hint: 'Ω einmalig', // the price depends on the planet's difficulty (difficulty.ts)
         action: () => {
           if (this.windows.isVisible(id)) { this.windows.hide(id); return; }
           // Paid once per planet (simcore.ts): closing it by accident must not cost again.
@@ -2165,7 +2167,7 @@ namespace SE {
       this.examineTile = null;
       this.mapField = null;
       this.windows.hide('examine');
-      this.sim.run({ type: 'newPlanet', seed, ocean: this.settings.oceanShare, epoch: this.settings.epoch }, () => {
+      this.sim.run({ type: 'newPlanet', seed, ocean: this.settings.oceanShare, epoch: this.settings.epoch, difficulty: this.settings.difficulty }, () => {
         this.seenTicks = this.world.ticks;
         this.omegaStageSeen = omegaStage(this.world);
         this.sliderPanels.forEach((p) => p.sync());
@@ -2190,7 +2192,8 @@ namespace SE {
       const sea = buildOceanSlider(this.settings.oceanShare);
       const picker = buildPlanetPicker(this.settings.epoch, (id) => { sea.el.hidden = !epochOf(id).playerSea; });
       sea.el.hidden = !epochOf(picker.value).playerSea;
-      body.append(picker.el, sea.el);
+      const level = buildDifficultyPicker(this.settings.difficulty, 'planet');
+      body.append(picker.el, sea.el, level.el);
       const choice = await Modal.show({
         title: 'Neuen Planeten erschaffen?', icon: uiIcon('new-planet'), body,
         actions: risky
@@ -2211,6 +2214,7 @@ namespace SE {
       }
       this.setOceanShare(sea.value);
       this.setEpoch(picker.value);
+      this.setDifficulty(level.value);
       this.newPlanet();
     }
 
@@ -2223,6 +2227,12 @@ namespace SE {
     private setEpoch(id: EpochId): void {
       if (!isEpochId(id)) return;
       this.settings.epoch = id;
+      this.saveSettings();
+    }
+
+    private setDifficulty(d: Difficulty): void {
+      if (!isDifficulty(d)) return;
+      this.settings.difficulty = d;
       this.saveSettings();
     }
 
@@ -2301,7 +2311,7 @@ namespace SE {
       const stage = omegaStage(w);
       if (stage > this.omegaStageSeen) {
         const s = OMEGA_STAGES[stage];
-        this.notifier.message(`Energiestufe ${stage + 1}: ${s.name} – jetzt +${fmt.one(s.regen)} Ω je Zeitschritt, bis ${fmt.int(s.max)} Ω.`, 'ok');
+        this.notifier.message(`Energiestufe ${stage + 1}: ${s.name} – jetzt +${fmt.one(omegaRegen(w))} Ω je Zeitschritt, bis ${fmt.int(omegaCap(w))} Ω.`, 'ok');
       }
       this.omegaStageSeen = stage;
       // `relativeDate`: the Earth date with its era, else the planet age.
@@ -2480,6 +2490,7 @@ namespace SE {
         if (typeof s.lastSlot === 'number' && s.lastSlot >= 1 && s.lastSlot <= SLOT_COUNT) this.settings.lastSlot = s.lastSlot;
         if (typeof s.oceanShare === 'number' && Number.isFinite(s.oceanShare)) this.settings.oceanShare = clamp(s.oceanShare, OCEAN_SHARE_MIN, OCEAN_SHARE_MAX);
         if (isEpochId(s.epoch)) this.settings.epoch = s.epoch;
+        if (isDifficulty(s.difficulty)) this.settings.difficulty = s.difficulty;
         if (typeof s.reduceEffects === 'boolean') this.settings.reduceEffects = s.reduceEffects;
         if (typeof s.introSeen === 'boolean') this.settings.introSeen = s.introSeen;
         if (typeof s.introDevOff === 'boolean') this.settings.introDevOff = s.introDevOff;
@@ -2713,6 +2724,11 @@ namespace SE {
         epoch: this.settings.epoch,
         chooseEpoch: (id) => {
           this.setEpoch(id);
+          this.newPlanet({ quiet: true, keepSeed: true });
+        },
+        difficulty: this.settings.difficulty,
+        chooseDifficulty: (d) => {
+          this.setDifficulty(d);
           this.newPlanet({ quiet: true, keepSeed: true });
         },
         openSaves: () => this.openSaves(),

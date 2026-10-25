@@ -20,7 +20,7 @@ namespace SE {
 
   /** A player action. Coordinates are tiles; `dabs` is flat [x, y, radius, sign, seconds] per dab. */
   export type SimCommand =
-    | { readonly type: 'newPlanet'; readonly seed: number; readonly ocean: number; readonly epoch: EpochId }
+    | { readonly type: 'newPlanet'; readonly seed: number; readonly ocean: number; readonly epoch: EpochId; readonly difficulty?: Difficulty }
     | { readonly type: 'speed'; readonly speed: number }
     | { readonly type: 'devMode'; readonly on: boolean }
     | { readonly type: 'params'; readonly groups: Record<string, Record<string, number>> }
@@ -130,6 +130,8 @@ namespace SE {
       this.evolution.step(w, p);
       this.civ.step(w, p, this.atmo);
       this.atmo.step(w, p);
+      stepHardClimate(w, p, this.notes);
+      stepHardExtinctions(w, this.notes, this.evolution);
 
       regenOmega(w);
       w.ticks++;
@@ -168,9 +170,12 @@ namespace SE {
         placeTermiteMound(w);
         placeKapok(w);
       }
-      this.evolution.step(w, p);
+      // Steps still arise on their own here, whatever the level: the seeds are tuned to it.
+      this.evolution.step(w, p, true);
       this.civ.step(w, p, this.atmo);
       this.atmo.step(w, p);
+      stepHardClimate(w, p, this.notes);
+      stepHardExtinctions(w, this.notes, this.evolution);
       regenOmega(w);
       w.ticks++;
       w.absoluteYears += w.yearsPerTick;
@@ -254,12 +259,12 @@ namespace SE {
 
     /* ======================================================= planets === */
 
-    newPlanet(seed: number, ocean: number, epoch: EpochId): void {
+    newPlanet(seed: number, ocean: number, epoch: EpochId, difficulty: Difficulty = 'normal'): void {
       this.fauna.reset();
       this.paidModels.clear();
       this.settling = [];
       this.hazardsPaid = [];
-      this.world.reset(seed >>> 0, ocean, epoch);
+      this.world.reset(seed >>> 0, ocean, epoch, difficulty);
       this.params.reset();
       applyEpochParams(this.params, epoch);
       this.geo.resetDrift();
@@ -344,7 +349,7 @@ namespace SE {
       const w = this.world;
       switch (cmd.type) {
         case 'examine': return this.spendProblem(EXAMINE_COST);
-        case 'model': return this.paidModels.has(cmd.id) ? '' : this.spendProblem(MODEL_PANEL_COST);
+        case 'model': return this.paidModels.has(cmd.id) ? '' : this.spendProblem(difficultyConfig(w).modelPanelCost);
         case 'plant': return this.plantPlan(cmd).reason;
         case 'placeLife': return this.lifeProblem(cmd.life, cmd.x, cmd.y);
         case 'placeCity': return this.cityProblem(cmd.tech, cmd.x, cmd.y);
@@ -362,7 +367,7 @@ namespace SE {
       const w = this.world;
       switch (cmd.type) {
         case 'newPlanet':
-          this.newPlanet(cmd.seed, cmd.ocean, cmd.epoch);
+          this.newPlanet(cmd.seed, cmd.ocean, cmd.epoch, isDifficulty(cmd.difficulty) ? cmd.difficulty : 'normal');
           return OK;
         case 'load':
           return this.load(cmd.doc);
@@ -395,7 +400,7 @@ namespace SE {
         case 'model':
           // Paid once per planet: closing it by accident must not cost again.
           if (!this.paidModels.has(cmd.id)) {
-            this.spend(MODEL_PANEL_COST);
+            this.spend(difficultyConfig(w).modelPanelCost);
             this.paidModels.add(cmd.id);
           }
           return OK;
@@ -500,6 +505,8 @@ namespace SE {
       }
       const n = nodeForFlora(cmd.flora);
       if (!n || !(isDevMode() || w.evo.isDeveloped(n.id))) return { reason: 'Diese Pflanzengruppe ist noch nicht entwickelt.', targets: [] }; // DEVMODE
+      const lost = hardLostReason(w, n);
+      if (lost) return { reason: lost, targets: [] };
       const suitable = tiles.filter((j) => this.flora.suit(w, cmd.flora, j) >= 0.15);
       if (suitable.length === 0) {
         const why = this.flora.problem(w, cmd.flora, idx(cmd.x, cmd.y)) ?? 'die Bedingungen sind dort zu ungünstig';
@@ -535,6 +542,8 @@ namespace SE {
       const bar = dinoEraLifeBar(w, c);
       if (bar) return bar;
       if (!node || !(isDevMode() || w.evo.isDeveloped(node.id))) return `${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`; // DEVMODE
+      const lost = hardLostReason(w, node);
+      if (lost) return lost;
       const i = idx(x, y);
       const problem = this.life.habitabilityProblem(w, this.params, i, c);
       if (problem) return `${def.name} ${problem}.`;

@@ -13,12 +13,16 @@ namespace SE {
   }
 
   export function omegaCap(world: WorldState): number {
-    return OMEGA_STAGES[omegaStage(world)].max;
+    return OMEGA_STAGES[omegaStage(world)].max * difficultyConfig(world).omegaCap;
+  }
+
+  /** Ω per tick at the planet's tier and level. */
+  export function omegaRegen(world: WorldState): number {
+    return OMEGA_STAGES[omegaStage(world)].regen * omegaRegenFactor(world);
   }
 
   /** One tick of Ω income at the planet's tier. */
   export function regenOmega(world: WorldState): void {
-    const s = OMEGA_STAGES[omegaStage(world)];
-    world.omega = Math.min(s.max, world.omega + s.regen);
+    world.omega = Math.min(omegaCap(world), world.omega + omegaRegen(world));
   }
 }

@@ -89,19 +89,23 @@ namespace SE {
   export function fillOmegaInfo(pop: HTMLElement, world: WorldState): void {
     const at = omegaStage(world);
     const s = OMEGA_STAGES[at];
+    const level = difficultyConfig(world);
+    const cap = omegaCap(world);
     const pips = make('span', 'hud-info-pips');
     for (let i = 0; i < OMEGA_STAGES.length; i++) pips.appendChild(make('i', i <= at ? 'on' : ''));
     const stage = make('div', 'hud-info-row');
     stage.append(make('span', '', `Stufe ${at + 1} von ${OMEGA_STAGES.length} · ${s.name}`), pips);
     pop.append(
-      head('Energie', `${fmt.int(world.omega)} / ${fmt.int(s.max)} Ω`),
-      make('div', 'hud-info-rate hud-info-omega', `+${fmt.one(s.regen)} Ω je Zeitschritt`),
+      head('Energie', `${fmt.int(world.omega)} / ${fmt.int(cap)} Ω`),
+      make('div', 'hud-info-rate hud-info-omega', `+${fmt.one(omegaRegen(world))} Ω je Zeitschritt`),
       stage,
+      row('Schwierigkeit', level.name),
     );
+    if (level.omegaMood > 0) pop.append(make('div', 'hud-info-note', `Gaias Stimmung ${fmt.int(world.gaiaMood * 100)} %: Je wohler sie sich fühlt, desto mehr Energie.`));
     const next = OMEGA_STAGES[at + 1];
     if (next) {
       pop.append(
-        row(`Nächste: ${next.name}`, `+${fmt.one(next.regen)} Ω · bis ${fmt.int(next.max)}`),
+        row(`Nächste: ${next.name}`, `+${fmt.one(next.regen * omegaRegenFactor(world))} Ω · bis ${fmt.int(next.max * level.omegaCap)}`),
         make('div', 'hud-info-note', next.unlock === 'city'
           ? 'Weg dorthin: Eine Art wird intelligent.'
           : `Weg dorthin: ${evoNode(next.unlock).name} entwickeln.`),
@@ -109,7 +113,7 @@ namespace SE {
     } else {
       pop.append(make('div', 'hud-info-note', 'Höchste Stufe erreicht.'));
     }
-    pop.append(make('div', 'hud-info-note', world.omega >= s.max
+    pop.append(make('div', 'hud-info-note', world.omega >= cap
       ? 'Speicher voll – was jetzt entsteht, verfällt.'
       : 'Energie entsteht nur, während die Zeit läuft.'));
   }

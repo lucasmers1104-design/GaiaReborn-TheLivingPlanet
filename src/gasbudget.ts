@@ -109,6 +109,11 @@ namespace SE {
       o.sea.flows[group] = (o.sea.flows[group] ?? 0) + v;
     }
 
+    /** Process `id`'s share of `gas` booked so far in the open tick; 0 between ticks. */
+    part(gas: GasId, id: GasProcess): number {
+      return this.open?.parts[gas][id] ?? 0;
+    }
+
     /** `v` of `gas` from process `id`: part of the open tick, between ticks the player's doing. */
     add(gas: GasId, id: GasProcess, v: number): void {
       if (v === 0) return;

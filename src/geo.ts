@@ -236,14 +236,15 @@ namespace SE {
       // Volcanism follows the magma belts; meteors fall anywhere. These rates
       // are per tick, and a fast planet runs thousands of ticks a minute — at
       // anything higher the climate never stops ringing from volcanic winters.
-      const volcanoChance = 0.0004 * mul(params.geo.volcanoes);
+      const rate = difficultyConfig(world).hazardRate;
+      const volcanoChance = 0.0004 * mul(params.geo.volcanoes) * rate;
       if (world.rng.chance(volcanoChance)) {
         const i = this.pickByMagma(world);
         if (hazardSink) hazardSink(EventKind.Volcano, EventSystem.coneTile(world, i), 'natural');
         else this.trigger(world, EventKind.Volcano, i % GRID_W, Math.floor(i / GRID_W));
       }
 
-      const meteorChance = 0.00018 * mul(params.geo.meteors);
+      const meteorChance = 0.00018 * mul(params.geo.meteors) * rate;
       if (world.rng.chance(meteorChance)) {
         const mx = world.rng.int(GRID_W);
         const my = world.rng.int(GRID_H);
@@ -251,7 +252,7 @@ namespace SE {
         else this.trigger(world, EventKind.Meteor, mx, my);
       }
 
-      if (hazardSink) {
+      if (hazardSink && rate > 0) {
         const fire = lightningFireTile(world);
         if (fire >= 0) hazardSink(EventKind.Fire, fire, 'natural');
       }

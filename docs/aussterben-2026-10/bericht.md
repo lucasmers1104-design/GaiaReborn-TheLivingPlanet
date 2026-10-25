@@ -230,6 +230,19 @@ nach, ohne Meldungsflut: Die Einträge landen in der Chronik, die Karten erschei
   - Volle Suite (alle Testdateien): bis auf die drei oben genannten Tests grün. Diese drei laufen nach
     der Anpassung ebenfalls grün, zusammen mit `fates.test.js` (20 von 20).
 
+## Nachtrag: Aussterben für immer auf „Schwer“ (25. 10. 2026)
+
+Code: `src/hardextinction.ts`, Zustand in `src/difficulty.ts` (`DifficultyState`, Speicherfeld
+`difficulty.extinction`). Nur auf „Schwer“ (`DIFFICULTY_CONFIG.hard.extinction.graceTicks` = 40 Ticks):
+
+- Verschwindet eine entwickelte Tierklasse oder Pflanzengruppe vom Planeten, erscheint eine
+  Aussterbe-Warnung mit der Frist in Jahren. Lebt sie vor Ablauf wieder, kommt „Gerettet: …“.
+- Sonst stirbt sie für immer aus: Chronik-Meldung mit R.I.P., „Leben ansiedeln“ und „Pflanzen“ lehnen
+  sie ab, der Evolutionsbaum zeigt sie mit R.I.P., ihre Nachfahren bleiben gesperrt („… sind für immer
+  ausgestorben“), das Lexikon führt ihre Unterarten als für immer ausgestorben.
+- Ausgenommen: Erste und Komplexe Zellen, die von Rivalen verdrängten Pflanzengruppen (siehe oben) und
+  die Dinosaurier des Kometen. Auf „Einfach“ und „Normal“ bleibt alles wie bisher.
+
 ## Einschränkungen
 
 - Geprüft nur in headless Chrome. Andere Browser und Sound: nicht geprüft.

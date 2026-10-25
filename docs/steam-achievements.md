@@ -79,6 +79,7 @@ Stand: 2026-10-22 · noch nicht im Code umgesetzt. Neue Features → prüfen, ob
 | 37 | `ACH_PHOENIX` | Phönix | Nach einem Meteoriten, der über die Hälfte des Lebens auslöscht, erholt sich die Biomasse wieder auf den alten Wert | Phönix aus einem Krater |
 | 49 | `ACH_NEW_WORLDS` | Start in neue Welten | Die Rakete des Raumfahrtprojekts mit dem roten Knopf starten (`world.space.launched >= 0`, `src/spaceport.ts`) | Weiße Rakete mit türkisem Ring steigt auf einer gleißenden Abgassäule aus einer Wüstenrampe, darüber Mars und Venus |
 | 46 | `ACH_FULL_POWER` | Volle Kraft | Der Energiespeicher ist einmal randvoll: 15.000 Ω. Das geht nur auf der höchsten Energiestufe „Zivilisation“ (`world.omega >= OMEGA_MAX`, `src/energy.ts`); die Stufe allein reicht nicht | Goldene Energie-Sonne über einem bis zum Rand glühenden Energiebalken aus sechs Segmenten |
+| 59 | `ACH_SURVIVAL` | Überlebenskampf | Auf der Schwierigkeit „Schwer“ eine intelligente Art ihre erste Stadt gründen lassen (`world.difficulty.level === 'hard'` und `world.sentientClass !== Life.None`, `src/difficulty.ts`) | Kleiner Planet, halb vereist, halb glühend heiß, in der Mitte ein grüner Streifen mit einem Steinzeit-Lagerfeuer |
 
 ## ChatGPT-Prompts (je 10 Icons pro Prompt)
 
@@ -189,6 +190,15 @@ Shared style for all: detailed 16-bit pixel art, bold saturated colors, one cent
 56. A black steam locomotive with a red cowcatcher, a funnel-shaped chimney and big red driving wheels, puffing a white steam cloud, running on a track with wooden sleepers through a cut in a dark green pine forest.
 57. Two black ancient warships with oars and square sails fighting at sea, flaming arrows flying between them, one ship sinking at the bow with fire on deck and a black smoke column, white foam and splashes around it.
 58. A gigantic kapok tree towering high above a dense dark-green rainforest canopy, its broad tiered crown of bright lime-green leaf clumps lit by the sun, a thick smooth silvery green-grey trunk forking into great limbs, huge flared plank buttress roots, a soft magnifying-glass glint in the upper corner.
+```
+
+### Prompt 7 — Nr. 59–
+
+```
+Create 1 square image (1:1). It is a Steam achievement icon for a retro planet and evolution simulator game in the spirit of SimEarth.
+Shared style: detailed 16-bit pixel art, bold saturated colors, one centered motif filling about 70% of the frame, dark navy circular background with a soft glow behind the motif, a thicker shining GOLD ring as the border, light from the top left. No text, no letters, no numbers. The motif must stay readable when shrunk to 64×64 pixels.
+
+59. A small planet split in two: the left half frozen under white and pale blue ice with cracks, the right half glowing red-orange with lava and heat haze, a narrow green band of life across the middle where a tiny stone-age campfire burns with a thin column of smoke.
 ```
 
 ## Ideen für später (wenn das Feature kommt)

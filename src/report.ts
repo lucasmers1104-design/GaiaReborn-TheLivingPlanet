@@ -152,7 +152,7 @@ namespace SE {
       };
       put('age', formatEarthDate(world.absoluteYears), `${eraAt(world.absoluteYears).name} · Planetenalter ${formatYears(world.absoluteYears)}`);
       const dev = world.evo.developed.size;
-      put('dev', `${dev} von ${EVO_NODES.length}`, 'Schritte entwickelt', dev / EVO_NODES.length, 'var(--ep)');
+      put('dev', `${dev} von ${EVO_NODES.length}`, `Schritte entwickelt · Schwierigkeit ${difficultyConfig(world).name}`,dev / EVO_NODES.length, 'var(--ep)');
       const mood = world.gaiaMood;
       put('gaia', GaiaPanel.moodLabel(mood), `Wohlbefinden ${Math.round(mood * 100)} %`, mood,
         mood > 0.66 ? 'var(--ok)' : mood > 0.33 ? 'var(--amber)' : 'var(--warn)');

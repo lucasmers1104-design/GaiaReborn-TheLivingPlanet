@@ -29,6 +29,10 @@ namespace SE {
     readonly epoch: EpochId;
     /** Remake the waiting planet as another epoch's. */
     chooseEpoch(id: EpochId): void;
+    /** The difficulty new games start on. */
+    readonly difficulty: Difficulty;
+    /** Remake the waiting planet on another difficulty. */
+    chooseDifficulty(d: Difficulty): void;
     /** The Saves dialog; true if a planet was loaded from it. */
     openSaves(): Promise<boolean>;
     openSettings(): Promise<void>;
@@ -120,7 +124,12 @@ namespace SE {
       const panel = make('div', 'title-panel');
       panel.append(logo, make('p', 'title-lead', LEAD));
       if (resume) panel.appendChild(resume);
-      panel.append(buttons, planet.panel);
+      const level = make('section', 'title-custom title-difficulty');
+      level.setAttribute('aria-labelledby', 'title-difficulty-head');
+      const levelHead = make('h2', 'title-custom-head', 'Schwierigkeit');
+      levelHead.id = 'title-difficulty-head';
+      level.append(levelHead, buildDifficultyPicker(hooks.difficulty, 'title', (d) => hooks.chooseDifficulty(d)).el);
+      panel.append(buttons, planet.panel, level);
 
       const foot = make('footer', 'title-foot');
       foot.appendChild(make('p', 'title-motto', 'Kleine Anfänge. Große Welten.'));

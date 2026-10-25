@@ -288,6 +288,7 @@ namespace SE {
         kapok: w.kapokTree,
         terraformed: terraformedToJSON(w),
         fates: fatesToJSON(w),
+        difficulty: difficultyToJSON(w),
         paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
         space: spaceToJSON(w),
         // What the civilization built and found (docs/bewegung-2026-10): optional fields, the format number stays.
@@ -417,6 +418,8 @@ namespace SE {
       restoreKapok(ctx.world, raw.kapok);
       // What died out for good (optional field, stagefates.ts); without it the first tick finds out.
       restoreFates(ctx.world, raw.fates);
+      // The difficulty and hard's extinctions (optional field, difficulty.ts); without it the planet plays on normal.
+      restoreDifficulty(ctx.world, raw.difficulty);
       // Land the brush raised (optional field, terraform.ts): its summits keep their snow.
       restoreTerraformed(ctx.world, raw.terraformed);
       RiverSystem.rebuild(ctx.world);
@@ -457,7 +460,7 @@ namespace SE {
       w.rng = new Rng(w.seed);
       w.rng.setState(int(raw.rngState, 0, 0xffffffff, 'Zufallszustand'));
       w.ticks = int(raw.ticks, 0, Number.MAX_SAFE_INTEGER, 'Zeitschritt');
-      w.omega = num(raw.omega, 0, OMEGA_MAX, 'Energie');
+      w.omega = num(raw.omega, 0, OMEGA_LIMIT, 'Energie');
       w.co2 = num(raw.co2, 0, 5000, 'CO₂');
       w.o2 = num(raw.o2, 0, 40, 'Sauerstoff');
       w.n2 = num(raw.n2, 0, 100, 'Stickstoff');

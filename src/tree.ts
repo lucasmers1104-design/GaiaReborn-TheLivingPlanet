@@ -71,6 +71,7 @@ namespace SE {
   /** Why developed step n is gone for good, or '': a plant group its rivals displaced, the comet's dinosaurs. */
   export function stepGoneReason(world: WorldState, n: EvoNode, alive: boolean): string {
     if (n.flora !== undefined && floraGone(world, n.flora)) return `Für immer ausgestorben – abgelöst durch ${floraRivalNames(n.flora)}.`;
+    if (hardStepLost(world, n)) return 'Für immer ausgestorben – nicht rechtzeitig wieder angesiedelt.';
     return alive ? '' : dinoEraStepBar(world, n.id);
   }
 

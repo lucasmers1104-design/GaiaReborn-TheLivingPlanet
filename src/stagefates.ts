@@ -59,7 +59,7 @@ namespace SE {
 
   /** Gone for good: displaced by its successor, or ended by the comet. */
   export function stageGone(world: WorldState, c: Life, s: number): boolean {
-    return stageEnded(world, c, s) || cometLost(world, c, s);
+    return stageEnded(world, c, s) || cometLost(world, c, s) || hardLifeLost(world, c);
   }
 
   /** Where founders of class c start: its oldest sub-species not gone for good. */

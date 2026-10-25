@@ -16610,6 +16610,137 @@ var SE;
     SE.oxygenUnit = oxygenUnit;
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — difficulty levels
+ * -----------------------------------------------------------------------------
+ * Easy, normal or hard, chosen with a new planet and kept in its save. Every
+ * balancing value that differs between the levels lives in DIFFICULTY_CONFIG;
+ * the systems read them through the small helpers below. Normal is the game
+ * as it was tuned, without evolution that arises on its own. The climate
+ * crises of hard live in hardclimate.ts, its extinctions in hardextinction.ts.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    SE.DIFFICULTIES = ['easy', 'normal', 'hard'];
+    function isDifficulty(v) {
+        return v === 'easy' || v === 'normal' || v === 'hard';
+    }
+    SE.isDifficulty = isDifficulty;
+    SE.DIFFICULTY_CONFIG = {
+        easy: {
+            name: 'Einfach', title: 'Hüter des Gartens',
+            blurb: 'Doppelte Energie, keine Naturkatastrophen, ein gutmütiges Klima. Bereite Entwicklungen entstehen nach einer Weile auch ohne Evolutionspunkte.',
+            omegaStart: 3000, omegaRegen: 2, omegaCap: 2, omegaMood: 0,
+            spontaneous: true, hazardRate: 0, modelPanelCost: 0,
+            climate: { thermostat: 0.6, comfortLow: 6, comfortHigh: 24, thermostatCap: 20, tipping: null },
+            extinction: { graceTicks: 0 },
+        },
+        normal: {
+            name: 'Normal', title: 'Herr der Evolution',
+            blurb: 'Jeder Evolutionsschritt kostet Evolutionspunkte. Naturkatastrophen kommen vor, das Klima fängt Extreme ab. Ausgestorbene Gruppen kannst du neu ansiedeln.',
+            omegaStart: SE.OMEGA_START, omegaRegen: 1, omegaCap: 1, omegaMood: 0,
+            spontaneous: false, hazardRate: 1, modelPanelCost: SE.MODEL_PANEL_COST,
+            climate: { thermostat: 0.15, comfortLow: 2, comfortHigh: 28, thermostatCap: 6, tipping: null },
+            extinction: { graceTicks: 0 },
+        },
+        hard: {
+            name: 'Schwer', title: 'Überlebenskampf',
+            blurb: 'Wenig Energie, heftige Katastrophen. Das Klima kippt ohne dein Nachregeln der Naturgesetze in Eis- oder Hitzezeiten – mehrmals im Lauf der Erdgeschichte. Was ausstirbt, kehrt nie zurück.',
+            omegaStart: 1000, omegaRegen: 1, omegaCap: 1, omegaMood: 0.5,
+            spontaneous: false, hazardRate: 2, modelPanelCost: 50,
+            climate: {
+                thermostat: -1.0, comfortLow: 5, comfortHigh: 26, thermostatCap: 12,
+                tipping: {
+                    methaneWeight: 2.4, methaneCap: 13, methaneAnnounceO2: 4,
+                    sunDrift: [[444, 0], [252, 4], [0, 9]],
+                    coalDrawdown: 12, coalAnnounce: 0.15,
+                    basaltFromMa: 253, basaltToMa: 250, basaltCO2: 120, basaltDust: 0.003,
+                    industryBoost: 2,
+                    warnCooldown: 60, warnHysteresis: 2,
+                },
+            },
+            extinction: { graceTicks: 40 },
+        },
+    };
+    /**
+     * A planet's level and what hard keeps track of. On WorldState, so the
+     * page's mirror gets it with every state (simstate.ts).
+     */
+    class DifficultyState {
+        constructor() {
+            this.level = 'normal';
+            /* ---- hardclimate.ts ---- */
+            /** The most methane the air has held, ppm: what the early crisis measures the loss against. */
+            this.ch4Peak = 0;
+            /** Crises announced so far, bits 1 << HardCrisis. */
+            this.crises = 0;
+            /** Ticks of the last cold and hot warning; -Infinity while armed. Not saved. */
+            this.coldWarned = -Infinity;
+            this.hotWarned = -Infinity;
+            /** Global temperature after the last tick, for its trend; NaN before the first. Not saved. */
+            this.lastTemp = NaN;
+            /* ---- hardextinction.ts ---- */
+            /** Classes (bit 1 << Life) and plant groups (floraBit) gone for good. */
+            this.lifeLost = 0;
+            this.floraLost = 0;
+            /** By step id: the tick by which a group gone from the planet must live again. */
+            this.graceUntil = {};
+        }
+        reset(level) {
+            this.level = level;
+            this.ch4Peak = 0;
+            this.crises = 0;
+            this.coldWarned = -Infinity;
+            this.hotWarned = -Infinity;
+            this.lastTemp = NaN;
+            this.lifeLost = 0;
+            this.floraLost = 0;
+            this.graceUntil = {};
+        }
+        copyFrom(o) {
+            this.level = o.level;
+            this.ch4Peak = o.ch4Peak;
+            this.crises = o.crises;
+            this.coldWarned = o.coldWarned;
+            this.hotWarned = o.hotWarned;
+            this.lastTemp = o.lastTemp;
+            this.lifeLost = o.lifeLost;
+            this.floraLost = o.floraLost;
+            this.graceUntil = { ...o.graceUntil };
+        }
+    }
+    SE.DifficultyState = DifficultyState;
+    function difficultyConfig(world) {
+        return SE.DIFFICULTY_CONFIG[world.difficulty.level];
+    }
+    SE.difficultyConfig = difficultyConfig;
+    /** Steps may arise without evolution points on this planet. */
+    function canSpontaneouslyEvolve(world) {
+        return difficultyConfig(world).spontaneous;
+    }
+    SE.canSpontaneouslyEvolve = canSpontaneouslyEvolve;
+    /** Factor on the Ω income now: the level's, and on hard Gaia's mood. */
+    function omegaRegenFactor(world) {
+        const c = difficultyConfig(world);
+        return c.omegaRegen * (1 - c.omegaMood + 2 * c.omegaMood * world.gaiaMood);
+    }
+    SE.omegaRegenFactor = omegaRegenFactor;
+    /** The most Ω a planet of any level can hold (save validation). */
+    SE.OMEGA_LIMIT = SE.OMEGA_MAX * Math.max(...SE.DIFFICULTIES.map((d) => SE.DIFFICULTY_CONFIG[d].omegaCap));
+    /* -------------------------------------------------------------- save -- */
+    /** Optional save field; a save without it plays on normal. */
+    function difficultyToJSON(world) {
+        return { level: world.difficulty.level, climate: SE.hardClimateToJSON(world), extinction: SE.hardExtinctionToJSON(world) };
+    }
+    SE.difficultyToJSON = difficultyToJSON;
+    function restoreDifficulty(world, raw) {
+        const r = typeof raw === 'object' && raw !== null ? raw : {};
+        world.difficulty.reset(isDifficulty(r.level) ? r.level : 'normal');
+        SE.restoreHardClimate(world, r.climate);
+        SE.restoreHardExtinction(world, r.extinction);
+    }
+    SE.restoreDifficulty = restoreDifficulty;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — landscapes and substrates
  * -----------------------------------------------------------------------------
  * A land tile's landscape is its succession stage — Rock, Lichen, Meadow,
@@ -17699,6 +17830,10 @@ var SE;
                 return;
             o.sea.flows[group] = (o.sea.flows[group] ?? 0) + v;
         }
+        /** Process `id`'s share of `gas` booked so far in the open tick; 0 between ticks. */
+        part(gas, id) {
+            return this.open?.parts[gas][id] ?? 0;
+        }
         /** `v` of `gas` from process `id`: part of the open tick, between ticks the player's doing. */
         add(gas, id, v) {
             if (v === 0)
@@ -18081,6 +18216,8 @@ var SE;
             this.dinoEra = new SE.DinoEraState();
             /** The space project of its civilization: launch site, rocket, launch (spaceport.ts). */
             this.space = new SE.SpaceState();
+            /** Easy, normal or hard, and what hard keeps track of (difficulty.ts). */
+            this.difficulty = new SE.DifficultyState();
             /* ---- bookkeeping ---- */
             this.ticks = 0;
             this.omega = SE.OMEGA_START;
@@ -18156,7 +18293,7 @@ var SE;
          * Build a brand new planet from a seed, with `oceanShare` of it under the
          * sea unless the epoch sets its own sea.
          */
-        reset(seed, oceanShare = SE.OCEAN_FRACTION, epoch = 'random') {
+        reset(seed, oceanShare = SE.OCEAN_FRACTION, epoch = 'random', difficulty = 'normal') {
             this.seed = seed >>> 0;
             this.rng = new SE.Rng(this.seed);
             SE.shapeCrust(this, epoch, SE.clamp(oceanShare, SE.OCEAN_SHARE_MIN, SE.OCEAN_SHARE_MAX));
@@ -18187,7 +18324,8 @@ var SE;
             this.stageEnded.fill(0);
             this.fatesQuiet = false;
             this.ticks = 0;
-            this.omega = SE.OMEGA_START;
+            this.difficulty.reset(difficulty);
+            this.omega = SE.DIFFICULTY_CONFIG[difficulty].omegaStart;
             this.timeScale = SE.TimeScale.Geologic;
             this.absoluteYears = 0;
             this.scaleYears = 0;
@@ -18323,6 +18461,7 @@ var SE;
             this.hazards.copyFrom(o.hazards);
             this.dinoEra.copyFrom(o.dinoEra);
             this.space.copyFrom(o.space);
+            this.difficulty.copyFrom(o.difficulty);
             this.name = o.name;
             const evo = this.evo;
             evo.reset();
@@ -20606,7 +20745,8 @@ var SE;
             // Volcanism follows the magma belts; meteors fall anywhere. These rates
             // are per tick, and a fast planet runs thousands of ticks a minute — at
             // anything higher the climate never stops ringing from volcanic winters.
-            const volcanoChance = 0.0004 * SE.mul(params.geo.volcanoes);
+            const rate = SE.difficultyConfig(world).hazardRate;
+            const volcanoChance = 0.0004 * SE.mul(params.geo.volcanoes) * rate;
             if (world.rng.chance(volcanoChance)) {
                 const i = this.pickByMagma(world);
                 if (SE.hazardSink)
@@ -20614,7 +20754,7 @@ var SE;
                 else
                     this.trigger(world, SE.EventKind.Volcano, i % SE.GRID_W, Math.floor(i / SE.GRID_W));
             }
-            const meteorChance = 0.00018 * SE.mul(params.geo.meteors);
+            const meteorChance = 0.00018 * SE.mul(params.geo.meteors) * rate;
             if (world.rng.chance(meteorChance)) {
                 const mx = world.rng.int(SE.GRID_W);
                 const my = world.rng.int(SE.GRID_H);
@@ -20623,7 +20763,7 @@ var SE;
                 else
                     this.trigger(world, SE.EventKind.Meteor, mx, my);
             }
-            if (SE.hazardSink) {
+            if (SE.hazardSink && rate > 0) {
                 const fire = SE.lightningFireTile(world);
                 if (fire >= 0)
                     SE.hazardSink(SE.EventKind.Fire, fire, 'natural');
@@ -20941,7 +21081,8 @@ var SE;
             const { elevation, temperature, moisture, biome } = world;
             const scratch = this.tempScratch;
             const solar = SE.SOLAR_INPUT_BASE * SE.mul(params.atmo.solarInput);
-            const greenhouse = ClimateSystem.greenhouseForcing(world, params);
+            // The level's thermostat and, on hard, its tipping points (hardclimate.ts); 0 on normal inside its band.
+            const greenhouse = ClimateSystem.greenhouseForcing(world, params) + SE.climateDifficultyForcing(world, params);
             const surfAlb = SE.mul(params.atmo.surfaceAlbedo);
             const cloudAlb = 0.28 * SE.mul(params.atmo.cloudAlbedo);
             const diffusion = SE.clamp(SE.TEMP_DIFFUSION_BASE * SE.mul(params.atmo.thermalTransfer), 0, 0.24);
@@ -22063,7 +22204,7 @@ var SE;
     SE.stageEnded = stageEnded;
     /** Gone for good: displaced by its successor, or ended by the comet. */
     function stageGone(world, c, s) {
-        return stageEnded(world, c, s) || SE.cometLost(world, c, s);
+        return stageEnded(world, c, s) || SE.cometLost(world, c, s) || SE.hardLifeLost(world, c);
     }
     SE.stageGone = stageGone;
     /** Where founders of class c start: its oldest sub-species not gone for good. */
@@ -25323,7 +25464,7 @@ var SE;
                         need: `lebende ${form}`,
                         met: developed && ready,
                         detail: !developed ? `${p.name} zuerst entwickeln`
-                            : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
+                            : !living ? (SE.hardStepLost(world, p) ? `${p.name} sind für immer ausgestorben` : `${p.name} sind ausgestorben – neu ansiedeln`)
                                 : !ready ? `${form} leben noch nicht – sie entstehen als letzte Unterart der ${p.name}`
                                     : `${form} leben auf dem Planeten`,
                     });
@@ -25335,7 +25476,7 @@ var SE;
                         need: p.name,
                         met: developed && living,
                         detail: !developed ? `${p.name} zuerst entwickeln`
-                            : !living ? `${p.name} sind ausgestorben – neu ansiedeln`
+                            : !living ? (SE.hardStepLost(world, p) ? `${p.name} sind für immer ausgestorben` : `${p.name} sind ausgestorben – neu ansiedeln`)
                                 : 'Vorfahren leben auf dem Planeten',
                     });
                 }
@@ -25688,7 +25829,8 @@ var SE;
                 return 0;
             return SE.mul(params.bio.evolutionRate) * (SE.EP_BASE + SE.EP_PER_GROUP * d);
         }
-        step(world, params) {
+        /** `spontaneous`: steps may arise without points; the test harness keeps them on every level (SimCore.harnessTick). */
+        step(world, params, spontaneous = SE.canSpontaneouslyEvolve(world)) {
             const evo = world.evo;
             evo.ep = Math.min(SE.EP_MAX, evo.ep + this.epRate(world, params));
             // Extinctions are worth a quiet notice — and they are the one way a
@@ -25700,15 +25842,17 @@ var SE;
                     if (!alive && !evo.extinct.has(id)) {
                         evo.extinct.add(id);
                         // Its R.I.P. notice came when the era ended (lycopsidMilestones).
-                        if (n.flora !== undefined && SE.floraGone(world, n.flora))
+                        if ((n.flora !== undefined && SE.floraGone(world, n.flora)) || SE.hardStepLost(world, n))
                             continue;
                         this.record(world, {
                             key: `extinct:${id}:${world.ticks}`, kind: 'extinction', nodeId: id,
                             title: `${n.name} ausgestorben`,
                             text: 'Auf dem ganzen Planeten lebt keine Population mehr.',
-                            change: n.life !== undefined
-                                ? 'Du kannst sie mit „Leben ansiedeln“ an einem geeigneten Ort neu ansiedeln.'
-                                : 'Du kannst sie mit dem Werkzeug „Pflanzen“ an einem geeigneten Ort neu ansiedeln.',
+                            change: SE.hardExtinctionWatches(world, n)
+                                ? 'Siedle sie bald wieder an, sonst sterben sie für immer aus.'
+                                : n.life !== undefined
+                                    ? 'Du kannst sie mit „Leben ansiedeln“ an einem geeigneten Ort neu ansiedeln.'
+                                    : 'Du kannst sie mit dem Werkzeug „Pflanzen“ an einem geeigneten Ort neu ansiedeln.',
                             icon: 'assets/events/extinction.svg', tick: world.ticks, years: world.absoluteYears,
                             major: false,
                         });
@@ -25734,7 +25878,8 @@ var SE;
             // few times a second of fast play, and on demand after any action.
             if (world.ticks % SE.SPONTANEOUS_EVERY === 0) {
                 this.refresh(world, params, true);
-                this.spontaneous(world, params, (k) => SE.spontaneousRoll(world.seed, world.ticks, k));
+                if (spontaneous)
+                    this.spontaneous(world, params, (k) => SE.spontaneousRoll(world.seed, world.ticks, k));
             }
         }
     }
@@ -31722,13 +31867,17 @@ var SE;
     }
     SE.omegaStage = omegaStage;
     function omegaCap(world) {
-        return SE.OMEGA_STAGES[omegaStage(world)].max;
+        return SE.OMEGA_STAGES[omegaStage(world)].max * SE.difficultyConfig(world).omegaCap;
     }
     SE.omegaCap = omegaCap;
+    /** Ω per tick at the planet's tier and level. */
+    function omegaRegen(world) {
+        return SE.OMEGA_STAGES[omegaStage(world)].regen * SE.omegaRegenFactor(world);
+    }
+    SE.omegaRegen = omegaRegen;
     /** One tick of Ω income at the planet's tier. */
     function regenOmega(world) {
-        const s = SE.OMEGA_STAGES[omegaStage(world)];
-        world.omega = Math.min(s.max, world.omega + s.regen);
+        world.omega = Math.min(omegaCap(world), world.omega + omegaRegen(world));
     }
     SE.regenOmega = regenOmega;
 })(SE || (SE = {}));
@@ -34638,6 +34787,7 @@ var SE;
                 kapok: w.kapokTree,
                 terraformed: SE.terraformedToJSON(w),
                 fates: SE.fatesToJSON(w),
+                difficulty: SE.difficultyToJSON(w),
                 paidModels: ctx.paidModels ? Array.from(ctx.paidModels) : undefined,
                 space: SE.spaceToJSON(w),
                 // What the civilization built and found (docs/bewegung-2026-10): optional fields, the format number stays.
@@ -34767,6 +34917,8 @@ var SE;
             SE.restoreKapok(ctx.world, raw.kapok);
             // What died out for good (optional field, stagefates.ts); without it the first tick finds out.
             SE.restoreFates(ctx.world, raw.fates);
+            // The difficulty and hard's extinctions (optional field, difficulty.ts); without it the planet plays on normal.
+            SE.restoreDifficulty(ctx.world, raw.difficulty);
             // Land the brush raised (optional field, terraform.ts): its summits keep their snow.
             SE.restoreTerraformed(ctx.world, raw.terraformed);
             SE.RiverSystem.rebuild(ctx.world);
@@ -34811,7 +34963,7 @@ var SE;
             w.rng = new SE.Rng(w.seed);
             w.rng.setState(int(raw.rngState, 0, 0xffffffff, 'Zufallszustand'));
             w.ticks = int(raw.ticks, 0, Number.MAX_SAFE_INTEGER, 'Zeitschritt');
-            w.omega = num(raw.omega, 0, SE.OMEGA_MAX, 'Energie');
+            w.omega = num(raw.omega, 0, SE.OMEGA_LIMIT, 'Energie');
             w.co2 = num(raw.co2, 0, 5000, 'CO₂');
             w.o2 = num(raw.o2, 0, 40, 'Sauerstoff');
             w.n2 = num(raw.n2, 0, 100, 'Stickstoff');
@@ -58197,8 +58349,8 @@ var SE;
 /* =============================================================================
  * SimEarth 2.0 — renderers
  * -----------------------------------------------------------------------------
- * EditView  a scrollable, zoomed tile view drawn from pixel sprites, with the
- *           five additive data layers and six exclusive climate overlays.
+ * Map colours shared by both views (ramps, mapColor, fitCanvas, thumbnails).
+ * EditView  the scrollable, zoomed tile view: editview.ts.
  * MapView   the whole planet at a glance in any of the twelve map modes, flat
  *           and on a globe turned to the Edit Window's viewport, which both outline.
  * ========================================================================== */
@@ -58304,67 +58456,6 @@ var SE;
     /** Land on the seafloor map: one flat ground colour, so the whole scale is spent on depth. */
     SE.SEAFLOOR_LAND_COLOR = [110, 104, 94];
     /* --------------------------------------------------------- relief shading -- */
-    /**
-     * Degrees of shading per unit of cross-tile slope.
-     *
-     * Set from the terrain rather than by eye. Measured over a planet's land, the
-     * slope this uses has a median of 0.089 and a 90th percentile of 0.235, so
-     * this puts a barely-visible 6% wash on ordinary ground and about 16% on a
-     * genuinely steep flank — enough to trace a ridgeline, little enough that the
-     * pixel art underneath still reads as pixel art. An earlier guess of 2.6 gave
-     * the median tile a 23% wash and clipped a quarter of the map.
-     */
-    const RELIEF_STRENGTH = 0.7;
-    /** Cliffs clip here, so nothing goes to solid black or solid white. */
-    const RELIEF_MAX = 0.30;
-    /** Below this the wash is invisible and not worth a fill. */
-    const RELIEF_MIN = 0.02;
-    /** How long the zoom must rest before the map is redrawn at the new size. */
-    const ZOOM_SETTLE_MS = 140;
-    /**
-     * Brushed tiles are recomposed at most this often (about every second
-     * frame at 60 Hz): composing their chunks is most of a stroke frame, and
-     * the dissolve (landfade.ts) hides the lower rate.
-     */
-    const TILE_REDRAW_MS = 45;
-    /** Extra light per unit of elevation, so highlands read paler than lowland. */
-    const ALTITUDE_LIGHT = 0.1;
-    /** Peak-to-peak strength of the per-tile grain. */
-    const GROUND_GRAIN = 0.05;
-    /**
-     * Pre-rendered shading washes, indexed `RELIEF_STEPS + step`.
-     *
-     * Composing the rgba string per tile allocated one string for every tile on
-     * screen, sixty times a second. No one can tell thirty-two steps from a
-     * continuum, and this way the render loop allocates nothing.
-     */
-    const RELIEF_WASH = (() => {
-        const out = [];
-        for (let step = -SE.RELIEF_STEPS; step <= SE.RELIEF_STEPS; step++) {
-            const alpha = ((Math.abs(step) / SE.RELIEF_STEPS) * RELIEF_MAX).toFixed(3);
-            out.push(step >= 0 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`);
-        }
-        return out;
-    })();
-    /**
-     * The relief step of a land tile: hillshade from its cross-tile slope, the
-     * highlands a little paler, and a faint per-tile grain so plains do not look
-     * stamped. 0 when the wash would be invisible.
-     */
-    function reliefStep(world, i) {
-        const elevation = world.elevation;
-        const x = i % SE.GRID_W;
-        const y = (i / SE.GRID_W) | 0;
-        const west = Math.max(0, elevation[SE.idx(SE.wrapX(x - 1), y)]);
-        const east = Math.max(0, elevation[SE.idx(SE.wrapX(x + 1), y)]);
-        const north = Math.max(0, elevation[SE.idx(x, SE.clampY(y - 1))]);
-        const south = Math.max(0, elevation[SE.idx(x, SE.clampY(y + 1))]);
-        const shade = SE.clamp((west - east) + (north - south), -1, 1) * RELIEF_STRENGTH +
-            (elevation[i] - 0.3) * ALTITUDE_LIGHT + (SE.tileNoise(i) - 0.5) * GROUND_GRAIN;
-        if (shade > -RELIEF_MIN && shade < RELIEF_MIN)
-            return 0;
-        return SE.clamp(Math.round((shade / RELIEF_MAX) * SE.RELIEF_STEPS), -SE.RELIEF_STEPS, SE.RELIEF_STEPS);
-    }
     /** Brightness factor from the slope across a land tile, light from the north-west. */
     function reliefFactor(world, i) {
         const e = world.elevation;
@@ -58515,964 +58606,6 @@ var SE;
         }
     }
     SE.planetThumbnail = planetThumbnail;
-    /* -------------------------------------------------------------- EditView -- */
-    class EditView {
-        constructor(canvas) {
-            /** Screen pixels per tile before device scaling. */
-            this.tilePx = 16;
-            /** Top-left of the viewport, in tiles. Fractional, so dragging is smooth. */
-            this.scrollX = 0;
-            this.scrollY = 0;
-            /** Additive layers, indexed as in DATA_LAYERS. */
-            this.layers = { oceans: true, biomes: true, cities: true, life: true, events: true, clouds: true };
-            /** The single active climate overlay. */
-            this.overlay = SE.Overlay.None;
-            this.hover = null;
-            /** Footprint of the armed tool around the hovered tile, in tiles. */
-            this.brushRadius = 0;
-            /** Outline colour of the brush preview. */
-            this.brushColor = 'rgba(255,255,255,0.9)';
-            /** Drawn instead of the tool cursor, last, with identity transform (device pixels). */
-            this.decor = null;
-            /** Tiles to redraw on the next frame without a full redraw: x0, y0, x1, y1 (x may run past the wrap). */
-            this.dirtyTiles = null;
-            /** A brush stroke runs: the world's progress waits with its full redraws (30–100 ms) until it ends. */
-            this.holdWorld = false;
-            /** When brushed tiles were last recomposed. */
-            this.tilesAt = -Infinity;
-            this.tiles = new SE.TileCache();
-            this.regions = new SE.BiomeRegions();
-            this.ambient = new SE.AmbientLayer();
-            this.waterMotion = new SE.WaterMotion();
-            this.reefSwell = new SE.ReefSwell();
-            /** Caustics and glint, experimental and off unless switched on (waterfx.ts). */
-            this.waterFx = new SE.WaterFx();
-            /**
-             * Pins the clock of everything animated on the map, ms on performance.now()'s scale
-             * (screenshots and comparisons: `?animclock=<ms>`, or set it); null lets them run.
-             */
-            this.animClock = typeof location !== 'undefined' && /[?&]animclock=\d/.test(location.search)
-                ? Number(new URLSearchParams(location.search).get('animclock')) : null;
-            this.clownfish = new SE.ClownfishLayer();
-            this.herds = new SE.HerdLayer();
-            this.whales = new SE.WhaleLayer();
-            this.dolphins = new SE.DolphinLayer();
-            this.sharks = new SE.SharkLayer();
-            /** The oil platform and the desert derrick of the Industrial age (oillayer.ts). */
-            this.oilRigs = new SE.OilRigLayer();
-            this.spaceport = new SE.SpaceportLayer();
-            /** World wonders, the train and the ships of the civilization (docs/bewegung-2026-10). */
-            this.wonders = new SE.WonderLayer();
-            this.trains = new SE.TrainLayer();
-            this.ships = new SE.ShipLayer();
-            /** The termite mound on the savanna, once ants live there (termitelayer.ts). */
-            this.termites = new SE.TermiteLayer();
-            /** The kapok tree in the largest rainforest (kapoklayer.ts). */
-            this.kapok = new SE.KapokLayer();
-            this.salmon = new SE.SalmonLayer();
-            this.storks = new SE.StorkLayer();
-            this.bubbles = new SE.OxygenBubbles();
-            this.cities = new SE.CityLayer();
-            this.settlers = new SE.SettlerLayer();
-            /** Wandering groups on the move (bandlayer.ts); their camps are part of `cities`. */
-            this.bands = new SE.BandLayer();
-            /** Flames over the fire places and smoke over the chimneys, every frame (cityfire.ts). */
-            this.cityFires = new SE.CityFireLayer();
-            /** Disasters: omens, eruptions, lava, smoke (docs/ereignisse-spec.md). */
-            this.fx = new SE.EffectLayer();
-            /** How far the game is between two ticks, 0..1 (app.ts); kept while paused. */
-            this.tickPhase = 0;
-            this.baseKey = '';
-            this.baseTick = -1;
-            this.baseTime = 0;
-            this.dirty = true;
-            /** Scroll position the base image was drawn at, for shifting it. */
-            this.baseScrollX = 0;
-            this.baseScrollY = 0;
-            /** How long the last full redraw took, in ms — sets how often it may run. */
-            this.drawCost = 0;
-            /** Tile size the base image was drawn at, and when the zoom last moved. */
-            this.baseTilePx = 16;
-            this.zoomedAt = -Infinity;
-            this.land = SE.PixelTerrain.shared();
-            /** How the camera actually moved lately, for the landscape asked for ahead of it (landahead.ts). */
-            this.motion = new SE.CameraMotion();
-            this.motionSeed = NaN;
-            /** Sea ice calving off the pack edge now and then (icecalving.ts). */
-            this.calving = new SE.IceCalving(this.land);
-            this.canvas = canvas;
-            const ctx = canvas.getContext('2d');
-            if (!ctx)
-                throw new Error('SimEarth: 2D context unavailable for the Edit window');
-            this.ctx = ctx;
-            this.base = document.createElement('canvas');
-            const bctx = this.base.getContext('2d');
-            if (!bctx)
-                throw new Error('SimEarth: offscreen 2D context unavailable');
-            this.baseCtx = bctx;
-            this.swap = document.createElement('canvas');
-            const sctx = this.swap.getContext('2d');
-            if (!sctx)
-                throw new Error('SimEarth: offscreen 2D context unavailable');
-            this.swapCtx = sctx;
-            if (SE.TERRAIN_STYLE === 'pixel')
-                this.land.whenReady(() => this.markDirty());
-            // `?sprites=page` keeps creature pictures on the page, for measuring (tools/perf-bench.js).
-            if (typeof location === 'undefined' || !/[?&]sprites=page(&|$)/.test(location.search))
-                this.tiles.remote = () => this.land.sprites;
-            this.cities.whenReady(() => this.markDirty());
-            this.calving.occupied = (i) => this.layers.life && this.herds.markerOn(i) !== null;
-        }
-        /** "Effekte reduzieren": disasters without shaking or flashes, and still water. */
-        get reduceEffects() {
-            return this.waterMotion.still;
-        }
-        set reduceEffects(on) {
-            this.fx.reduce = on;
-            this.waterMotion.still = on;
-            this.reefSwell.still = on;
-            this.waterFx.still = on;
-            this.clownfish.still = on;
-            this.whales.still = on;
-            this.dolphins.still = on;
-            this.sharks.still = on;
-            this.oilRigs.still = on;
-            this.spaceport.still = on;
-            this.wonders.still = on;
-            this.trains.still = on;
-            this.ships.still = on;
-            this.settlers.still = on;
-            this.termites.still = on;
-            this.salmon.still = on;
-            this.storks.still = on;
-            this.bubbles.still = on;
-            this.calving.still = on;
-            this.cityFires.still = on;
-        }
-        /** Make sure a creature of sub-species (c, stage) stands on the map; its tile, -1 if none lives. */
-        pinSpecies(world, c, stage) {
-            this.markDirty();
-            return this.herds.pin(world, c, stage);
-        }
-        /** The creature the map shows on tile i, for the Examine picture: `key` is cheap, `draw` makes its 32 px sprite. */
-        creatureOn(world, i) {
-            const m = this.layers.life ? this.herds.markerOn(i) : null;
-            if (!m)
-                return null;
-            const stage = SE.reefShownStage(world, i, m.c, m.stage);
-            const special = SE.animalSpecialist(this.regions, world, i, m.c, stage);
-            const sp = SE.SPECIES[m.c];
-            const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[stage]?.art;
-            if (!art)
-                return null;
-            return { key: `${m.c}:${stage}:${special}:${+m.flip}`, draw: () => SE.rasterArt(art, 32, SE.CREATURE_LOOK, m.flip, true) };
-        }
-        /** The salmon run, clownfish or stork flight in sight on or by tile i, for the Examine tool. */
-        migrationOn(world, i) {
-            if (!this.layers.life)
-                return null;
-            const now = performance.now();
-            if (this.salmon.activeOn(world, this.land, i, now))
-                return 'salmon';
-            if (this.clownfish.activeOn(world, i, now))
-                return 'clownfish';
-            return this.storks.activeNear(i, now) >= 0 ? 'storks' : null;
-        }
-        /** Force a full redraw on the next frame (after a tool changed the world). */
-        markDirty() {
-            this.dirty = true;
-        }
-        /** Read the world into the terrain field and regions now, so the next full redraw has less to do. */
-        warm(world) {
-            if (this.pixelTerrain)
-                this.land.refresh(world, this.layers.oceans);
-            this.regions.refresh(world);
-        }
-        /** Redraw only tiles [x0, x1] × [y0, y1] on the next frame (a brush changing the ground live). */
-        markDirtyTiles(x0, y0, x1, y1) {
-            const d = this.dirtyTiles;
-            this.dirtyTiles = d ? [Math.min(d[0], x0), Math.min(d[1], y0), Math.max(d[2], x1), Math.max(d[3], y1)] : [x0, y0, x1, y1];
-        }
-        /** The pixel terrain draws the ground; with the Biomes layer off the map shows flat colours as before. */
-        get pixelTerrain() {
-            return SE.TERRAIN_STYLE === 'pixel' && this.layers.biomes && !this.land.failed;
-        }
-        get viewW() {
-            return this.canvas.width / (window.devicePixelRatio || 1);
-        }
-        get viewH() {
-            return this.canvas.height / (window.devicePixelRatio || 1);
-        }
-        /** Viewport width in tiles (fractional). */
-        get cols() {
-            return this.viewW / this.tilePx;
-        }
-        get rows() {
-            return this.viewH / this.tilePx;
-        }
-        clampScroll() {
-            // Whole device pixels only: then a pan can reuse the last frame by
-            // shifting it, and every tile still lands on exactly the same pixels.
-            const q = this.tilePx * (window.devicePixelRatio || 1);
-            this.scrollX = Math.round((((this.scrollX % SE.GRID_W) + SE.GRID_W) % SE.GRID_W) * q) / q;
-            const rows = this.rows;
-            if (rows >= SE.GRID_H)
-                this.scrollY = -(rows - SE.GRID_H) / 2;
-            else
-                this.scrollY = Math.round(SE.clamp(this.scrollY, 0, SE.GRID_H - rows) * q) / q;
-        }
-        /** Centre the viewport on a tile. */
-        centerOn(x, y) {
-            this.scrollX = x + 0.5 - this.cols / 2;
-            this.scrollY = y + 0.5 - this.rows / 2;
-            this.clampScroll();
-            // A jump, not motion: nothing is asked for ahead in its direction.
-            this.motion.reset();
-        }
-        /** Scroll by a number of tiles (fractions allowed). */
-        scrollBy(dx, dy) {
-            this.scrollX += dx;
-            this.scrollY += dy;
-            this.clampScroll();
-        }
-        /** Zoom around a screen point, keeping the tile under it in place. */
-        zoomAt(factor, clientX, clientY) {
-            const rect = this.canvas.getBoundingClientRect();
-            const px = clientX - rect.left;
-            const py = clientY - rect.top;
-            const before = this.tilePx;
-            const next = SE.clamp(Math.round(before * factor), EditView.MIN_TILE, EditView.MAX_TILE);
-            if (next === before)
-                return;
-            const wx = this.scrollX + px / before;
-            const wy = this.scrollY + py / before;
-            this.tilePx = next;
-            this.zoomedAt = performance.now();
-            this.scrollX = wx - px / next;
-            this.scrollY = wy - py / next;
-            this.clampScroll();
-        }
-        /**
-         * Set the zoom around the viewport's centre, fractions allowed: frames
-         * stretch the last full picture as during a wheel zoom, so a glide called
-         * every frame stays smooth; the real redraw follows once it rests.
-         */
-        glideZoom(px) {
-            const cx = this.scrollX + this.cols / 2;
-            const cy = this.scrollY + this.rows / 2;
-            this.tilePx = px;
-            this.zoomedAt = performance.now();
-            this.scrollX = cx - this.cols / 2;
-            this.scrollY = cy - this.rows / 2;
-            this.clampScroll();
-        }
-        /** Rings spreading from a tile for a few seconds, to show where something happened. */
-        ping(x, y, color) {
-            this.ambient.ping(x, y, color, performance.now());
-        }
-        /** Publish this viewport to the Map window, which draws it as a rectangle. */
-        editRectInto(map) {
-            map.editRect = { x: this.scrollX, y: Math.max(0, this.scrollY), w: this.cols, h: Math.min(SE.GRID_H, this.rows) };
-        }
-        /** Convert a pointer position to world tile coordinates. */
-        tileAt(clientX, clientY) {
-            const rect = this.canvas.getBoundingClientRect();
-            if (rect.width <= 0)
-                return null;
-            const px = clientX - rect.left;
-            const py = clientY - rect.top;
-            if (px < 0 || py < 0 || px >= rect.width || py >= rect.height)
-                return null;
-            const wy = Math.floor(this.scrollY + py / this.tilePx);
-            if (wy < 0 || wy >= SE.GRID_H)
-                return null;
-            return { x: SE.wrapX(Math.floor(this.scrollX + px / this.tilePx)), y: wy };
-        }
-        render(world) {
-            if (!fitCanvas(this.canvas))
-                return;
-            const dpr = window.devicePixelRatio || 1;
-            if (this.base.width !== this.canvas.width || this.base.height !== this.canvas.height) {
-                this.base.width = this.canvas.width;
-                this.base.height = this.canvas.height;
-                this.dirty = true;
-            }
-            this.clampScroll();
-            // The view is redrawn when the camera or the layers change, and when the
-            // world has moved on — but the world part at most four times a second:
-            // nothing on a tile map changes visibly faster, and at the fastest speed
-            // redrawing every tile on every tick was most of the frame.
-            const key = `${this.tilePx}|${this.overlay}|${this.canvas.width}x${this.canvas.height}|` +
-                `${+this.layers.oceans}${+this.layers.biomes}${+this.layers.cities}${+this.layers.life}${+this.layers.events}`;
-            const now = performance.now();
-            const ctx = this.ctx;
-            // While the player is still zooming, stretch the last picture rather
-            // than redraw every tile for each wheel notch or pinch step; the real
-            // redraw follows as soon as the zoom comes to rest.
-            const sameButZoom = key.slice(key.indexOf('|')) === this.baseKey.slice(this.baseKey.indexOf('|'));
-            const previewing = !this.dirty && sameButZoom && this.tilePx !== this.baseTilePx && now - this.zoomedAt < ZOOM_SETTLE_MS;
-            if (previewing) {
-                this.drawZoomPreview(dpr);
-            }
-            else {
-                // A full redraw on a huge screen can take tens of milliseconds; the
-                // slower it is, the less often the world's progress triggers one.
-                const interval = Math.max(250, this.drawCost * 8);
-                // Composing on the page ran out of time last frame: finish it now, not a frame later.
-                if (this.pixelTerrain && this.land.pending)
-                    this.dirty = true;
-                const worldMoved = !this.holdWorld && world.ticks !== this.baseTick && now - this.baseTime > interval;
-                const scrolled = this.scrollX !== this.baseScrollX || this.scrollY !== this.baseScrollY;
-                if (this.dirty || key !== this.baseKey || worldMoved || (scrolled && !this.shiftBase(world, dpr))) {
-                    const t0 = performance.now();
-                    const box = this.dirtyTiles;
-                    if (box && this.pixelTerrain)
-                        this.land.refreshBox(world, this.layers.oceans, box[0], Math.max(0, box[1]), box[2], Math.min(SE.GRID_H - 1, box[3]));
-                    this.dirtyTiles = null;
-                    // The full redraw draws the worker's latest pictures and asks for every chunk out of date (with a field just taken over).
-                    this.land.takeFresh();
-                    this.land.refetch = false;
-                    this.drawBase(world, dpr);
-                    this.drawCost = performance.now() - t0;
-                    SE.perfHud.drawBase(this.drawCost);
-                    this.baseKey = key;
-                    this.baseTick = world.ticks;
-                    this.baseTime = now;
-                    this.baseScrollX = this.scrollX;
-                    this.baseScrollY = this.scrollY;
-                    this.baseTilePx = this.tilePx;
-                    this.dirty = false;
-                }
-                else {
-                    // Brushed ground dissolving into its new picture (landfade.ts) is redrawn every frame until done.
-                    // Not when the world changed meanwhile (a settle): drawing would re-read the whole field; its full redraw follows.
-                    const fade = this.pixelTerrain && this.land.current(world, this.layers.oceans) ? this.land.fadeBox() : null;
-                    // Brushed tiles are re-read and recomposed (most of a stroke frame) at most every
-                    // TILE_REDRAW_MS; the dissolve keeps moving on the frames between.
-                    const changed = now - this.tilesAt >= TILE_REDRAW_MS ? this.dirtyTiles : null;
-                    // A slow field read leaves the drawing (composing chunks, as slow) to the next frame.
-                    if ((changed || fade) && this.redrawTiles(world, dpr, changed, fade) && changed) {
-                        this.dirtyTiles = null;
-                        this.tilesAt = now;
-                    }
-                    if (this.pixelTerrain) {
-                        // The landscape worker's pictures: each chunk redrawn alone as it arrives; after a new field, its chunks asked for.
-                        for (const box of this.land.takeFresh())
-                            this.redrawChunk(world, dpr, box);
-                        if (this.land.refetch) {
-                            this.land.refetch = false;
-                            this.land.want({ scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr }, 0, 0, this.canvas.width, this.canvas.height);
-                        }
-                    }
-                }
-                // The terrain or the cities ran out of time for composing: finish next frame.
-                if ((this.pixelTerrain && this.land.pending) || this.cities.pending)
-                    this.dirty = true;
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                ctx.drawImage(this.base, 0, 0);
-            }
-            const cam = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr };
-            // Animations run on their own clock, which a test may pin; the camera and the redraw logic keep real time.
-            const t = this.animClock ?? now;
-            if (this.pixelTerrain) {
-                if (world.seed !== this.motionSeed) {
-                    this.motion.reset();
-                    this.motionSeed = world.seed;
-                }
-                this.motion.sample(this.scrollX, this.scrollY, this.tilePx, now, this.cols, this.rows);
-                this.land.frame(cam, this.canvas.width, this.canvas.height, this.motion, now);
-            }
-            const fx = this.layers.events && this.pixelTerrain && this.land.ready ? this.fx : null;
-            const cities = (x0, y0, x1, y1) => {
-                if (this.layers.cities)
-                    this.cities.draw(ctx, cam, world, this.land.field, x0, y0, x1, y1);
-            };
-            if (this.pixelTerrain && !previewing) {
-                // Right over the cached terrain: the surf, the swell and all that stands or moves on the sea stay on top.
-                this.waterFx.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers, this.overlay !== SE.Overlay.None, t);
-                this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
-                this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
-                // Over the swell: a crest paints the composed sea's colour and would cut holes into a fish.
-                if (this.layers.life)
-                    this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
-                // Under the creatures, so an animal near a calving stays on top.
-                if (this.layers.oceans) {
-                    ctx.setTransform(1, 0, 0, 1, 0, 0);
-                    this.calving.draw(ctx, cam, t);
-                }
-                if (this.layers.life)
-                    this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
-            }
-            if (!fx)
-                this.fx.show.flush(world);
-            // Only a finished base counts: while the terrain is still composing it shows older ground.
-            if (!this.land.pending && !this.land.composing)
-                this.fx.baseTick = this.baseTick;
-            if (fx) {
-                fx.update(world, cam, this.cols, this.rows, t, this.tickPhase);
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                if (!previewing)
-                    fx.drawShake(ctx, this.base, cam, t);
-                fx.drawGround(ctx, world, cam, this.land, t, cities);
-            }
-            // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
-            if (this.layers.cities) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.cities.drawCamps(ctx, cam, world, this.land.field, this.cols, this.rows);
-                this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, t);
-                this.oilRigs.draw(ctx, cam, world, t);
-                this.spaceport.draw(ctx, cam, world, t);
-                this.wonders.draw(ctx, cam, world, this.land.field, t);
-                this.trains.draw(ctx, cam, world, this.land.field, t);
-                this.ships.draw(ctx, cam, world, t, this.cities);
-            }
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            if (this.layers.life) {
-                this.herds.update(world, t);
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.termites.draw(ctx, cam, world, t);
-                this.bubbles.draw(ctx, cam, this.cols, this.rows, world, t);
-                this.whales.draw(ctx, cam, this.herds.markers, world, this.land, t, this.regions);
-                this.dolphins.draw(ctx, cam, this.herds.markers, world, t);
-                this.sharks.draw(ctx, cam, this.herds.markers, world, t);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                this.herds.draw(ctx, this, world, t, this.tiles, this.regions, (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
-            }
-            if (this.layers.cities) {
-                this.settlers.draw(ctx, this, world, t, dpr, this.cities);
-                this.bands.draw(ctx, this, world, t, dpr);
-            }
-            // Over the creatures and settlers: the crown hides the tile behind it, so nothing there may show through.
-            if (this.pixelTerrain) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.kapok.draw(ctx, cam, world);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-            if (fx) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                fx.drawObjects(ctx, world, cam, this.land, cities);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-            if (this.layers.life) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.storks.draw(ctx, cam, this.cols, this.rows, world, t);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-            if (this.layers.cities)
-                SE.drawCityNames(ctx, this, world);
-            this.ambient.draw(ctx, this, world, t, this.layers.oceans, this.layers.clouds);
-            if (fx) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                fx.drawTop(ctx, cam);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-            if (this.decor) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                this.decor(ctx, cam, t);
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            }
-            else {
-                this.drawCursor(ctx, this.tilePx);
-            }
-            // Creature pictures of a new size: asked of the landscape worker, a few per frame (tilecache.ts).
-            this.tiles.flush();
-        }
-        /**
-         * Redraw a box of changed tiles into the base picture, with the margin a
-         * tile's picture reads its neighbours from, together with the box `more`
-         * of tiles to draw again without re-reading them.
-         */
-        /** One chunk the landscape worker delivered: its tiles and one around (the art's overlap), drawn as composed, nothing asked for. */
-        redrawChunk(world, dpr, box) {
-            const size = this.tilePx;
-            let rx = (((box[0] - 1 - this.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
-            if (rx > this.cols)
-                rx -= SE.GRID_W;
-            const span = box[2] - box[0] + 3;
-            if (rx + span < 0 || rx > this.cols)
-                return;
-            this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            this.baseCtx.imageSmoothingEnabled = false;
-            this.drawLandRegion(world, rx * size, (box[1] - 1 - this.scrollY) * size, (rx + span) * size, (box[3] + 2 - this.scrollY) * size, false);
-        }
-        redrawTiles(world, dpr, changed, more = null) {
-            const pad = 4; // SIGNATURE_REACH (landfield.ts) + 1
-            if (changed && this.pixelTerrain && this.land.refreshBox(world, this.layers.oceans, changed[0], Math.max(0, changed[1]), changed[2], Math.min(SE.GRID_H - 1, changed[3])))
-                return false;
-            let box = changed ?? more;
-            if (!box)
-                return true;
-            if (changed && more) {
-                const s = Math.round((changed[0] - more[0]) / SE.GRID_W) * SE.GRID_W;
-                box = [Math.min(changed[0], more[0] + s), Math.min(changed[1], more[1]), Math.max(changed[2], more[2] + s), Math.max(changed[3], more[3])];
-            }
-            const span = box[2] - box[0] + 1 + 2 * pad;
-            if (span > SE.GRID_W / 2) {
-                this.drawBase(world, dpr);
-                return true;
-            }
-            const size = this.tilePx;
-            // The copy of the box on the wrapping map that meets the view.
-            let rx = (((box[0] - pad - this.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
-            if (rx > this.cols)
-                rx -= SE.GRID_W;
-            if (!this.pixelTerrain) {
-                this.tiles.setDeviceTile(size * dpr);
-                this.regions.refresh(world);
-            }
-            this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            this.baseCtx.imageSmoothingEnabled = false;
-            this.drawRegion(world, rx * size, (box[1] - pad - this.scrollY) * size, (rx + span) * size, (box[3] + 1 + pad - this.scrollY) * size);
-            return true;
-        }
-        /**
-         * How much surf the view shows, 0..1: the share of visible tiles that are
-         * open water on a shore, on a coarse grid. Coasts are lines, so zooming out
-         * thins the share by itself; the zoom term lowers it further.
-         */
-        surfPresence(world) {
-            const step = Math.max(1, Math.ceil(Math.max(this.cols / 48, this.rows / 32)));
-            const x0 = Math.floor(this.scrollX);
-            const y0 = Math.max(0, Math.floor(this.scrollY));
-            const y1 = Math.min(SE.GRID_H, Math.ceil(this.scrollY + this.rows));
-            let seen = 0;
-            let shore = 0;
-            for (let y = y0; y < y1; y += step) {
-                for (let rx = 0; rx < this.cols; rx += step) {
-                    const x = SE.wrapX(x0 + rx);
-                    const i = SE.idx(x, y);
-                    seen++;
-                    if (world.isWater(i) && world.biome[i] !== SE.Biome.Arctic && SE.shoreMask(world, x, y) !== 0)
-                        shore++;
-                }
-            }
-            if (seen === 0)
-                return 0;
-            const zoom = (this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE);
-            return SE.clamp((shore / seen) / 0.06, 0, 1) * (0.4 + 0.6 * zoom);
-        }
-        /**
-         * How loud the oxygen bubbling should be, 0..1: how much pearls in view,
-         * times the zoom squared, silent fully zoomed out and full fully zoomed
-         * in. Squared because loudness is heard on a log scale: each zoom step
-         * then sounds about as much louder as the last.
-         */
-        bubblePresence() {
-            if (!this.layers.life)
-                return 0;
-            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
-            return this.bubbles.presence() * zoom * zoom;
-        }
-        /**
-         * How loud a hurricane's wind should be, 0..1: the strongest storm the
-         * effect layer drew in view (fxstorm.ts) in the last half second, softer
-         * zoomed out but still heard: a storm is a big sound.
-         */
-        stormPresence(now) {
-            if (!this.layers.events || now - SE.STORM_SOUND.at > 500)
-                return 0;
-            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
-            return SE.STORM_SOUND.presence * (0.35 + 0.65 * zoom);
-        }
-        /** The last full picture, scaled and moved to where the new zoom puts it. */
-        drawZoomPreview(dpr) {
-            const k = this.tilePx / this.baseTilePx;
-            const span = SE.GRID_W * this.tilePx;
-            let dx = (this.baseScrollX - this.scrollX) * this.tilePx;
-            if (dx > span / 2)
-                dx -= span;
-            if (dx < -span / 2)
-                dx += span;
-            const dy = (this.baseScrollY - this.scrollY) * this.tilePx;
-            const ctx = this.ctx;
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.fillStyle = '#05090c';
-            ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-            ctx.imageSmoothingEnabled = false;
-            // Zooming out shrinks the last picture: flat tile colours fill the rest
-            // until the real redraw, instead of empty space.
-            const flat = k < 1 && this.pixelTerrain ? this.land.overview() : null;
-            if (flat) {
-                const T = this.tilePx * dpr;
-                const w = SE.GRID_W * T;
-                for (let x = -((((this.scrollX * T) % w) + w) % w); x < this.canvas.width; x += w) {
-                    ctx.drawImage(flat, x, -this.scrollY * T, w, SE.GRID_H * T);
-                }
-            }
-            ctx.drawImage(this.base, dx * dpr, dy * dpr, this.base.width * k, this.base.height * k);
-        }
-        /**
-         * Pan by moving the last image and drawing only the strip that came into
-         * view. Returns false when the jump is too large to be worth it.
-         */
-        shiftBase(world, dpr) {
-            const size = this.tilePx;
-            let dxT = this.scrollX - this.baseScrollX;
-            if (dxT > SE.GRID_W / 2)
-                dxT -= SE.GRID_W;
-            if (dxT < -SE.GRID_W / 2)
-                dxT += SE.GRID_W;
-            const dyT = this.scrollY - this.baseScrollY;
-            const dx = dxT * size;
-            const dy = dyT * size;
-            const w = this.viewW;
-            const h = this.viewH;
-            if (Math.abs(dx) >= w * 0.5 || Math.abs(dy) >= h * 0.5)
-                return false;
-            this.tiles.setDeviceTile(size * dpr);
-            this.regions.refresh(world);
-            // Assigning a canvas size clears it and resets its context even when the
-            // size is unchanged. No clear is needed: the base is opaque everywhere
-            // (drawBase and the fill below paint it first), so it covers the old
-            // swap content. 'copy' instead measured as slow as the reset in Chrome.
-            if (this.swap.width !== this.base.width || this.swap.height !== this.base.height) {
-                this.swap.width = this.base.width;
-                this.swap.height = this.base.height;
-            }
-            this.swapCtx.drawImage(this.base, 0, 0);
-            const ctx = this.baseCtx;
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.imageSmoothingEnabled = false;
-            ctx.fillStyle = '#05090c';
-            ctx.fillRect(0, 0, this.base.width, this.base.height);
-            ctx.drawImage(this.swap, Math.round(-dx * dpr), Math.round(-dy * dpr));
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            if (dx > 0)
-                this.drawRegion(world, w - dx - size, 0, w, h);
-            else if (dx < 0)
-                this.drawRegion(world, 0, 0, -dx + size, h);
-            if (dy > 0)
-                this.drawRegion(world, 0, h - dy - size, w, h);
-            else if (dy < 0)
-                this.drawRegion(world, 0, 0, w, -dy + size);
-            this.baseScrollX = this.scrollX;
-            this.baseScrollY = this.scrollY;
-            return true;
-        }
-        /** Redraw every tile overlapping a rectangle of the view (CSS pixels). */
-        drawRegion(world, x0, y0, x1, y1) {
-            if (this.pixelTerrain) {
-                this.drawLandRegion(world, x0, y0, x1, y1);
-                return;
-            }
-            const ctx = this.baseCtx;
-            const size = this.tilePx;
-            const tx0 = Math.floor(this.scrollX);
-            const ty0 = Math.floor(this.scrollY);
-            const ox = (this.scrollX - tx0) * size;
-            const oy = (this.scrollY - ty0) * size;
-            const c0 = Math.max(0, Math.floor((x0 + ox) / size));
-            const c1 = Math.ceil((x1 + ox) / size);
-            const r0 = Math.max(0, Math.floor((y0 + oy) / size));
-            const r1 = Math.ceil((y1 + oy) / size);
-            for (let ry = r0; ry <= r1; ry++) {
-                const wy = ty0 + ry;
-                if (wy < 0 || wy >= SE.GRID_H)
-                    continue;
-                const py = Math.round(ry * size - oy);
-                for (let rx = c0; rx <= c1; rx++) {
-                    const wx = SE.wrapX(tx0 + rx);
-                    const px = Math.round(rx * size - ox);
-                    const i = SE.idx(wx, wy);
-                    this.drawTile(ctx, world, i, px, py, size);
-                    if (this.overlay !== SE.Overlay.None)
-                        this.drawOverlayTile(ctx, world, i, wx, wy, px, py, size);
-                }
-            }
-            this.drawCities(world, c0 * size - ox, r0 * size - oy, (c1 + 1) * size - ox, (r1 + 1) * size - oy);
-        }
-        drawBase(world, dpr) {
-            this.tiles.setDeviceTile(this.tilePx * dpr);
-            this.regions.refresh(world);
-            const ctx = this.baseCtx;
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            ctx.imageSmoothingEnabled = false;
-            ctx.fillStyle = '#05090c';
-            ctx.fillRect(0, 0, this.viewW, this.viewH);
-            if (this.pixelTerrain) {
-                this.drawLandRegion(world, 0, 0, this.viewW, this.viewH);
-                return;
-            }
-            const size = this.tilePx;
-            const x0 = Math.floor(this.scrollX);
-            const y0 = Math.floor(this.scrollY);
-            const ox = (this.scrollX - x0) * size;
-            const oy = (this.scrollY - y0) * size;
-            const cols = Math.ceil(this.cols) + 1;
-            const rows = Math.ceil(this.rows) + 1;
-            for (let ry = 0; ry < rows; ry++) {
-                const wy = y0 + ry;
-                if (wy < 0 || wy >= SE.GRID_H)
-                    continue;
-                const py = Math.round(ry * size - oy);
-                for (let rx = 0; rx < cols; rx++) {
-                    const wx = SE.wrapX(x0 + rx);
-                    const px = Math.round(rx * size - ox);
-                    this.drawTile(ctx, world, SE.idx(wx, wy), px, py, size);
-                }
-            }
-            this.drawCities(world, -ox, -oy, cols * size - ox, rows * size - oy);
-            if (this.overlay !== SE.Overlay.None)
-                this.drawOverlay(ctx, world, size, x0, y0, ox, oy, cols, rows);
-        }
-        drawTile(ctx, world, i, px, py, size) {
-            const tiles = this.tiles;
-            const water = world.isWater(i);
-            const biome = world.biome[i];
-            const variant = (SE.tileNoise(i) * 4) | 0;
-            // Trees, creatures and cities carry their shadow one sprite pixel out.
-            const big = size * SE.SHADOW_SPAN;
-            // --- ground, with its relief shaded in ---
-            if (water && !this.layers.oceans) {
-                ctx.fillStyle = SE.depthStyleAt(SE.depthStep(world.elevation[i]));
-                ctx.fillRect(px, py, size, size);
-            }
-            else if (water && biome !== SE.Biome.Arctic) {
-                ctx.drawImage(tiles.sea(biome === SE.Biome.Coast, variant), px, py, size, size);
-                const shore = SE.shoreMask(world, i % SE.GRID_W, (i / SE.GRID_W) | 0);
-                if (shore !== 0)
-                    ctx.drawImage(tiles.surf(shore), px, py, size, size);
-            }
-            else if (this.layers.biomes) {
-                // Thinly covered open land shows its bare, lichen-flecked ground: a
-                // plain of first mosses should not look like a meadow.
-                let ground = biome;
-                if (biome === SE.Biome.Grass && world.vegetation[i] < 0.3)
-                    ground = SE.Biome.Tundra;
-                if (biome === SE.Biome.Rock && world.elevation[i] > SE.SNOW_LINE)
-                    ground = SE.SNOW_GROUND;
-                const step = water ? 0 : reliefStep(world, i);
-                ctx.drawImage(tiles.ground(ground, variant, step, step === 0 ? null : RELIEF_WASH[SE.RELIEF_STEPS + step]), px, py, size, size);
-            }
-            else {
-                ctx.fillStyle = SE.rgbCss(SE.BIOME_COLORS[biome]);
-                ctx.fillRect(px, py, size, size);
-                const step = water ? 0 : reliefStep(world, i);
-                if (step !== 0) {
-                    ctx.fillStyle = RELIEF_WASH[SE.RELIEF_STEPS + step];
-                    ctx.fillRect(px, py, size, size);
-                }
-            }
-            // --- plants: the group that shapes the tile, sparse or dense ---
-            const veg = world.vegetation[i];
-            if (this.layers.biomes && (!water || this.layers.oceans)) {
-                let g = SE.Flora.None;
-                if (water) {
-                    if ((world.flora[i] & SE.floraBit(SE.Flora.MarineAlgae)) !== 0 && veg >= 0.08)
-                        g = SE.Flora.MarineAlgae;
-                }
-                else if (veg >= 0.05) {
-                    g = world.floraTop[i];
-                }
-                if (g !== SE.Flora.None) {
-                    const picture = SE.plantPicture(world, i, g);
-                    const shown = (picture >> 4);
-                    const reach = SE.FLORA[shown].woody ? big : size;
-                    ctx.drawImage(tiles.plant(shown, veg >= 0.45 ? 1 : 0, (picture & 15) - 1), px, py, reach, reach);
-                }
-            }
-            // --- rivers, with their algae ---
-            const level = world.riverLevel[i];
-            if (level > 0 && this.layers.oceans) {
-                const mask = SE.RiverSystem.connectionMask(world, i % SE.GRID_W, (i / SE.GRID_W) | 0);
-                ctx.drawImage(tiles.river(level >= 0.6 ? 1 : 0, mask), px, py, size, size);
-                if (this.layers.biomes && (world.flora[i] & SE.floraBit(SE.Flora.FreshwaterAlgae)) !== 0) {
-                    ctx.drawImage(tiles.riverAlgae(), px, py, size, size);
-                }
-            }
-            this.drawTileTop(ctx, world, i, px, py, size);
-        }
-        /** What happens on a tile: its event (cities are a layer of their own, see drawCities). */
-        drawTileTop(ctx, world, i, px, py, size) {
-            if (this.layers.events && world.eventTtl[i] > 0) {
-                ctx.drawImage(this.tiles.event(world.eventKind[i]), px, py, size, size);
-            }
-        }
-        /**
-         * The city layer over every tile overlapping a rectangle of the view (CSS
-         * pixels), scaled like the pixel terrain; it also draws the cities of the
-         * row below, whose tops reach into the rectangle.
-         */
-        drawCities(world, x0, y0, x1, y1) {
-            if (!this.layers.cities)
-                return;
-            const dpr = window.devicePixelRatio || 1;
-            const size = this.tilePx;
-            const T = size * dpr;
-            const txA = Math.floor(this.scrollX + x0 / size);
-            const txB = Math.ceil(this.scrollX + x1 / size);
-            const tyA = Math.max(0, Math.floor(this.scrollY + y0 / size));
-            const tyB = Math.min(SE.GRID_H, Math.ceil(this.scrollY + y1 / size));
-            if (txB <= txA || tyB <= tyA)
-                return;
-            this.land.ensure(world);
-            const ctx = this.baseCtx;
-            ctx.save();
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            this.cities.draw(ctx, { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: size, dpr }, world, this.land.field, (txA - this.scrollX) * T, (tyA - this.scrollY) * T, (txB - this.scrollX) * T, (tyB - this.scrollY) * T);
-            ctx.restore();
-        }
-        /**
-         * The pixel terrain over every tile overlapping a rectangle of the view
-         * (CSS pixels), then cities, events and the climate overlay on top.
-         */
-        drawLandRegion(world, x0, y0, x1, y1, ask = true) {
-            const ctx = this.baseCtx;
-            const dpr = window.devicePixelRatio || 1;
-            const size = this.tilePx;
-            const T = size * dpr;
-            const txA = Math.floor(this.scrollX + x0 / size);
-            const txB = Math.ceil(this.scrollX + x1 / size);
-            const tyA = Math.max(0, Math.floor(this.scrollY + y0 / size));
-            const tyB = Math.min(SE.GRID_H, Math.ceil(this.scrollY + y1 / size));
-            if (txB <= txA || tyB <= tyA)
-                return;
-            const land = this.land;
-            land.refresh(world, this.layers.oceans);
-            const cam = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: size, dpr };
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            if (land.ready) {
-                land.draw(ctx, cam, (txA - this.scrollX) * T, (tyA - this.scrollY) * T, (txB - this.scrollX) * T, (tyB - this.scrollY) * T, ask);
-                this.drawCities(world, x0, y0, x1, y1);
-            }
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            ctx.imageSmoothingEnabled = false;
-            for (let ty = tyA; ty < tyB; ty++) {
-                const py = Math.round((ty - this.scrollY) * size);
-                for (let tx = txA; tx < txB; tx++) {
-                    const px = Math.round((tx - this.scrollX) * size);
-                    const i = SE.idx(SE.wrapX(tx), ty);
-                    // Until the atlas has decoded (a few milliseconds), flat colours.
-                    if (!land.ready) {
-                        ctx.fillStyle = SE.rgbCss(mapColor(world, i, SE.MapMode.Biomes));
-                        ctx.fillRect(px, py, size, size);
-                    }
-                    this.drawTileTop(ctx, world, i, px, py, size);
-                    if (this.overlay !== SE.Overlay.None)
-                        this.drawOverlayTile(ctx, world, i, SE.wrapX(tx), ty, px, py, size);
-                }
-            }
-        }
-        /** Climate overlays: a translucent wash, or arrows for the flow fields. */
-        drawOverlay(ctx, world, size, x0, y0, ox, oy, cols, rows) {
-            const isFlow = this.overlay === SE.Overlay.Winds || this.overlay === SE.Overlay.SeaFlow;
-            for (let ry = 0; ry < rows; ry++) {
-                const wy = y0 + ry;
-                if (wy < 0 || wy >= SE.GRID_H)
-                    continue;
-                for (let rx = 0; rx < cols; rx++) {
-                    const wx = SE.wrapX(x0 + rx);
-                    const i = SE.idx(wx, wy);
-                    this.drawOverlayTile(ctx, world, i, wx, wy, Math.round(rx * size - ox), Math.round(ry * size - oy), size);
-                }
-            }
-            void isFlow;
-        }
-        /** One tile of the active climate overlay. */
-        drawOverlayTile(ctx, world, i, wx, wy, px, py, size) {
-            if (this.overlay === SE.Overlay.Winds || this.overlay === SE.Overlay.SeaFlow) {
-                const stride = Math.max(1, Math.ceil(22 / size));
-                if (wx % stride !== Math.floor(stride / 2) || wy % stride !== Math.floor(stride / 2))
-                    return;
-                if (this.overlay === SE.Overlay.SeaFlow && !world.isWater(i))
-                    return;
-                const c = this.overlay === SE.Overlay.Winds ? SE.ClimateSystem.airCurrent(wy) : SE.ClimateSystem.oceanCurrent(wx, wy);
-                this.drawArrow(ctx, px, py, size, c.dx, c.dy);
-                return;
-            }
-            let color = null;
-            switch (this.overlay) {
-                case SE.Overlay.Heat:
-                    color = SE.sampleRamp(SE.TEMP_RAMP, world.temperature[i]);
-                    break;
-                case SE.Overlay.Rainfall:
-                    color = SE.sampleRamp(SE.RAIN_RAMP, world.moisture[i]);
-                    break;
-                case SE.Overlay.SeaHeat:
-                    color = world.isWater(i) ? SE.sampleRamp(SE.TEMP_RAMP, world.temperature[i]) : null;
-                    break;
-                case SE.Overlay.Magma:
-                    color = SE.sampleRamp(SE.MAGMA_RAMP, world.magma[i]);
-                    break;
-                default: color = null;
-            }
-            if (!color)
-                return;
-            ctx.fillStyle = `rgba(${Math.round(color[0])},${Math.round(color[1])},${Math.round(color[2])},0.62)`;
-            ctx.fillRect(px, py, size, size);
-        }
-        drawArrow(ctx, px, py, size, dx, dy) {
-            const cx = px + size / 2;
-            const cy = py + size / 2;
-            const len = size * 0.32 / Math.hypot(dx, dy);
-            ctx.beginPath();
-            SE.traceFlowArrow(ctx, cx - dx * len, cy - dy * len, cx + dx * len, cy + dy * len, size * 0.22);
-            ctx.strokeStyle = 'rgba(5,15,24,0.85)';
-            ctx.lineWidth = Math.max(3, size / 14 + 2);
-            ctx.stroke();
-            ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-            ctx.lineWidth = Math.max(1, size / 14);
-            ctx.stroke();
-        }
-        /** The hovered tile, and the full footprint the armed tool will touch. */
-        drawCursor(ctx, size) {
-            if (!this.hover)
-                return;
-            let rx = this.hover.x - this.scrollX;
-            if (rx < -this.brushRadius - 1)
-                rx += SE.GRID_W;
-            const ry = this.hover.y - this.scrollY;
-            const r = this.brushRadius;
-            const x = (rx - r) * size;
-            const y = (ry - r) * size;
-            const w = (2 * r + 1) * size;
-            if (r > 0) {
-                ctx.fillStyle = 'rgba(255,255,255,0.08)';
-                ctx.fillRect(x, y, w, w);
-                ctx.setLineDash([Math.max(3, size / 3), Math.max(2, size / 5)]);
-                ctx.strokeStyle = this.brushColor;
-                ctx.lineWidth = 1.5;
-                ctx.strokeRect(x + 0.75, y + 0.75, w - 1.5, w - 1.5);
-                ctx.setLineDash([]);
-            }
-            // The tile itself: four corner brackets, dark under light so they read
-            // on snow and on deep water alike.
-            const a = rx * size + 1;
-            const b = ry * size + 1;
-            const c = a + size - 2;
-            const d = b + size - 2;
-            const arm = Math.max(4, Math.round(size * 0.3));
-            const brackets = () => {
-                ctx.beginPath();
-                ctx.moveTo(a, b + arm);
-                ctx.lineTo(a, b);
-                ctx.lineTo(a + arm, b);
-                ctx.moveTo(c - arm, b);
-                ctx.lineTo(c, b);
-                ctx.lineTo(c, b + arm);
-                ctx.moveTo(c, d - arm);
-                ctx.lineTo(c, d);
-                ctx.lineTo(c - arm, d);
-                ctx.moveTo(a + arm, d);
-                ctx.lineTo(a, d);
-                ctx.lineTo(a, d - arm);
-                ctx.stroke();
-            };
-            ctx.fillStyle = 'rgba(255,233,166,0.12)';
-            ctx.fillRect(a, b, size - 2, size - 2);
-            ctx.lineCap = 'square';
-            ctx.strokeStyle = 'rgba(6,14,12,0.6)';
-            ctx.lineWidth = 4;
-            brackets();
-            ctx.strokeStyle = '#ffe9a6';
-            ctx.lineWidth = 2;
-            brackets();
-            ctx.lineCap = 'butt';
-        }
-    }
-    EditView.MIN_TILE = 10;
-    EditView.MAX_TILE = 48;
-    SE.EditView = EditView;
     /* --------------------------------------------------------------- MapView -- */
     /** How long a news spot pulses on the overview, and one ring's cycle. */
     const NEWS_PING_MS = 20000;
@@ -59896,6 +59029,1083 @@ var SE;
         }
     }
     SE.MapView = MapView;
+})(SE || (SE = {}));
+/* =============================================================================
+ * Gaia Reborn — the Edit window's base image
+ * -----------------------------------------------------------------------------
+ * The world under the camera drawn once into an offscreen canvas: shifted on
+ * a pan (only the strip that came into view is drawn), stretched while the
+ * zoom moves, redrawn in boxes for brush strokes and landscape chunks, and in
+ * full when the camera jumps, the layers change or the world has moved on.
+ * EditView (editview.ts) draws it each frame and everything animated on top.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /**
+     * Degrees of shading per unit of cross-tile slope.
+     *
+     * Set from the terrain rather than by eye. Measured over a planet's land, the
+     * slope this uses has a median of 0.089 and a 90th percentile of 0.235, so
+     * this puts a barely-visible 6% wash on ordinary ground and about 16% on a
+     * genuinely steep flank — enough to trace a ridgeline, little enough that the
+     * pixel art underneath still reads as pixel art. An earlier guess of 2.6 gave
+     * the median tile a 23% wash and clipped a quarter of the map.
+     */
+    const RELIEF_STRENGTH = 0.7;
+    /** Cliffs clip here, so nothing goes to solid black or solid white. */
+    const RELIEF_MAX = 0.30;
+    /** Below this the wash is invisible and not worth a fill. */
+    const RELIEF_MIN = 0.02;
+    /** How long the zoom must rest before the map is redrawn at the new size. */
+    const ZOOM_SETTLE_MS = 140;
+    /**
+     * Brushed tiles are recomposed at most this often (about every second
+     * frame at 60 Hz): composing their chunks is most of a stroke frame, and
+     * the dissolve (landfade.ts) hides the lower rate.
+     */
+    const TILE_REDRAW_MS = 45;
+    /** Extra light per unit of elevation, so highlands read paler than lowland. */
+    const ALTITUDE_LIGHT = 0.1;
+    /** Peak-to-peak strength of the per-tile grain. */
+    const GROUND_GRAIN = 0.05;
+    /**
+     * Pre-rendered shading washes, indexed `RELIEF_STEPS + step`.
+     *
+     * Composing the rgba string per tile allocated one string for every tile on
+     * screen, sixty times a second. No one can tell thirty-two steps from a
+     * continuum, and this way the render loop allocates nothing.
+     */
+    const RELIEF_WASH = (() => {
+        const out = [];
+        for (let step = -SE.RELIEF_STEPS; step <= SE.RELIEF_STEPS; step++) {
+            const alpha = ((Math.abs(step) / SE.RELIEF_STEPS) * RELIEF_MAX).toFixed(3);
+            out.push(step >= 0 ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`);
+        }
+        return out;
+    })();
+    /**
+     * The relief step of a land tile: hillshade from its cross-tile slope, the
+     * highlands a little paler, and a faint per-tile grain so plains do not look
+     * stamped. 0 when the wash would be invisible.
+     */
+    function reliefStep(world, i) {
+        const elevation = world.elevation;
+        const x = i % SE.GRID_W;
+        const y = (i / SE.GRID_W) | 0;
+        const west = Math.max(0, elevation[SE.idx(SE.wrapX(x - 1), y)]);
+        const east = Math.max(0, elevation[SE.idx(SE.wrapX(x + 1), y)]);
+        const north = Math.max(0, elevation[SE.idx(x, SE.clampY(y - 1))]);
+        const south = Math.max(0, elevation[SE.idx(x, SE.clampY(y + 1))]);
+        const shade = SE.clamp((west - east) + (north - south), -1, 1) * RELIEF_STRENGTH +
+            (elevation[i] - 0.3) * ALTITUDE_LIGHT + (SE.tileNoise(i) - 0.5) * GROUND_GRAIN;
+        if (shade > -RELIEF_MIN && shade < RELIEF_MIN)
+            return 0;
+        return SE.clamp(Math.round((shade / RELIEF_MAX) * SE.RELIEF_STEPS), -SE.RELIEF_STEPS, SE.RELIEF_STEPS);
+    }
+    class BaseImage {
+        constructor(view, tiles, regions, land, cities) {
+            this.view = view;
+            this.tiles = tiles;
+            this.regions = regions;
+            this.land = land;
+            this.cities = cities;
+            this.baseKey = '';
+            /** The world tick the base image shows. */
+            this.baseTick = -1;
+            this.baseTime = 0;
+            this.dirty = true;
+            /** Scroll position the base image was drawn at, for shifting it. */
+            this.baseScrollX = 0;
+            this.baseScrollY = 0;
+            /** How long the last full redraw took, in ms — sets how often it may run. */
+            this.drawCost = 0;
+            /** Tile size the base image was drawn at, and when the zoom last moved. */
+            this.baseTilePx = 16;
+            this.zoomedAt = -Infinity;
+            /** Tiles to redraw on the next frame without a full redraw: x0, y0, x1, y1 (x may run past the wrap). */
+            this.dirtyTiles = null;
+            /** When brushed tiles were last recomposed. */
+            this.tilesAt = -Infinity;
+            this.canvas = document.createElement('canvas');
+            const bctx = this.canvas.getContext('2d');
+            if (!bctx)
+                throw new Error('SimEarth: offscreen 2D context unavailable');
+            this.ctx = bctx;
+            this.swap = document.createElement('canvas');
+            const sctx = this.swap.getContext('2d');
+            if (!sctx)
+                throw new Error('SimEarth: offscreen 2D context unavailable');
+            this.swapCtx = sctx;
+        }
+        /** The pixel terrain draws the ground; with the Biomes layer off the map shows flat colours as before. */
+        get pixelTerrain() {
+            return SE.TERRAIN_STYLE === 'pixel' && this.view.layers.biomes && !this.land.failed;
+        }
+        get viewW() {
+            return this.canvas.width / (window.devicePixelRatio || 1);
+        }
+        get viewH() {
+            return this.canvas.height / (window.devicePixelRatio || 1);
+        }
+        /** The size of the Edit window's canvas, in device pixels; a new size redraws everything. */
+        fit(width, height) {
+            if (this.canvas.width !== width || this.canvas.height !== height) {
+                this.canvas.width = width;
+                this.canvas.height = height;
+                this.dirty = true;
+            }
+        }
+        /** Redraw only tiles [x0, x1] × [y0, y1] on the next frame (a brush changing the ground live). */
+        markDirtyTiles(x0, y0, x1, y1) {
+            const d = this.dirtyTiles;
+            this.dirtyTiles = d ? [Math.min(d[0], x0), Math.min(d[1], y0), Math.max(d[2], x1), Math.max(d[3], y1)] : [x0, y0, x1, y1];
+        }
+        /**
+         * Bring the base image up to date and draw it into `ctx` (the Edit window's
+         * canvas), or the stretched last picture while the zoom still moves; true then.
+         * `key` names the camera and layer state a full picture is good for.
+         */
+        paint(ctx, world, dpr, key, now) {
+            // While the player is still zooming, stretch the last picture rather
+            // than redraw every tile for each wheel notch or pinch step; the real
+            // redraw follows as soon as the zoom comes to rest.
+            const sameButZoom = key.slice(key.indexOf('|')) === this.baseKey.slice(this.baseKey.indexOf('|'));
+            const previewing = !this.dirty && sameButZoom && this.view.tilePx !== this.baseTilePx && now - this.zoomedAt < ZOOM_SETTLE_MS;
+            if (previewing) {
+                this.drawZoomPreview(ctx, dpr);
+            }
+            else {
+                // A full redraw on a huge screen can take tens of milliseconds; the
+                // slower it is, the less often the world's progress triggers one.
+                const interval = Math.max(250, this.drawCost * 8);
+                // Composing on the page ran out of time last frame: finish it now, not a frame later.
+                if (this.pixelTerrain && this.land.pending)
+                    this.dirty = true;
+                const worldMoved = !this.view.holdWorld && world.ticks !== this.baseTick && now - this.baseTime > interval;
+                const scrolled = this.view.scrollX !== this.baseScrollX || this.view.scrollY !== this.baseScrollY;
+                if (this.dirty || key !== this.baseKey || worldMoved || (scrolled && !this.shiftBase(world, dpr))) {
+                    const t0 = performance.now();
+                    const box = this.dirtyTiles;
+                    if (box && this.pixelTerrain)
+                        this.land.refreshBox(world, this.view.layers.oceans, box[0], Math.max(0, box[1]), box[2], Math.min(SE.GRID_H - 1, box[3]));
+                    this.dirtyTiles = null;
+                    // The full redraw draws the worker's latest pictures and asks for every chunk out of date (with a field just taken over).
+                    this.land.takeFresh();
+                    this.land.refetch = false;
+                    this.drawBase(world, dpr);
+                    this.drawCost = performance.now() - t0;
+                    SE.perfHud.drawBase(this.drawCost);
+                    this.baseKey = key;
+                    this.baseTick = world.ticks;
+                    this.baseTime = now;
+                    this.baseScrollX = this.view.scrollX;
+                    this.baseScrollY = this.view.scrollY;
+                    this.baseTilePx = this.view.tilePx;
+                    this.dirty = false;
+                }
+                else {
+                    // Brushed ground dissolving into its new picture (landfade.ts) is redrawn every frame until done.
+                    // Not when the world changed meanwhile (a settle): drawing would re-read the whole field; its full redraw follows.
+                    const fade = this.pixelTerrain && this.land.current(world, this.view.layers.oceans) ? this.land.fadeBox() : null;
+                    // Brushed tiles are re-read and recomposed (most of a stroke frame) at most every
+                    // TILE_REDRAW_MS; the dissolve keeps moving on the frames between.
+                    const changed = now - this.tilesAt >= TILE_REDRAW_MS ? this.dirtyTiles : null;
+                    // A slow field read leaves the drawing (composing chunks, as slow) to the next frame.
+                    if ((changed || fade) && this.redrawTiles(world, dpr, changed, fade) && changed) {
+                        this.dirtyTiles = null;
+                        this.tilesAt = now;
+                    }
+                    if (this.pixelTerrain) {
+                        // The landscape worker's pictures: each chunk redrawn alone as it arrives; after a new field, its chunks asked for.
+                        for (const box of this.land.takeFresh())
+                            this.redrawChunk(world, dpr, box);
+                        if (this.land.refetch) {
+                            this.land.refetch = false;
+                            this.land.want({ scrollX: this.view.scrollX, scrollY: this.view.scrollY, tilePx: this.view.tilePx, dpr }, 0, 0, this.canvas.width, this.canvas.height);
+                        }
+                    }
+                }
+                // The terrain or the cities ran out of time for composing: finish next frame.
+                if ((this.pixelTerrain && this.land.pending) || this.cities.pending)
+                    this.dirty = true;
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.drawImage(this.canvas, 0, 0);
+            }
+            return previewing;
+        }
+        /**
+         * Redraw a box of changed tiles into the base picture, with the margin a
+         * tile's picture reads its neighbours from, together with the box `more`
+         * of tiles to draw again without re-reading them.
+         */
+        /** One chunk the landscape worker delivered: its tiles and one around (the art's overlap), drawn as composed, nothing asked for. */
+        redrawChunk(world, dpr, box) {
+            const size = this.view.tilePx;
+            let rx = (((box[0] - 1 - this.view.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
+            if (rx > this.view.cols)
+                rx -= SE.GRID_W;
+            const span = box[2] - box[0] + 3;
+            if (rx + span < 0 || rx > this.view.cols)
+                return;
+            this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            this.ctx.imageSmoothingEnabled = false;
+            this.drawLandRegion(world, rx * size, (box[1] - 1 - this.view.scrollY) * size, (rx + span) * size, (box[3] + 2 - this.view.scrollY) * size, false);
+        }
+        redrawTiles(world, dpr, changed, more = null) {
+            const pad = 4; // SIGNATURE_REACH (landfield.ts) + 1
+            if (changed && this.pixelTerrain && this.land.refreshBox(world, this.view.layers.oceans, changed[0], Math.max(0, changed[1]), changed[2], Math.min(SE.GRID_H - 1, changed[3])))
+                return false;
+            let box = changed ?? more;
+            if (!box)
+                return true;
+            if (changed && more) {
+                const s = Math.round((changed[0] - more[0]) / SE.GRID_W) * SE.GRID_W;
+                box = [Math.min(changed[0], more[0] + s), Math.min(changed[1], more[1]), Math.max(changed[2], more[2] + s), Math.max(changed[3], more[3])];
+            }
+            const span = box[2] - box[0] + 1 + 2 * pad;
+            if (span > SE.GRID_W / 2) {
+                this.drawBase(world, dpr);
+                return true;
+            }
+            const size = this.view.tilePx;
+            // The copy of the box on the wrapping map that meets the view.
+            let rx = (((box[0] - pad - this.view.scrollX) % SE.GRID_W) + SE.GRID_W) % SE.GRID_W;
+            if (rx > this.view.cols)
+                rx -= SE.GRID_W;
+            if (!this.pixelTerrain) {
+                this.tiles.setDeviceTile(size * dpr);
+                this.regions.refresh(world);
+            }
+            this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            this.ctx.imageSmoothingEnabled = false;
+            this.drawRegion(world, rx * size, (box[1] - pad - this.view.scrollY) * size, (rx + span) * size, (box[3] + 1 + pad - this.view.scrollY) * size);
+            return true;
+        }
+        /** The last full picture, scaled and moved to where the new zoom puts it. */
+        drawZoomPreview(ctx, dpr) {
+            const k = this.view.tilePx / this.baseTilePx;
+            const span = SE.GRID_W * this.view.tilePx;
+            let dx = (this.baseScrollX - this.view.scrollX) * this.view.tilePx;
+            if (dx > span / 2)
+                dx -= span;
+            if (dx < -span / 2)
+                dx += span;
+            const dy = (this.baseScrollY - this.view.scrollY) * this.view.tilePx;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = '#05090c';
+            ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            ctx.imageSmoothingEnabled = false;
+            // Zooming out shrinks the last picture: flat tile colours fill the rest
+            // until the real redraw, instead of empty space.
+            const flat = k < 1 && this.pixelTerrain ? this.land.overview() : null;
+            if (flat) {
+                const T = this.view.tilePx * dpr;
+                const w = SE.GRID_W * T;
+                for (let x = -((((this.view.scrollX * T) % w) + w) % w); x < this.canvas.width; x += w) {
+                    ctx.drawImage(flat, x, -this.view.scrollY * T, w, SE.GRID_H * T);
+                }
+            }
+            ctx.drawImage(this.canvas, dx * dpr, dy * dpr, this.canvas.width * k, this.canvas.height * k);
+        }
+        /**
+         * Pan by moving the last image and drawing only the strip that came into
+         * view. Returns false when the jump is too large to be worth it.
+         */
+        shiftBase(world, dpr) {
+            const size = this.view.tilePx;
+            let dxT = this.view.scrollX - this.baseScrollX;
+            if (dxT > SE.GRID_W / 2)
+                dxT -= SE.GRID_W;
+            if (dxT < -SE.GRID_W / 2)
+                dxT += SE.GRID_W;
+            const dyT = this.view.scrollY - this.baseScrollY;
+            const dx = dxT * size;
+            const dy = dyT * size;
+            const w = this.viewW;
+            const h = this.viewH;
+            if (Math.abs(dx) >= w * 0.5 || Math.abs(dy) >= h * 0.5)
+                return false;
+            this.tiles.setDeviceTile(size * dpr);
+            this.regions.refresh(world);
+            // Assigning a canvas size clears it and resets its context even when the
+            // size is unchanged. No clear is needed: the base is opaque everywhere
+            // (drawBase and the fill below paint it first), so it covers the old
+            // swap content. 'copy' instead measured as slow as the reset in Chrome.
+            if (this.swap.width !== this.canvas.width || this.swap.height !== this.canvas.height) {
+                this.swap.width = this.canvas.width;
+                this.swap.height = this.canvas.height;
+            }
+            this.swapCtx.drawImage(this.canvas, 0, 0);
+            const ctx = this.ctx;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.imageSmoothingEnabled = false;
+            ctx.fillStyle = '#05090c';
+            ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            ctx.drawImage(this.swap, Math.round(-dx * dpr), Math.round(-dy * dpr));
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            if (dx > 0)
+                this.drawRegion(world, w - dx - size, 0, w, h);
+            else if (dx < 0)
+                this.drawRegion(world, 0, 0, -dx + size, h);
+            if (dy > 0)
+                this.drawRegion(world, 0, h - dy - size, w, h);
+            else if (dy < 0)
+                this.drawRegion(world, 0, 0, w, -dy + size);
+            this.baseScrollX = this.view.scrollX;
+            this.baseScrollY = this.view.scrollY;
+            return true;
+        }
+        /** Redraw every tile overlapping a rectangle of the view (CSS pixels). */
+        drawRegion(world, x0, y0, x1, y1) {
+            if (this.pixelTerrain) {
+                this.drawLandRegion(world, x0, y0, x1, y1);
+                return;
+            }
+            const ctx = this.ctx;
+            const size = this.view.tilePx;
+            const tx0 = Math.floor(this.view.scrollX);
+            const ty0 = Math.floor(this.view.scrollY);
+            const ox = (this.view.scrollX - tx0) * size;
+            const oy = (this.view.scrollY - ty0) * size;
+            const c0 = Math.max(0, Math.floor((x0 + ox) / size));
+            const c1 = Math.ceil((x1 + ox) / size);
+            const r0 = Math.max(0, Math.floor((y0 + oy) / size));
+            const r1 = Math.ceil((y1 + oy) / size);
+            for (let ry = r0; ry <= r1; ry++) {
+                const wy = ty0 + ry;
+                if (wy < 0 || wy >= SE.GRID_H)
+                    continue;
+                const py = Math.round(ry * size - oy);
+                for (let rx = c0; rx <= c1; rx++) {
+                    const wx = SE.wrapX(tx0 + rx);
+                    const px = Math.round(rx * size - ox);
+                    const i = SE.idx(wx, wy);
+                    this.drawTile(ctx, world, i, px, py, size);
+                    if (this.view.overlay !== SE.Overlay.None)
+                        this.drawOverlayTile(ctx, world, i, wx, wy, px, py, size);
+                }
+            }
+            this.drawCities(world, c0 * size - ox, r0 * size - oy, (c1 + 1) * size - ox, (r1 + 1) * size - oy);
+        }
+        drawBase(world, dpr) {
+            this.tiles.setDeviceTile(this.view.tilePx * dpr);
+            this.regions.refresh(world);
+            const ctx = this.ctx;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.imageSmoothingEnabled = false;
+            ctx.fillStyle = '#05090c';
+            ctx.fillRect(0, 0, this.viewW, this.viewH);
+            if (this.pixelTerrain) {
+                this.drawLandRegion(world, 0, 0, this.viewW, this.viewH);
+                return;
+            }
+            const size = this.view.tilePx;
+            const x0 = Math.floor(this.view.scrollX);
+            const y0 = Math.floor(this.view.scrollY);
+            const ox = (this.view.scrollX - x0) * size;
+            const oy = (this.view.scrollY - y0) * size;
+            const cols = Math.ceil(this.view.cols) + 1;
+            const rows = Math.ceil(this.view.rows) + 1;
+            for (let ry = 0; ry < rows; ry++) {
+                const wy = y0 + ry;
+                if (wy < 0 || wy >= SE.GRID_H)
+                    continue;
+                const py = Math.round(ry * size - oy);
+                for (let rx = 0; rx < cols; rx++) {
+                    const wx = SE.wrapX(x0 + rx);
+                    const px = Math.round(rx * size - ox);
+                    this.drawTile(ctx, world, SE.idx(wx, wy), px, py, size);
+                }
+            }
+            this.drawCities(world, -ox, -oy, cols * size - ox, rows * size - oy);
+            if (this.view.overlay !== SE.Overlay.None)
+                this.drawOverlay(ctx, world, size, x0, y0, ox, oy, cols, rows);
+        }
+        drawTile(ctx, world, i, px, py, size) {
+            const tiles = this.tiles;
+            const water = world.isWater(i);
+            const biome = world.biome[i];
+            const variant = (SE.tileNoise(i) * 4) | 0;
+            // Trees, creatures and cities carry their shadow one sprite pixel out.
+            const big = size * SE.SHADOW_SPAN;
+            // --- ground, with its relief shaded in ---
+            if (water && !this.view.layers.oceans) {
+                ctx.fillStyle = SE.depthStyleAt(SE.depthStep(world.elevation[i]));
+                ctx.fillRect(px, py, size, size);
+            }
+            else if (water && biome !== SE.Biome.Arctic) {
+                ctx.drawImage(tiles.sea(biome === SE.Biome.Coast, variant), px, py, size, size);
+                const shore = SE.shoreMask(world, i % SE.GRID_W, (i / SE.GRID_W) | 0);
+                if (shore !== 0)
+                    ctx.drawImage(tiles.surf(shore), px, py, size, size);
+            }
+            else if (this.view.layers.biomes) {
+                // Thinly covered open land shows its bare, lichen-flecked ground: a
+                // plain of first mosses should not look like a meadow.
+                let ground = biome;
+                if (biome === SE.Biome.Grass && world.vegetation[i] < 0.3)
+                    ground = SE.Biome.Tundra;
+                if (biome === SE.Biome.Rock && world.elevation[i] > SE.SNOW_LINE)
+                    ground = SE.SNOW_GROUND;
+                const step = water ? 0 : reliefStep(world, i);
+                ctx.drawImage(tiles.ground(ground, variant, step, step === 0 ? null : RELIEF_WASH[SE.RELIEF_STEPS + step]), px, py, size, size);
+            }
+            else {
+                ctx.fillStyle = SE.rgbCss(SE.BIOME_COLORS[biome]);
+                ctx.fillRect(px, py, size, size);
+                const step = water ? 0 : reliefStep(world, i);
+                if (step !== 0) {
+                    ctx.fillStyle = RELIEF_WASH[SE.RELIEF_STEPS + step];
+                    ctx.fillRect(px, py, size, size);
+                }
+            }
+            // --- plants: the group that shapes the tile, sparse or dense ---
+            const veg = world.vegetation[i];
+            if (this.view.layers.biomes && (!water || this.view.layers.oceans)) {
+                let g = SE.Flora.None;
+                if (water) {
+                    if ((world.flora[i] & SE.floraBit(SE.Flora.MarineAlgae)) !== 0 && veg >= 0.08)
+                        g = SE.Flora.MarineAlgae;
+                }
+                else if (veg >= 0.05) {
+                    g = world.floraTop[i];
+                }
+                if (g !== SE.Flora.None) {
+                    const picture = SE.plantPicture(world, i, g);
+                    const shown = (picture >> 4);
+                    const reach = SE.FLORA[shown].woody ? big : size;
+                    ctx.drawImage(tiles.plant(shown, veg >= 0.45 ? 1 : 0, (picture & 15) - 1), px, py, reach, reach);
+                }
+            }
+            // --- rivers, with their algae ---
+            const level = world.riverLevel[i];
+            if (level > 0 && this.view.layers.oceans) {
+                const mask = SE.RiverSystem.connectionMask(world, i % SE.GRID_W, (i / SE.GRID_W) | 0);
+                ctx.drawImage(tiles.river(level >= 0.6 ? 1 : 0, mask), px, py, size, size);
+                if (this.view.layers.biomes && (world.flora[i] & SE.floraBit(SE.Flora.FreshwaterAlgae)) !== 0) {
+                    ctx.drawImage(tiles.riverAlgae(), px, py, size, size);
+                }
+            }
+            this.drawTileTop(ctx, world, i, px, py, size);
+        }
+        /** What happens on a tile: its event (cities are a layer of their own, see drawCities). */
+        drawTileTop(ctx, world, i, px, py, size) {
+            if (this.view.layers.events && world.eventTtl[i] > 0) {
+                ctx.drawImage(this.tiles.event(world.eventKind[i]), px, py, size, size);
+            }
+        }
+        /**
+         * The city layer over every tile overlapping a rectangle of the view (CSS
+         * pixels), scaled like the pixel terrain; it also draws the cities of the
+         * row below, whose tops reach into the rectangle.
+         */
+        drawCities(world, x0, y0, x1, y1) {
+            if (!this.view.layers.cities)
+                return;
+            const dpr = window.devicePixelRatio || 1;
+            const size = this.view.tilePx;
+            const T = size * dpr;
+            const txA = Math.floor(this.view.scrollX + x0 / size);
+            const txB = Math.ceil(this.view.scrollX + x1 / size);
+            const tyA = Math.max(0, Math.floor(this.view.scrollY + y0 / size));
+            const tyB = Math.min(SE.GRID_H, Math.ceil(this.view.scrollY + y1 / size));
+            if (txB <= txA || tyB <= tyA)
+                return;
+            this.land.ensure(world);
+            const ctx = this.ctx;
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            this.cities.draw(ctx, { scrollX: this.view.scrollX, scrollY: this.view.scrollY, tilePx: size, dpr }, world, this.land.field, (txA - this.view.scrollX) * T, (tyA - this.view.scrollY) * T, (txB - this.view.scrollX) * T, (tyB - this.view.scrollY) * T);
+            ctx.restore();
+        }
+        /**
+         * The pixel terrain over every tile overlapping a rectangle of the view
+         * (CSS pixels), then cities, events and the climate overlay on top.
+         */
+        drawLandRegion(world, x0, y0, x1, y1, ask = true) {
+            const ctx = this.ctx;
+            const dpr = window.devicePixelRatio || 1;
+            const size = this.view.tilePx;
+            const T = size * dpr;
+            const txA = Math.floor(this.view.scrollX + x0 / size);
+            const txB = Math.ceil(this.view.scrollX + x1 / size);
+            const tyA = Math.max(0, Math.floor(this.view.scrollY + y0 / size));
+            const tyB = Math.min(SE.GRID_H, Math.ceil(this.view.scrollY + y1 / size));
+            if (txB <= txA || tyB <= tyA)
+                return;
+            const land = this.land;
+            land.refresh(world, this.view.layers.oceans);
+            const cam = { scrollX: this.view.scrollX, scrollY: this.view.scrollY, tilePx: size, dpr };
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            if (land.ready) {
+                land.draw(ctx, cam, (txA - this.view.scrollX) * T, (tyA - this.view.scrollY) * T, (txB - this.view.scrollX) * T, (tyB - this.view.scrollY) * T, ask);
+                this.drawCities(world, x0, y0, x1, y1);
+            }
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.imageSmoothingEnabled = false;
+            for (let ty = tyA; ty < tyB; ty++) {
+                const py = Math.round((ty - this.view.scrollY) * size);
+                for (let tx = txA; tx < txB; tx++) {
+                    const px = Math.round((tx - this.view.scrollX) * size);
+                    const i = SE.idx(SE.wrapX(tx), ty);
+                    // Until the atlas has decoded (a few milliseconds), flat colours.
+                    if (!land.ready) {
+                        ctx.fillStyle = SE.rgbCss(SE.mapColor(world, i, SE.MapMode.Biomes));
+                        ctx.fillRect(px, py, size, size);
+                    }
+                    this.drawTileTop(ctx, world, i, px, py, size);
+                    if (this.view.overlay !== SE.Overlay.None)
+                        this.drawOverlayTile(ctx, world, i, SE.wrapX(tx), ty, px, py, size);
+                }
+            }
+        }
+        /** Climate overlays: a translucent wash, or arrows for the flow fields. */
+        drawOverlay(ctx, world, size, x0, y0, ox, oy, cols, rows) {
+            const isFlow = this.view.overlay === SE.Overlay.Winds || this.view.overlay === SE.Overlay.SeaFlow;
+            for (let ry = 0; ry < rows; ry++) {
+                const wy = y0 + ry;
+                if (wy < 0 || wy >= SE.GRID_H)
+                    continue;
+                for (let rx = 0; rx < cols; rx++) {
+                    const wx = SE.wrapX(x0 + rx);
+                    const i = SE.idx(wx, wy);
+                    this.drawOverlayTile(ctx, world, i, wx, wy, Math.round(rx * size - ox), Math.round(ry * size - oy), size);
+                }
+            }
+            void isFlow;
+        }
+        /** One tile of the active climate overlay. */
+        drawOverlayTile(ctx, world, i, wx, wy, px, py, size) {
+            if (this.view.overlay === SE.Overlay.Winds || this.view.overlay === SE.Overlay.SeaFlow) {
+                const stride = Math.max(1, Math.ceil(22 / size));
+                if (wx % stride !== Math.floor(stride / 2) || wy % stride !== Math.floor(stride / 2))
+                    return;
+                if (this.view.overlay === SE.Overlay.SeaFlow && !world.isWater(i))
+                    return;
+                const c = this.view.overlay === SE.Overlay.Winds ? SE.ClimateSystem.airCurrent(wy) : SE.ClimateSystem.oceanCurrent(wx, wy);
+                this.drawArrow(ctx, px, py, size, c.dx, c.dy);
+                return;
+            }
+            let color = null;
+            switch (this.view.overlay) {
+                case SE.Overlay.Heat:
+                    color = SE.sampleRamp(SE.TEMP_RAMP, world.temperature[i]);
+                    break;
+                case SE.Overlay.Rainfall:
+                    color = SE.sampleRamp(SE.RAIN_RAMP, world.moisture[i]);
+                    break;
+                case SE.Overlay.SeaHeat:
+                    color = world.isWater(i) ? SE.sampleRamp(SE.TEMP_RAMP, world.temperature[i]) : null;
+                    break;
+                case SE.Overlay.Magma:
+                    color = SE.sampleRamp(SE.MAGMA_RAMP, world.magma[i]);
+                    break;
+                default: color = null;
+            }
+            if (!color)
+                return;
+            ctx.fillStyle = `rgba(${Math.round(color[0])},${Math.round(color[1])},${Math.round(color[2])},0.62)`;
+            ctx.fillRect(px, py, size, size);
+        }
+        drawArrow(ctx, px, py, size, dx, dy) {
+            const cx = px + size / 2;
+            const cy = py + size / 2;
+            const len = size * 0.32 / Math.hypot(dx, dy);
+            ctx.beginPath();
+            SE.traceFlowArrow(ctx, cx - dx * len, cy - dy * len, cx + dx * len, cy + dy * len, size * 0.22);
+            ctx.strokeStyle = 'rgba(5,15,24,0.85)';
+            ctx.lineWidth = Math.max(3, size / 14 + 2);
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+            ctx.lineWidth = Math.max(1, size / 14);
+            ctx.stroke();
+        }
+    }
+    SE.BaseImage = BaseImage;
+})(SE || (SE = {}));
+/* =============================================================================
+ * Gaia Reborn — the Edit window's map view
+ * -----------------------------------------------------------------------------
+ * EditView  a scrollable, zoomed tile view drawn from pixel sprites, with the
+ *           five additive data layers and six exclusive climate overlays: the
+ *           cached world picture (editbase.ts), and every frame what moves on it.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    class EditView {
+        constructor(canvas) {
+            /** Screen pixels per tile before device scaling. */
+            this.tilePx = 16;
+            /** Top-left of the viewport, in tiles. Fractional, so dragging is smooth. */
+            this.scrollX = 0;
+            this.scrollY = 0;
+            /** Additive layers, indexed as in DATA_LAYERS. */
+            this.layers = { oceans: true, biomes: true, cities: true, life: true, events: true, clouds: true };
+            /** The single active climate overlay. */
+            this.overlay = SE.Overlay.None;
+            this.hover = null;
+            /** Footprint of the armed tool around the hovered tile, in tiles. */
+            this.brushRadius = 0;
+            /** Outline colour of the brush preview. */
+            this.brushColor = 'rgba(255,255,255,0.9)';
+            /** Drawn instead of the tool cursor, last, with identity transform (device pixels). */
+            this.decor = null;
+            /** A brush stroke runs: the world's progress waits with its full redraws (30–100 ms) until it ends. */
+            this.holdWorld = false;
+            this.tiles = new SE.TileCache();
+            this.regions = new SE.BiomeRegions();
+            this.ambient = new SE.AmbientLayer();
+            this.waterMotion = new SE.WaterMotion();
+            this.reefSwell = new SE.ReefSwell();
+            /** Caustics and glint, experimental and off unless switched on (waterfx.ts). */
+            this.waterFx = new SE.WaterFx();
+            /**
+             * Pins the clock of everything animated on the map, ms on performance.now()'s scale
+             * (screenshots and comparisons: `?animclock=<ms>`, or set it); null lets them run.
+             */
+            this.animClock = typeof location !== 'undefined' && /[?&]animclock=\d/.test(location.search)
+                ? Number(new URLSearchParams(location.search).get('animclock')) : null;
+            this.clownfish = new SE.ClownfishLayer();
+            this.herds = new SE.HerdLayer();
+            this.whales = new SE.WhaleLayer();
+            this.dolphins = new SE.DolphinLayer();
+            this.sharks = new SE.SharkLayer();
+            /** The oil platform and the desert derrick of the Industrial age (oillayer.ts). */
+            this.oilRigs = new SE.OilRigLayer();
+            this.spaceport = new SE.SpaceportLayer();
+            /** World wonders, the train and the ships of the civilization (docs/bewegung-2026-10). */
+            this.wonders = new SE.WonderLayer();
+            this.trains = new SE.TrainLayer();
+            this.ships = new SE.ShipLayer();
+            /** The termite mound on the savanna, once ants live there (termitelayer.ts). */
+            this.termites = new SE.TermiteLayer();
+            /** The kapok tree in the largest rainforest (kapoklayer.ts). */
+            this.kapok = new SE.KapokLayer();
+            this.salmon = new SE.SalmonLayer();
+            this.storks = new SE.StorkLayer();
+            this.bubbles = new SE.OxygenBubbles();
+            this.cities = new SE.CityLayer();
+            this.settlers = new SE.SettlerLayer();
+            /** Wandering groups on the move (bandlayer.ts); their camps are part of `cities`. */
+            this.bands = new SE.BandLayer();
+            /** Flames over the fire places and smoke over the chimneys, every frame (cityfire.ts). */
+            this.cityFires = new SE.CityFireLayer();
+            /** Disasters: omens, eruptions, lava, smoke (docs/ereignisse-spec.md). */
+            this.fx = new SE.EffectLayer();
+            /** How far the game is between two ticks, 0..1 (app.ts); kept while paused. */
+            this.tickPhase = 0;
+            this.land = SE.PixelTerrain.shared();
+            /** How the camera actually moved lately, for the landscape asked for ahead of it (landahead.ts). */
+            this.motion = new SE.CameraMotion();
+            this.motionSeed = NaN;
+            /** Sea ice calving off the pack edge now and then (icecalving.ts). */
+            this.calving = new SE.IceCalving(this.land);
+            this.canvas = canvas;
+            const ctx = canvas.getContext('2d');
+            if (!ctx)
+                throw new Error('SimEarth: 2D context unavailable for the Edit window');
+            this.ctx = ctx;
+            this.baseImage = new SE.BaseImage(this, this.tiles, this.regions, this.land, this.cities);
+            if (SE.TERRAIN_STYLE === 'pixel')
+                this.land.whenReady(() => this.markDirty());
+            // `?sprites=page` keeps creature pictures on the page, for measuring (tools/perf-bench.js).
+            if (typeof location === 'undefined' || !/[?&]sprites=page(&|$)/.test(location.search))
+                this.tiles.remote = () => this.land.sprites;
+            this.cities.whenReady(() => this.markDirty());
+            this.calving.occupied = (i) => this.layers.life && this.herds.markerOn(i) !== null;
+        }
+        /** "Effekte reduzieren": disasters without shaking or flashes, and still water. */
+        get reduceEffects() {
+            return this.waterMotion.still;
+        }
+        set reduceEffects(on) {
+            this.fx.reduce = on;
+            this.waterMotion.still = on;
+            this.reefSwell.still = on;
+            this.waterFx.still = on;
+            this.clownfish.still = on;
+            this.whales.still = on;
+            this.dolphins.still = on;
+            this.sharks.still = on;
+            this.oilRigs.still = on;
+            this.spaceport.still = on;
+            this.wonders.still = on;
+            this.trains.still = on;
+            this.ships.still = on;
+            this.settlers.still = on;
+            this.termites.still = on;
+            this.salmon.still = on;
+            this.storks.still = on;
+            this.bubbles.still = on;
+            this.calving.still = on;
+            this.cityFires.still = on;
+        }
+        /** Make sure a creature of sub-species (c, stage) stands on the map; its tile, -1 if none lives. */
+        pinSpecies(world, c, stage) {
+            this.markDirty();
+            return this.herds.pin(world, c, stage);
+        }
+        /** The creature the map shows on tile i, for the Examine picture: `key` is cheap, `draw` makes its 32 px sprite. */
+        creatureOn(world, i) {
+            const m = this.layers.life ? this.herds.markerOn(i) : null;
+            if (!m)
+                return null;
+            const stage = SE.reefShownStage(world, i, m.c, m.stage);
+            const special = SE.animalSpecialist(this.regions, world, i, m.c, stage);
+            const sp = SE.SPECIES[m.c];
+            const art = special >= 0 ? sp?.specialists[special]?.art : sp?.stages[stage]?.art;
+            if (!art)
+                return null;
+            return { key: `${m.c}:${stage}:${special}:${+m.flip}`, draw: () => SE.rasterArt(art, 32, SE.CREATURE_LOOK, m.flip, true) };
+        }
+        /** The salmon run, clownfish or stork flight in sight on or by tile i, for the Examine tool. */
+        migrationOn(world, i) {
+            if (!this.layers.life)
+                return null;
+            const now = performance.now();
+            if (this.salmon.activeOn(world, this.land, i, now))
+                return 'salmon';
+            if (this.clownfish.activeOn(world, i, now))
+                return 'clownfish';
+            return this.storks.activeNear(i, now) >= 0 ? 'storks' : null;
+        }
+        /** Force a full redraw on the next frame (after a tool changed the world). */
+        markDirty() {
+            this.baseImage.dirty = true;
+        }
+        /** Read the world into the terrain field and regions now, so the next full redraw has less to do. */
+        warm(world) {
+            if (this.pixelTerrain)
+                this.land.refresh(world, this.layers.oceans);
+            this.regions.refresh(world);
+        }
+        /** Redraw only tiles [x0, x1] × [y0, y1] on the next frame (a brush changing the ground live). */
+        markDirtyTiles(x0, y0, x1, y1) {
+            this.baseImage.markDirtyTiles(x0, y0, x1, y1);
+        }
+        get pixelTerrain() {
+            return this.baseImage.pixelTerrain;
+        }
+        get viewW() {
+            return this.canvas.width / (window.devicePixelRatio || 1);
+        }
+        get viewH() {
+            return this.canvas.height / (window.devicePixelRatio || 1);
+        }
+        /** Viewport width in tiles (fractional). */
+        get cols() {
+            return this.viewW / this.tilePx;
+        }
+        get rows() {
+            return this.viewH / this.tilePx;
+        }
+        clampScroll() {
+            // Whole device pixels only: then a pan can reuse the last frame by
+            // shifting it, and every tile still lands on exactly the same pixels.
+            const q = this.tilePx * (window.devicePixelRatio || 1);
+            this.scrollX = Math.round((((this.scrollX % SE.GRID_W) + SE.GRID_W) % SE.GRID_W) * q) / q;
+            const rows = this.rows;
+            if (rows >= SE.GRID_H)
+                this.scrollY = -(rows - SE.GRID_H) / 2;
+            else
+                this.scrollY = Math.round(SE.clamp(this.scrollY, 0, SE.GRID_H - rows) * q) / q;
+        }
+        /** Centre the viewport on a tile. */
+        centerOn(x, y) {
+            this.scrollX = x + 0.5 - this.cols / 2;
+            this.scrollY = y + 0.5 - this.rows / 2;
+            this.clampScroll();
+            // A jump, not motion: nothing is asked for ahead in its direction.
+            this.motion.reset();
+        }
+        /** Scroll by a number of tiles (fractions allowed). */
+        scrollBy(dx, dy) {
+            this.scrollX += dx;
+            this.scrollY += dy;
+            this.clampScroll();
+        }
+        /** Zoom around a screen point, keeping the tile under it in place. */
+        zoomAt(factor, clientX, clientY) {
+            const rect = this.canvas.getBoundingClientRect();
+            const px = clientX - rect.left;
+            const py = clientY - rect.top;
+            const before = this.tilePx;
+            const next = SE.clamp(Math.round(before * factor), EditView.MIN_TILE, EditView.MAX_TILE);
+            if (next === before)
+                return;
+            const wx = this.scrollX + px / before;
+            const wy = this.scrollY + py / before;
+            this.tilePx = next;
+            this.baseImage.zoomedAt = performance.now();
+            this.scrollX = wx - px / next;
+            this.scrollY = wy - py / next;
+            this.clampScroll();
+        }
+        /**
+         * Set the zoom around the viewport's centre, fractions allowed: frames
+         * stretch the last full picture as during a wheel zoom, so a glide called
+         * every frame stays smooth; the real redraw follows once it rests.
+         */
+        glideZoom(px) {
+            const cx = this.scrollX + this.cols / 2;
+            const cy = this.scrollY + this.rows / 2;
+            this.tilePx = px;
+            this.baseImage.zoomedAt = performance.now();
+            this.scrollX = cx - this.cols / 2;
+            this.scrollY = cy - this.rows / 2;
+            this.clampScroll();
+        }
+        /** Rings spreading from a tile for a few seconds, to show where something happened. */
+        ping(x, y, color) {
+            this.ambient.ping(x, y, color, performance.now());
+        }
+        /** Publish this viewport to the Map window, which draws it as a rectangle. */
+        editRectInto(map) {
+            map.editRect = { x: this.scrollX, y: Math.max(0, this.scrollY), w: this.cols, h: Math.min(SE.GRID_H, this.rows) };
+        }
+        /** Convert a pointer position to world tile coordinates. */
+        tileAt(clientX, clientY) {
+            const rect = this.canvas.getBoundingClientRect();
+            if (rect.width <= 0)
+                return null;
+            const px = clientX - rect.left;
+            const py = clientY - rect.top;
+            if (px < 0 || py < 0 || px >= rect.width || py >= rect.height)
+                return null;
+            const wy = Math.floor(this.scrollY + py / this.tilePx);
+            if (wy < 0 || wy >= SE.GRID_H)
+                return null;
+            return { x: SE.wrapX(Math.floor(this.scrollX + px / this.tilePx)), y: wy };
+        }
+        render(world) {
+            if (!SE.fitCanvas(this.canvas))
+                return;
+            const dpr = window.devicePixelRatio || 1;
+            this.baseImage.fit(this.canvas.width, this.canvas.height);
+            this.clampScroll();
+            // The view is redrawn when the camera or the layers change, and when the
+            // world has moved on — but the world part at most four times a second:
+            // nothing on a tile map changes visibly faster, and at the fastest speed
+            // redrawing every tile on every tick was most of the frame.
+            const key = `${this.tilePx}|${this.overlay}|${this.canvas.width}x${this.canvas.height}|` +
+                `${+this.layers.oceans}${+this.layers.biomes}${+this.layers.cities}${+this.layers.life}${+this.layers.events}`;
+            const now = performance.now();
+            const ctx = this.ctx;
+            const previewing = this.baseImage.paint(ctx, world, dpr, key, now);
+            const cam = { scrollX: this.scrollX, scrollY: this.scrollY, tilePx: this.tilePx, dpr };
+            // Animations run on their own clock, which a test may pin; the camera and the redraw logic keep real time.
+            const t = this.animClock ?? now;
+            if (this.pixelTerrain) {
+                if (world.seed !== this.motionSeed) {
+                    this.motion.reset();
+                    this.motionSeed = world.seed;
+                }
+                this.motion.sample(this.scrollX, this.scrollY, this.tilePx, now, this.cols, this.rows);
+                this.land.frame(cam, this.canvas.width, this.canvas.height, this.motion, now);
+            }
+            const fx = this.layers.events && this.pixelTerrain && this.land.ready ? this.fx : null;
+            const cities = (x0, y0, x1, y1) => {
+                if (this.layers.cities)
+                    this.cities.draw(ctx, cam, world, this.land.field, x0, y0, x1, y1);
+            };
+            if (this.pixelTerrain && !previewing) {
+                // Right over the cached terrain: the surf, the swell and all that stands or moves on the sea stay on top.
+                this.waterFx.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers, this.overlay !== SE.Overlay.None, t);
+                this.waterMotion.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
+                this.reefSwell.draw(ctx, cam, this.cols, this.rows, world, this.land, this.layers.oceans, t);
+                // Over the swell: a crest paints the composed sea's colour and would cut holes into a fish.
+                if (this.layers.life)
+                    this.clownfish.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
+                // Under the creatures, so an animal near a calving stays on top.
+                if (this.layers.oceans) {
+                    ctx.setTransform(1, 0, 0, 1, 0, 0);
+                    this.calving.draw(ctx, cam, t);
+                }
+                if (this.layers.life)
+                    this.salmon.draw(ctx, cam, this.cols, this.rows, world, this.land, t);
+            }
+            if (!fx)
+                this.fx.show.flush(world);
+            // Only a finished base counts: while the terrain is still composing it shows older ground.
+            if (!this.land.pending && !this.land.composing)
+                this.fx.baseTick = this.baseImage.baseTick;
+            if (fx) {
+                fx.update(world, cam, this.cols, this.rows, t, this.tickPhase);
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                if (!previewing)
+                    fx.drawShake(ctx, this.baseImage.canvas, cam, t);
+                fx.drawGround(ctx, world, cam, this.land, t, cities);
+            }
+            // Under the creatures and settlers, so a boat or a herd passes in front of a rig or a camp.
+            if (this.layers.cities) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.cities.drawCamps(ctx, cam, world, this.land.field, this.cols, this.rows);
+                this.cityFires.draw(ctx, cam, world, this.land.field, this.cities, this.cols, this.rows, t);
+                this.oilRigs.draw(ctx, cam, world, t);
+                this.spaceport.draw(ctx, cam, world, t);
+                this.wonders.draw(ctx, cam, world, this.land.field, t);
+                this.trains.draw(ctx, cam, world, this.land.field, t);
+                this.ships.draw(ctx, cam, world, t, this.cities);
+            }
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            if (this.layers.life) {
+                this.herds.update(world, t);
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.termites.draw(ctx, cam, world, t);
+                this.bubbles.draw(ctx, cam, this.cols, this.rows, world, t);
+                this.whales.draw(ctx, cam, this.herds.markers, world, this.land, t, this.regions);
+                this.dolphins.draw(ctx, cam, this.herds.markers, world, t);
+                this.sharks.draw(ctx, cam, this.herds.markers, world, t);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                this.herds.draw(ctx, this, world, t, this.tiles, this.regions, (m) => this.whales.claims(m, world, this.tilePx, this.regions) || this.dolphins.claims(m, world, this.tilePx));
+            }
+            if (this.layers.cities) {
+                this.settlers.draw(ctx, this, world, t, dpr, this.cities);
+                this.bands.draw(ctx, this, world, t, dpr);
+            }
+            // Over the creatures and settlers: the crown hides the tile behind it, so nothing there may show through.
+            if (this.pixelTerrain) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.kapok.draw(ctx, cam, world);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            if (fx) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                fx.drawObjects(ctx, world, cam, this.land, cities);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            if (this.layers.life) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.storks.draw(ctx, cam, this.cols, this.rows, world, t);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            if (this.layers.cities)
+                SE.drawCityNames(ctx, this, world);
+            this.ambient.draw(ctx, this, world, t, this.layers.oceans, this.layers.clouds);
+            if (fx) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                fx.drawTop(ctx, cam);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            if (this.decor) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                this.decor(ctx, cam, t);
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            }
+            else {
+                this.drawCursor(ctx, this.tilePx);
+            }
+            // Creature pictures of a new size: asked of the landscape worker, a few per frame (tilecache.ts).
+            this.tiles.flush();
+        }
+        /**
+         * How much surf the view shows, 0..1: the share of visible tiles that are
+         * open water on a shore, on a coarse grid. Coasts are lines, so zooming out
+         * thins the share by itself; the zoom term lowers it further.
+         */
+        surfPresence(world) {
+            const step = Math.max(1, Math.ceil(Math.max(this.cols / 48, this.rows / 32)));
+            const x0 = Math.floor(this.scrollX);
+            const y0 = Math.max(0, Math.floor(this.scrollY));
+            const y1 = Math.min(SE.GRID_H, Math.ceil(this.scrollY + this.rows));
+            let seen = 0;
+            let shore = 0;
+            for (let y = y0; y < y1; y += step) {
+                for (let rx = 0; rx < this.cols; rx += step) {
+                    const x = SE.wrapX(x0 + rx);
+                    const i = SE.idx(x, y);
+                    seen++;
+                    if (world.isWater(i) && world.biome[i] !== SE.Biome.Arctic && SE.shoreMask(world, x, y) !== 0)
+                        shore++;
+                }
+            }
+            if (seen === 0)
+                return 0;
+            const zoom = (this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE);
+            return SE.clamp((shore / seen) / 0.06, 0, 1) * (0.4 + 0.6 * zoom);
+        }
+        /**
+         * How loud the oxygen bubbling should be, 0..1: how much pearls in view,
+         * times the zoom squared, silent fully zoomed out and full fully zoomed
+         * in. Squared because loudness is heard on a log scale: each zoom step
+         * then sounds about as much louder as the last.
+         */
+        bubblePresence() {
+            if (!this.layers.life)
+                return 0;
+            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+            return this.bubbles.presence() * zoom * zoom;
+        }
+        /**
+         * How loud a hurricane's wind should be, 0..1: the strongest storm the
+         * effect layer drew in view (fxstorm.ts) in the last half second, softer
+         * zoomed out but still heard: a storm is a big sound.
+         */
+        stormPresence(now) {
+            if (!this.layers.events || now - SE.STORM_SOUND.at > 500)
+                return 0;
+            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+            return SE.STORM_SOUND.presence * (0.35 + 0.65 * zoom);
+        }
+        /** The hovered tile, and the full footprint the armed tool will touch. */
+        drawCursor(ctx, size) {
+            if (!this.hover)
+                return;
+            let rx = this.hover.x - this.scrollX;
+            if (rx < -this.brushRadius - 1)
+                rx += SE.GRID_W;
+            const ry = this.hover.y - this.scrollY;
+            const r = this.brushRadius;
+            const x = (rx - r) * size;
+            const y = (ry - r) * size;
+            const w = (2 * r + 1) * size;
+            if (r > 0) {
+                ctx.fillStyle = 'rgba(255,255,255,0.08)';
+                ctx.fillRect(x, y, w, w);
+                ctx.setLineDash([Math.max(3, size / 3), Math.max(2, size / 5)]);
+                ctx.strokeStyle = this.brushColor;
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(x + 0.75, y + 0.75, w - 1.5, w - 1.5);
+                ctx.setLineDash([]);
+            }
+            // The tile itself: four corner brackets, dark under light so they read
+            // on snow and on deep water alike.
+            const a = rx * size + 1;
+            const b = ry * size + 1;
+            const c = a + size - 2;
+            const d = b + size - 2;
+            const arm = Math.max(4, Math.round(size * 0.3));
+            const brackets = () => {
+                ctx.beginPath();
+                ctx.moveTo(a, b + arm);
+                ctx.lineTo(a, b);
+                ctx.lineTo(a + arm, b);
+                ctx.moveTo(c - arm, b);
+                ctx.lineTo(c, b);
+                ctx.lineTo(c, b + arm);
+                ctx.moveTo(c, d - arm);
+                ctx.lineTo(c, d);
+                ctx.lineTo(c - arm, d);
+                ctx.moveTo(a + arm, d);
+                ctx.lineTo(a, d);
+                ctx.lineTo(a, d - arm);
+                ctx.stroke();
+            };
+            ctx.fillStyle = 'rgba(255,233,166,0.12)';
+            ctx.fillRect(a, b, size - 2, size - 2);
+            ctx.lineCap = 'square';
+            ctx.strokeStyle = 'rgba(6,14,12,0.6)';
+            ctx.lineWidth = 4;
+            brackets();
+            ctx.strokeStyle = '#ffe9a6';
+            ctx.lineWidth = 2;
+            brackets();
+            ctx.lineCap = 'butt';
+        }
+    }
+    EditView.MIN_TILE = 10;
+    EditView.MAX_TILE = 48;
+    SE.EditView = EditView;
 })(SE || (SE = {}));
 /* =============================================================================
  * SimEarth 2.0 — camera flights
@@ -61410,6 +61620,60 @@ var SE;
     SE.buildPlanetPicker = buildPlanetPicker;
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — difficulty picker
+ * -----------------------------------------------------------------------------
+ * Easy, normal or hard for the next planet, on the title screen (`title`
+ * classes) and in the "Neuer Planet" dialog (`planet` classes, beside the
+ * planet picker). Three cards like the epochs, and the chosen level's text.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    function buildDifficultyPicker(initial, look, onChange) {
+        let value = initial;
+        const host = SE.make('div', `${look}-picker difficulty-picker`);
+        const cards = SE.make('div', `${look}-epochs difficulty-cards`);
+        cards.setAttribute('role', 'radiogroup');
+        cards.setAttribute('aria-label', 'Schwierigkeit');
+        const buttons = new Map();
+        for (const d of SE.DIFFICULTIES) {
+            const c = SE.DIFFICULTY_CONFIG[d];
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = `${look}-epoch`;
+            b.setAttribute('role', 'radio');
+            b.title = c.blurb;
+            b.append(SE.make('span', `${look}-epoch-name`, c.name), SE.make('span', `${look}-epoch-when`, c.title));
+            b.addEventListener('click', () => pick(d));
+            buttons.set(d, b);
+            cards.appendChild(b);
+        }
+        const blurb = SE.make('p', 'planet-blurb difficulty-blurb');
+        blurb.setAttribute('aria-live', 'polite');
+        host.append(cards, blurb);
+        const paint = () => {
+            for (const [d, b] of buttons) {
+                SE.setPressed(b, d === value);
+                b.setAttribute('aria-checked', String(d === value));
+                b.removeAttribute('aria-pressed');
+            }
+            blurb.textContent = SE.DIFFICULTY_CONFIG[value].blurb;
+        };
+        const pick = (d) => {
+            if (d === value)
+                return;
+            value = d;
+            paint();
+            onChange?.(d);
+        };
+        paint();
+        return {
+            el: host,
+            get value() { return value; },
+        };
+    }
+    SE.buildDifficultyPicker = buildDifficultyPicker;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — window manager and menu bar
  * -----------------------------------------------------------------------------
  * The original's desktop of overlapping windows and its pull-down menu bar
@@ -62641,7 +62905,7 @@ var SE;
             };
             put('age', SE.formatEarthDate(world.absoluteYears), `${SE.eraAt(world.absoluteYears).name} · Planetenalter ${SE.formatYears(world.absoluteYears)}`);
             const dev = world.evo.developed.size;
-            put('dev', `${dev} von ${SE.EVO_NODES.length}`, 'Schritte entwickelt', dev / SE.EVO_NODES.length, 'var(--ep)');
+            put('dev', `${dev} von ${SE.EVO_NODES.length}`, `Schritte entwickelt · Schwierigkeit ${SE.difficultyConfig(world).name}`, dev / SE.EVO_NODES.length, 'var(--ep)');
             const mood = world.gaiaMood;
             put('gaia', SE.GaiaPanel.moodLabel(mood), `Wohlbefinden ${Math.round(mood * 100)} %`, mood, mood > 0.66 ? 'var(--ok)' : mood > 0.33 ? 'var(--amber)' : 'var(--warn)');
         }
@@ -62908,22 +63172,26 @@ var SE;
     function fillOmegaInfo(pop, world) {
         const at = SE.omegaStage(world);
         const s = SE.OMEGA_STAGES[at];
+        const level = SE.difficultyConfig(world);
+        const cap = SE.omegaCap(world);
         const pips = SE.make('span', 'hud-info-pips');
         for (let i = 0; i < SE.OMEGA_STAGES.length; i++)
             pips.appendChild(SE.make('i', i <= at ? 'on' : ''));
         const stage = SE.make('div', 'hud-info-row');
         stage.append(SE.make('span', '', `Stufe ${at + 1} von ${SE.OMEGA_STAGES.length} · ${s.name}`), pips);
-        pop.append(head('Energie', `${SE.fmt.int(world.omega)} / ${SE.fmt.int(s.max)} Ω`), SE.make('div', 'hud-info-rate hud-info-omega', `+${SE.fmt.one(s.regen)} Ω je Zeitschritt`), stage);
+        pop.append(head('Energie', `${SE.fmt.int(world.omega)} / ${SE.fmt.int(cap)} Ω`), SE.make('div', 'hud-info-rate hud-info-omega', `+${SE.fmt.one(SE.omegaRegen(world))} Ω je Zeitschritt`), stage, row('Schwierigkeit', level.name));
+        if (level.omegaMood > 0)
+            pop.append(SE.make('div', 'hud-info-note', `Gaias Stimmung ${SE.fmt.int(world.gaiaMood * 100)} %: Je wohler sie sich fühlt, desto mehr Energie.`));
         const next = SE.OMEGA_STAGES[at + 1];
         if (next) {
-            pop.append(row(`Nächste: ${next.name}`, `+${SE.fmt.one(next.regen)} Ω · bis ${SE.fmt.int(next.max)}`), SE.make('div', 'hud-info-note', next.unlock === 'city'
+            pop.append(row(`Nächste: ${next.name}`, `+${SE.fmt.one(next.regen * SE.omegaRegenFactor(world))} Ω · bis ${SE.fmt.int(next.max * level.omegaCap)}`), SE.make('div', 'hud-info-note', next.unlock === 'city'
                 ? 'Weg dorthin: Eine Art wird intelligent.'
                 : `Weg dorthin: ${SE.evoNode(next.unlock).name} entwickeln.`));
         }
         else {
             pop.append(SE.make('div', 'hud-info-note', 'Höchste Stufe erreicht.'));
         }
-        pop.append(SE.make('div', 'hud-info-note', world.omega >= s.max
+        pop.append(SE.make('div', 'hud-info-note', world.omega >= cap
             ? 'Speicher voll – was jetzt entsteht, verfällt.'
             : 'Energie entsteht nur, während die Zeit läuft.'));
     }
@@ -72103,6 +72371,8 @@ var SE;
     function stepGoneReason(world, n, alive) {
         if (n.flora !== undefined && SE.floraGone(world, n.flora))
             return `Für immer ausgestorben – abgelöst durch ${SE.floraRivalNames(n.flora)}.`;
+        if (SE.hardStepLost(world, n))
+            return 'Für immer ausgestorben – nicht rechtzeitig wieder angesiedelt.';
         return alive ? '' : SE.dinoEraStepBar(world, n.id);
     }
     SE.stepGoneReason = stepGoneReason;
@@ -73313,7 +73583,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.92.4';
+    SE.APP_VERSION = '0.92.5';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -73933,7 +74203,12 @@ var SE;
             panel.append(logo, SE.make('p', 'title-lead', LEAD));
             if (resume)
                 panel.appendChild(resume);
-            panel.append(buttons, planet.panel);
+            const level = SE.make('section', 'title-custom title-difficulty');
+            level.setAttribute('aria-labelledby', 'title-difficulty-head');
+            const levelHead = SE.make('h2', 'title-custom-head', 'Schwierigkeit');
+            levelHead.id = 'title-difficulty-head';
+            level.append(levelHead, SE.buildDifficultyPicker(hooks.difficulty, 'title', (d) => hooks.chooseDifficulty(d)).el);
+            panel.append(buttons, planet.panel, level);
             const foot = SE.make('footer', 'title-foot');
             foot.appendChild(SE.make('p', 'title-motto', 'Kleine Anfänge. Große Welten.'));
             const frame = SE.make('div', 'title-frame');
@@ -82673,6 +82948,268 @@ var SE;
     }
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — the climate's thermostat and its tipping points on hard
+ * -----------------------------------------------------------------------------
+ * Easy and normal pull a planet that left the comfortable band back towards
+ * it (DIFFICULTY_CONFIG.climate.thermostat); inside the band they leave the
+ * climate exactly as it was tuned. Hard pushes it further out instead (ice
+ * reflects more sunlight, a hot sea gives off more vapour), and its own
+ * history tips it four times (TippingDifficulty): the first oxygen destroys
+ * the methane that kept the young planet warm, the coal swamps bury CO₂, a
+ * flood basalt at the Permian's end floods the air with it, and a
+ * civilization's fossil fuel heats twice over. Meanwhile the sun brightens
+ * and undoes every warming fix. All triggers are the calendar and the
+ * planet's state; no random numbers. Node-safe.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    const CRISIS_TEXT = {
+        [0 /* HardCrisis.Methane */]: 'Der erste Sauerstoff zerstört das Methan in der Luft – dem jungen Planeten fehlt seine Wärme. Ohne mehr Treibhauseffekt (Modell Atmosphäre) oder Vulkanismus (Modell Geosphäre) droht eine Eiszeit.',
+        [1 /* HardCrisis.Coal */]: 'Die Kohlewälder saugen CO₂ aus der Luft und begraben es im Sumpf. Weniger CO₂-Aufnahme (Modell Biosphäre) oder mehr Vulkanismus (Modell Geosphäre) hält die Eiszeit fern.',
+        [2 /* HardCrisis.Basalt */]: 'Flutbasalte brechen auf: Lava und CO₂ ohne Ende. Erst verdunkelt Asche den Himmel, dann droht Hitze – mehr Wolken- und Boden-Rückstrahlung (Modell Atmosphäre) kühlen den Planeten.',
+        [3 /* HardCrisis.Industry */]: 'Die Industrie verbrennt Kohle und Öl – auf diesem Planeten heizt jede Tonne doppelt. Verschiebe den Energiemix im Modell Zivilisation weg von fossilen Brennstoffen.',
+    };
+    /** Extra forcing in degrees for the temperature equation (climate.ts): the thermostat, on hard also the drifts. Exactly 0 on normal inside its band. */
+    function climateDifficultyForcing(world, params) {
+        void params;
+        const c = SE.difficultyConfig(world).climate;
+        const t = world.globalTemp;
+        const out = t < c.comfortLow ? t - c.comfortLow : t > c.comfortHigh ? t - c.comfortHigh : 0;
+        let f = out === 0 ? 0 : SE.clamp(-c.thermostat * out, -c.thermostatCap, c.thermostatCap);
+        const tp = c.tipping;
+        if (tp)
+            f += sunDrift(tp, SE.yearsAgo(world.absoluteYears) / 1e6) - methaneLoss(world, tp);
+        return f;
+    }
+    SE.climateDifficultyForcing = climateDifficultyForcing;
+    /** The brightening sun's forcing at `ma` million years before the present. */
+    function sunDrift(tp, ma) {
+        const p = tp.sunDrift;
+        if (ma >= p[0][0])
+            return p[0][1];
+        for (let k = 1; k < p.length; k++) {
+            if (ma >= p[k][0])
+                return SE.lerp(p[k - 1][1], p[k][1], (p[k - 1][0] - ma) / (p[k - 1][0] - p[k][0]));
+        }
+        return p[p.length - 1][1];
+    }
+    /** Degrees the methane lost since its peak takes off the young planet. */
+    function methaneLoss(world, tp) {
+        const doublings = (ch4) => Math.log2(1 + Math.max(0, ch4 - SE.CH4_BASE));
+        return Math.min(tp.methaneCap, tp.methaneWeight * Math.max(0, doublings(world.difficulty.ch4Peak) - doublings(world.ch4)));
+    }
+    /** Once a tick, after the atmosphere: on hard the crises' gases, their announcements and the warnings. */
+    function stepHardClimate(world, params, notes) {
+        const c = SE.difficultyConfig(world).climate;
+        const tp = c.tipping;
+        if (!tp)
+            return;
+        const d = world.difficulty;
+        if (world.ch4 > d.ch4Peak)
+            d.ch4Peak = world.ch4;
+        const announce = (k) => {
+            if (d.crises & (1 << k))
+                return;
+            d.crises |= 1 << k;
+            notes.push({ kind: 'message', tone: 'warn', text: CRISIS_TEXT[k] });
+        };
+        if (world.o2 >= tp.methaneAnnounceO2 && world.ch4 < d.ch4Peak / 2 && methaneLoss(world, tp) > 1)
+            announce(0 /* HardCrisis.Methane */);
+        // Only the giant clubmosses' swamp forests: the later swamps' lignite is a tenth of it (coal.ts).
+        const buried = SE.CoalSystem.lastDeposit.lycopsid;
+        if (buried > 0) {
+            SE.shiftGas(world, 'co2', 'photosynthesis', -tp.coalDrawdown * buried * SE.mul(params.bio.co2Absorption), 0, 5000);
+            if (buried >= tp.coalAnnounce)
+                announce(1 /* HardCrisis.Coal */);
+        }
+        const ma = SE.yearsAgo(world.absoluteYears) / 1e6;
+        if (ma <= tp.basaltFromMa && ma > tp.basaltToMa) {
+            SE.shiftGas(world, 'co2', 'volcanism', tp.basaltCO2 * SE.mul(params.geo.volcanoes), 0, 5000);
+            world.dust = Math.min(1, world.dust + tp.basaltDust);
+            announce(2 /* HardCrisis.Basalt */);
+        }
+        const fossil = world.gas.part('co2', 'fossil');
+        if (fossil > 0) {
+            SE.shiftGas(world, 'co2', 'fossil', fossil * tp.industryBoost, 0, 5000);
+            announce(3 /* HardCrisis.Industry */);
+        }
+        warn(world, c, tp, notes);
+    }
+    SE.stepHardClimate = stepHardClimate;
+    /** A warning when the planet leaves the band and keeps going; again after the cooldown, or at once after it came back. */
+    function warn(world, c, tp, notes) {
+        const d = world.difficulty;
+        const t = world.globalTemp;
+        const prev = d.lastTemp;
+        d.lastTemp = t;
+        if (t > c.comfortLow + tp.warnHysteresis)
+            d.coldWarned = -Infinity;
+        if (t < c.comfortHigh - tp.warnHysteresis)
+            d.hotWarned = -Infinity;
+        const deg = `${t.toLocaleString('de-DE', { maximumFractionDigits: 1 })} °C`;
+        if (t < c.comfortLow && t < prev && world.ticks - d.coldWarned >= tp.warnCooldown) {
+            d.coldWarned = world.ticks;
+            notes.push({
+                kind: 'message', tone: 'warn',
+                text: `Klima-Warnung: Der Planet kühlt gefährlich ab (${deg}) – erhöhe Treibhauseffekt oder Sonneneinstrahlung im Modell Atmosphäre oder den Vulkanismus im Modell Geosphäre!`,
+            });
+        }
+        if (t > c.comfortHigh && t > prev && world.ticks - d.hotWarned >= tp.warnCooldown) {
+            d.hotWarned = world.ticks;
+            const industry = d.crises & (1 << 3 /* HardCrisis.Industry */) ? ', oder senke die fossilen Brennstoffe im Modell Zivilisation' : '';
+            notes.push({
+                kind: 'message', tone: 'warn',
+                text: `Klima-Warnung: Der Planet heizt sich gefährlich auf (${deg}) – erhöhe Wolken- oder Boden-Rückstrahlung, senke den Treibhauseffekt im Modell Atmosphäre oder den Vulkanismus im Modell Geosphäre${industry}!`,
+            });
+        }
+    }
+    /* -------------------------------------------------------------- save -- */
+    /** The climate's part of the difficulty save field; the warnings' cooldowns are not kept. */
+    function hardClimateToJSON(world) {
+        const d = world.difficulty;
+        return { ch4Peak: d.ch4Peak, crises: d.crises };
+    }
+    SE.hardClimateToJSON = hardClimateToJSON;
+    /** A save without it, or with bad values, measures the methane from now on and announces the crises again. */
+    function restoreHardClimate(world, raw) {
+        const r = typeof raw === 'object' && raw !== null ? raw : {};
+        const d = world.difficulty;
+        const peak = r.ch4Peak;
+        if (typeof peak === 'number' && Number.isFinite(peak) && peak >= 0 && peak <= SE.CH4_MAX)
+            d.ch4Peak = peak;
+        const crises = r.crises;
+        if (typeof crises === 'number' && Number.isInteger(crises) && crises >= 0 && crises < 1 << 4)
+            d.crises = crises;
+    }
+    SE.restoreHardClimate = restoreHardClimate;
+})(SE || (SE = {}));
+/* =============================================================================
+ * Gaia Reborn — extinction for good on hard
+ * -----------------------------------------------------------------------------
+ * When a developed animal class or plant group vanishes from the planet, the
+ * player has DIFFICULTY_CONFIG.extinction.graceTicks to settle it again. If
+ * not, it is gone for good: the tools refuse it, its successors in the tree
+ * stay barred, and the chronicle gives it its R.I.P. The first cells, the
+ * plant groups their rivals displace (lycopsids.ts) and the comet's
+ * dinosaurs (dinoera.ts) follow their own rules and are left out.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    function hardLifeLost(world, c) {
+        return (world.difficulty.lifeLost & (1 << c)) !== 0;
+    }
+    SE.hardLifeLost = hardLifeLost;
+    /** Has step n's group died out for good on hard? */
+    function hardStepLost(world, n) {
+        if (n.life !== undefined)
+            return hardLifeLost(world, n.life);
+        return n.flora !== undefined && (world.difficulty.floraLost & SE.floraBit(n.flora)) !== 0;
+    }
+    SE.hardStepLost = hardStepLost;
+    /** Why the tools refuse step n's group, or ''. */
+    function hardLostReason(world, n) {
+        return hardStepLost(world, n) ? `${n.name} sind für immer ausgestorben und kehren nie zurück.` : '';
+    }
+    SE.hardLostReason = hardLostReason;
+    /** Does vanishing from the planet put step n's group at risk of dying out for good? */
+    function hardExtinctionWatches(world, n) {
+        if (SE.difficultyConfig(world).extinction.graceTicks <= 0)
+            return false;
+        if (n.life !== undefined)
+            return n.life !== SE.Life.Prokaryote && n.life !== SE.Life.Eukaryote && SE.dinoEraLifeBar(world, n.life) === '';
+        return n.flora !== undefined && !SE.floraGone(world, n.flora);
+    }
+    SE.hardExtinctionWatches = hardExtinctionWatches;
+    /** Once a tick: grace periods, warnings and R.I.P. for classes and plant groups gone from the planet. */
+    function stepHardExtinctions(world, notes, evolution) {
+        const grace = SE.difficultyConfig(world).extinction.graceTicks;
+        if (grace <= 0)
+            return;
+        const d = world.difficulty;
+        for (const id of world.evo.developed.keys()) {
+            const n = SE.evoNode(id);
+            const until = d.graceUntil[id];
+            if (hardStepLost(world, n) || !hardExtinctionWatches(world, n)) {
+                if (until !== undefined)
+                    delete d.graceUntil[id];
+                continue;
+            }
+            if (evolution.presence(world, n) > 0) {
+                if (until === undefined)
+                    continue;
+                delete d.graceUntil[id];
+                notes.push({ kind: 'message', tone: 'ok', text: `Gerettet: Die ${n.name} leben wieder auf dem Planeten.` });
+                continue;
+            }
+            if (until === undefined) {
+                d.graceUntil[id] = world.ticks + grace;
+                const span = SE.formatYearsAmount(grace * world.yearsPerTick);
+                notes.push({
+                    kind: 'message', tone: 'warn',
+                    text: `Aussterbe-Warnung: Die ${n.name} sind vom Planeten verschwunden! Siedle sie in den nächsten ${span} Jahren wieder an, sonst sterben sie für immer aus.`,
+                });
+                continue;
+            }
+            if (world.ticks < until)
+                continue;
+            delete d.graceUntil[id];
+            if (n.life !== undefined)
+                d.lifeLost |= 1 << n.life;
+            else
+                d.floraLost |= SE.floraBit(n.flora);
+            evolution.record(world, {
+                key: `hard-extinct:${id}`, kind: 'extinction', nodeId: id,
+                title: `${n.name} für immer ausgestorben`,
+                text: 'Sie wurden nicht rechtzeitig wieder angesiedelt. Ausgestorbene Gruppen kehren nicht zurück.',
+                change: 'Sie lassen sich nicht mehr ansiedeln, und was im Evolutionsbaum aus ihnen hervorgeht, bleibt gesperrt.',
+                icon: SE.evoIcon(id), tick: world.ticks, years: world.absoluteYears, major: false, rip: true,
+            });
+        }
+    }
+    SE.stepHardExtinctions = stepHardExtinctions;
+    /* -------------------------------------------------------------- save -- */
+    /** Part of the difficulty's save field: ids gone for good, ticks left of each grace period. */
+    function hardExtinctionToJSON(world) {
+        const d = world.difficulty;
+        const life = [];
+        const flora = [];
+        for (let c = 1; c < SE.LIFE_COUNT; c++)
+            if (hardLifeLost(world, c))
+                life.push(SE.LIFE[c].id);
+        for (let g = 1; g < SE.FLORA_COUNT; g++)
+            if (d.floraLost & SE.floraBit(g))
+                flora.push(SE.FLORA[g].id);
+        const grace = {};
+        for (const id of Object.keys(d.graceUntil))
+            grace[id] = d.graceUntil[id] - world.ticks;
+        return { life, flora, grace };
+    }
+    SE.hardExtinctionToJSON = hardExtinctionToJSON;
+    /** After the level and world.ticks are restored; unknown ids and bad numbers are dropped. */
+    function restoreHardExtinction(world, raw) {
+        const max = SE.difficultyConfig(world).extinction.graceTicks;
+        if (max <= 0 || typeof raw !== 'object' || raw === null)
+            return;
+        const d = world.difficulty;
+        const r = raw;
+        const listed = (list, id) => Array.isArray(list) && list.includes(id);
+        for (let c = SE.Life.Eukaryote + 1; c < SE.LIFE_COUNT; c++)
+            if (listed(r.life, SE.LIFE[c].id))
+                d.lifeLost |= 1 << c;
+        for (let g = 1; g < SE.FLORA_COUNT; g++)
+            if (listed(r.flora, SE.FLORA[g].id))
+                d.floraLost |= SE.floraBit(g);
+        const grace = typeof r.grace === 'object' && r.grace !== null ? r.grace : {};
+        for (const [id, left] of Object.entries(grace)) {
+            const n = SE.EVO_BY_ID.get(id);
+            if (!n || (n.life === undefined && n.flora === undefined) || typeof left !== 'number' || !Number.isFinite(left))
+                continue;
+            d.graceUntil[id] = world.ticks + Math.max(0, Math.min(max, Math.round(left)));
+        }
+    }
+    SE.restoreHardExtinction = restoreHardExtinction;
+})(SE || (SE = {}));
+/* =============================================================================
  * SimEarth 2.0 — the simulation core
  * -----------------------------------------------------------------------------
  * One planet: its state, every system, the tick in the game's order and the
@@ -82749,6 +83286,8 @@ var SE;
             this.evolution.step(w, p);
             this.civ.step(w, p, this.atmo);
             this.atmo.step(w, p);
+            SE.stepHardClimate(w, p, this.notes);
+            SE.stepHardExtinctions(w, this.notes, this.evolution);
             SE.regenOmega(w);
             w.ticks++;
             w.absoluteYears += w.yearsPerTick;
@@ -82785,9 +83324,12 @@ var SE;
                 SE.placeTermiteMound(w);
                 SE.placeKapok(w);
             }
-            this.evolution.step(w, p);
+            // Steps still arise on their own here, whatever the level: the seeds are tuned to it.
+            this.evolution.step(w, p, true);
             this.civ.step(w, p, this.atmo);
             this.atmo.step(w, p);
+            SE.stepHardClimate(w, p, this.notes);
+            SE.stepHardExtinctions(w, this.notes, this.evolution);
             SE.regenOmega(w);
             w.ticks++;
             w.absoluteYears += w.yearsPerTick;
@@ -82873,12 +83415,12 @@ var SE;
             }
         }
         /* ======================================================= planets === */
-        newPlanet(seed, ocean, epoch) {
+        newPlanet(seed, ocean, epoch, difficulty = 'normal') {
             this.fauna.reset();
             this.paidModels.clear();
             this.settling = [];
             this.hazardsPaid = [];
-            this.world.reset(seed >>> 0, ocean, epoch);
+            this.world.reset(seed >>> 0, ocean, epoch, difficulty);
             this.params.reset();
             SE.applyEpochParams(this.params, epoch);
             this.geo.resetDrift();
@@ -82954,7 +83496,7 @@ var SE;
             const w = this.world;
             switch (cmd.type) {
                 case 'examine': return this.spendProblem(SE.EXAMINE_COST);
-                case 'model': return this.paidModels.has(cmd.id) ? '' : this.spendProblem(SE.MODEL_PANEL_COST);
+                case 'model': return this.paidModels.has(cmd.id) ? '' : this.spendProblem(SE.difficultyConfig(w).modelPanelCost);
                 case 'plant': return this.plantPlan(cmd).reason;
                 case 'placeLife': return this.lifeProblem(cmd.life, cmd.x, cmd.y);
                 case 'placeCity': return this.cityProblem(cmd.tech, cmd.x, cmd.y);
@@ -82972,7 +83514,7 @@ var SE;
             const w = this.world;
             switch (cmd.type) {
                 case 'newPlanet':
-                    this.newPlanet(cmd.seed, cmd.ocean, cmd.epoch);
+                    this.newPlanet(cmd.seed, cmd.ocean, cmd.epoch, SE.isDifficulty(cmd.difficulty) ? cmd.difficulty : 'normal');
                     return OK;
                 case 'load':
                     return this.load(cmd.doc);
@@ -83008,7 +83550,7 @@ var SE;
                 case 'model':
                     // Paid once per planet: closing it by accident must not cost again.
                     if (!this.paidModels.has(cmd.id)) {
-                        this.spend(SE.MODEL_PANEL_COST);
+                        this.spend(SE.difficultyConfig(w).modelPanelCost);
                         this.paidModels.add(cmd.id);
                     }
                     return OK;
@@ -83122,6 +83664,9 @@ var SE;
             const n = SE.nodeForFlora(cmd.flora);
             if (!n || !(SE.isDevMode() || w.evo.isDeveloped(n.id)))
                 return { reason: 'Diese Pflanzengruppe ist noch nicht entwickelt.', targets: [] }; // DEVMODE
+            const lost = SE.hardLostReason(w, n);
+            if (lost)
+                return { reason: lost, targets: [] };
             const suitable = tiles.filter((j) => this.flora.suit(w, cmd.flora, j) >= 0.15);
             if (suitable.length === 0) {
                 const why = this.flora.problem(w, cmd.flora, SE.idx(cmd.x, cmd.y)) ?? 'die Bedingungen sind dort zu ungünstig';
@@ -83161,6 +83706,9 @@ var SE;
                 return bar;
             if (!node || !(SE.isDevMode() || w.evo.isDeveloped(node.id)))
                 return `${def.name} sind noch nicht entwickelt – öffne den Evolutionsbaum.`; // DEVMODE
+            const lost = SE.hardLostReason(w, node);
+            if (lost)
+                return lost;
             const i = SE.idx(x, y);
             const problem = this.life.habitabilityProblem(w, this.params, i, c);
             if (problem)
@@ -84097,7 +84645,7 @@ var SE;
             this.omegaStageSeen = 0;
             this.speed = 3;
             this.lastRunningSpeed = 3;
-            this.settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true, waterFx: false, showFps: false };
+            this.settings = { relativeDate: true, pauseOnMilestone: false, dockCollapsed: false, lastSlot: 1, sound: true, music: true, ambient: true, ambientVolume: 0.8, soundVolume: 0.8, musicVolume: 0.8, oceanShare: SE.OCEAN_FRACTION, epoch: 'random', difficulty: 'normal', reduceEffects: prefersReducedMotion(), introSeen: false, introDevOff: false, mapGlobe: true, waterFx: false, showFps: false };
             /** The field last clicked on the overview map, its globe or with Examine, shown on the card beside the globe. */
             this.mapField = null;
             this.selection = {
@@ -85015,7 +85563,7 @@ var SE;
                 checked: () => this.windows.isVisible(id),
             });
             const modelItem = (label, id, sprite) => ({
-                label, icon: SE.uiIcon('menu-models'), sprite, hint: `${SE.MODEL_PANEL_COST} Ω einmalig`,
+                label, icon: SE.uiIcon('menu-models'), sprite, hint: 'Ω einmalig', // the price depends on the planet's difficulty (difficulty.ts)
                 action: () => {
                     if (this.windows.isVisible(id)) {
                         this.windows.hide(id);
@@ -86283,7 +86831,7 @@ var SE;
             this.examineTile = null;
             this.mapField = null;
             this.windows.hide('examine');
-            this.sim.run({ type: 'newPlanet', seed, ocean: this.settings.oceanShare, epoch: this.settings.epoch }, () => {
+            this.sim.run({ type: 'newPlanet', seed, ocean: this.settings.oceanShare, epoch: this.settings.epoch, difficulty: this.settings.difficulty }, () => {
                 this.seenTicks = this.world.ticks;
                 this.omegaStageSeen = SE.omegaStage(this.world);
                 this.sliderPanels.forEach((p) => p.sync());
@@ -86308,7 +86856,8 @@ var SE;
             const sea = SE.buildOceanSlider(this.settings.oceanShare);
             const picker = SE.buildPlanetPicker(this.settings.epoch, (id) => { sea.el.hidden = !SE.epochOf(id).playerSea; });
             sea.el.hidden = !SE.epochOf(picker.value).playerSea;
-            body.append(picker.el, sea.el);
+            const level = SE.buildDifficultyPicker(this.settings.difficulty, 'planet');
+            body.append(picker.el, sea.el, level.el);
             const choice = await SE.Modal.show({
                 title: 'Neuen Planeten erschaffen?', icon: SE.uiIcon('new-planet'), body,
                 actions: risky
@@ -86331,6 +86880,7 @@ var SE;
             }
             this.setOceanShare(sea.value);
             this.setEpoch(picker.value);
+            this.setDifficulty(level.value);
             this.newPlanet();
         }
         setOceanShare(share) {
@@ -86343,6 +86893,12 @@ var SE;
             if (!SE.isEpochId(id))
                 return;
             this.settings.epoch = id;
+            this.saveSettings();
+        }
+        setDifficulty(d) {
+            if (!SE.isDifficulty(d))
+                return;
+            this.settings.difficulty = d;
             this.saveSettings();
         }
         /** Open the edit view over a temperate continent rather than open sea. */
@@ -86423,7 +86979,7 @@ var SE;
             const stage = SE.omegaStage(w);
             if (stage > this.omegaStageSeen) {
                 const s = SE.OMEGA_STAGES[stage];
-                this.notifier.message(`Energiestufe ${stage + 1}: ${s.name} – jetzt +${SE.fmt.one(s.regen)} Ω je Zeitschritt, bis ${SE.fmt.int(s.max)} Ω.`, 'ok');
+                this.notifier.message(`Energiestufe ${stage + 1}: ${s.name} – jetzt +${SE.fmt.one(SE.omegaRegen(w))} Ω je Zeitschritt, bis ${SE.fmt.int(SE.omegaCap(w))} Ω.`, 'ok');
             }
             this.omegaStageSeen = stage;
             // `relativeDate`: the Earth date with its era, else the planet age.
@@ -86523,6 +87079,8 @@ var SE;
                     this.settings.oceanShare = SE.clamp(s.oceanShare, SE.OCEAN_SHARE_MIN, SE.OCEAN_SHARE_MAX);
                 if (SE.isEpochId(s.epoch))
                     this.settings.epoch = s.epoch;
+                if (SE.isDifficulty(s.difficulty))
+                    this.settings.difficulty = s.difficulty;
                 if (typeof s.reduceEffects === 'boolean')
                     this.settings.reduceEffects = s.reduceEffects;
                 if (typeof s.introSeen === 'boolean')
@@ -86789,6 +87347,11 @@ var SE;
                 epoch: this.settings.epoch,
                 chooseEpoch: (id) => {
                     this.setEpoch(id);
+                    this.newPlanet({ quiet: true, keepSeed: true });
+                },
+                difficulty: this.settings.difficulty,
+                chooseDifficulty: (d) => {
+                    this.setDifficulty(d);
                     this.newPlanet({ quiet: true, keepSeed: true });
                 },
                 openSaves: () => this.openSaves(),

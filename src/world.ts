@@ -359,6 +359,8 @@ namespace SE {
     readonly dinoEra = new DinoEraState();
     /** The space project of its civilization: launch site, rocket, launch (spaceport.ts). */
     readonly space = new SpaceState();
+    /** Easy, normal or hard, and what hard keeps track of (difficulty.ts). */
+    readonly difficulty = new DifficultyState();
 
     /* ---- bookkeeping ---- */
     ticks = 0;
@@ -423,7 +425,7 @@ namespace SE {
      * Build a brand new planet from a seed, with `oceanShare` of it under the
      * sea unless the epoch sets its own sea.
      */
-    reset(seed: number, oceanShare = OCEAN_FRACTION, epoch: EpochId = 'random'): void {
+    reset(seed: number, oceanShare = OCEAN_FRACTION, epoch: EpochId = 'random', difficulty: Difficulty = 'normal'): void {
       this.seed = seed >>> 0;
       this.rng = new Rng(this.seed);
 
@@ -456,7 +458,8 @@ namespace SE {
       this.stageEnded.fill(0);
       this.fatesQuiet = false;
       this.ticks = 0;
-      this.omega = OMEGA_START;
+      this.difficulty.reset(difficulty);
+      this.omega = DIFFICULTY_CONFIG[difficulty].omegaStart;
       this.timeScale = TimeScale.Geologic;
       this.absoluteYears = 0;
       this.scaleYears = 0;
@@ -598,6 +601,7 @@ namespace SE {
       this.hazards.copyFrom(o.hazards);
       this.dinoEra.copyFrom(o.dinoEra);
       this.space.copyFrom(o.space);
+      this.difficulty.copyFrom(o.difficulty);
       this.name = o.name;
 
       const evo = this.evo;
