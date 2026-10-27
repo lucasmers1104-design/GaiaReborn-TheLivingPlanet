@@ -2,10 +2,9 @@
  * Gaia Reborn — the status bar's pixel art
  * -----------------------------------------------------------------------------
  * What the living status bar (livingtopbar.ts) draws on its pixel canvases:
- * the wood beam with a gold-rimmed parchment panel behind every chip, wood
- * posts with brass studs between the panels and the logo; single sprites;
- * the Ω store, the era bar and the sparklines. Everything in art px on a
- * PixelCanvas; the bar decides when to draw.
+ * a white cumulus (cloudshape.ts) behind every chip, the map showing between
+ * them; single sprites; the Ω store, the era bar and the sparklines.
+ * Everything in art px on a PixelCanvas; the bar decides when to draw.
  * ========================================================================== */
 
 namespace SE {
@@ -21,99 +20,53 @@ namespace SE {
     'violet0', 'glowT2', 'vine4', 'orange0', 'yellow0', 'petalY3',
   ];
 
-  /** Wood rows above and below the panels: 3, fewer where the 60 px bar is only some 20 art px tall (3 CSS px per art px), so a panel keeps room for the logo inside its rim. */
-  export const topbarMargin = (rows: number): number => clamp(Math.floor((rows - 18) / 2), 1, 3);
-
-  /** A panel's columns in art px of the bar, and 1 when it is lit. */
-  export type TopbarPanel = readonly [x0: number, x1: number, lit: number];
-
-  const frames = new Map<string, HTMLCanvasElement>();
-  let framesVersion = -1;
-
-  /** One frame of a sprite alone on a small canvas, for slicing and tiling. */
-  function frame(id: string, f: number): HTMLCanvasElement | null {
-    const ui = UiArt.shared();
-    if (framesVersion !== ui.version) { frames.clear(); framesVersion = ui.version; }
-    const key = `${id}:${f}`;
-    const have = frames.get(key);
-    const sp = ui.sprite(id);
-    if (have || !sp || !ui.ready) return have ?? null;
-    const c = document.createElement('canvas');
-    c.width = sp.w;
-    c.height = sp.h;
-    const ctx = c.getContext('2d');
-    if (!ctx) return null;
-    ui.draw(ctx, id, f, sp.ax, sp.ay);
-    frames.set(key, c);
-    return c;
-  }
-
-  /** The part (sx, sy, sw, sh) of `src` repeated over the box (x, y, w, h), cut at its far edges. */
-  function rep(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, x: number, y: number, w: number, h: number): void {
-    if (sw <= 0 || sh <= 0) return;
-    for (let ty = y; ty < y + h; ty += sh) {
-      const ch = Math.min(sh, y + h - ty);
-      for (let tx = x; tx < x + w; tx += sw) {
-        const cw = Math.min(sw, x + w - tx);
-        ctx.drawImage(src, sx, sy, cw, ch, tx, ty, cw, ch);
-      }
-    }
-  }
-
-  function tile(ctx: CanvasRenderingContext2D, id: string, f: number, x: number, y: number, w: number, h: number): void {
-    const src = frame(id, f);
-    if (src) rep(ctx, src, 0, 0, src.width, src.height, x, y, w, h);
-  }
-
-  /** The gold-rimmed panel, nine-sliced: corners (a third of the sprite) as drawn, edges and centre repeated. */
-  function nine(ctx: CanvasRenderingContext2D, f: number, x: number, y: number, w: number, h: number): void {
-    const s = frame('panel9', f);
-    if (!s || w <= 0 || h <= 0) return;
-    const cx = Math.floor(s.width / 3);
-    const cy = Math.floor(s.height / 3);
-    const mw = s.width - 2 * cx;
-    const mh = s.height - 2 * cy;
-    const rx = s.width - cx;
-    const ry = s.height - cy;
-    rep(ctx, s, cx, cy, mw, mh, x + cx, y + cy, w - 2 * cx, h - 2 * cy);
-    rep(ctx, s, cx, 0, mw, cy, x + cx, y, w - 2 * cx, cy);
-    rep(ctx, s, cx, ry, mw, cy, x + cx, y + h - cy, w - 2 * cx, cy);
-    rep(ctx, s, 0, cy, cx, mh, x, y + cy, cx, h - 2 * cy);
-    rep(ctx, s, rx, cy, cx, mh, x + w - cx, y + cy, cx, h - 2 * cy);
-    ctx.drawImage(s, 0, 0, cx, cy, x, y, cx, cy);
-    ctx.drawImage(s, rx, 0, cx, cy, x + w - cx, y, cx, cy);
-    ctx.drawImage(s, 0, ry, cx, cy, x, y + h - cy, cx, cy);
-    ctx.drawImage(s, rx, ry, cx, cy, x + w - cx, y + h - cy, cx, cy);
-  }
+  /** A panel's columns in art px of the bar, 1 when it is lit, the seed of its cloud's shape, its content's box. */
+  export type TopbarPanel = readonly [x0: number, x1: number, lit: number, seed: number, box: CloudBox];
 
   /**
-   * The bar's background, W × H art px of which `rows` are the bar: wood, a
-   * panel for every box, a post with a stud above and below where two panels
-   * are close, and the logo with its left edge at art px `logoX` (null while
-   * the plaque is hidden). Without the atlas only cleared.
+   * The bar's background, W × H art px: no beam, the map shows through; a
+   * cloud behind every panel from the bar's second row down, so the map
+   * shows above it too; a lit cloud with a halo. Without the atlas only
+   * cleared.
    */
-  export function drawTopbarBg(pc: PixelCanvas, W: number, H: number, rows: number, boxes: readonly TopbarPanel[], logoX: number | null, sc: UiScale): void {
+  export function drawTopbarClouds(pc: PixelCanvas, W: number, H: number, boxes: readonly TopbarPanel[], sc: UiScale): void {
     const ui = UiArt.shared();
     pc.size(W, H, sc);
     pc.place({ left: 0, top: 0 });
     pc.clear();
     if (!ui.ready) return;
     const ctx = pc.ctx;
-    tile(ctx, 'wood_tile', 0, 0, 0, W, H);
-    const y = topbarMargin(rows);
-    const h = rows - 2 * y;
-    const post = ui.sprite('post_tile');
-    boxes.forEach(([x0, x1, f], k) => {
-      nine(ctx, f, x0, y, x1 - x0, h);
-      const next = boxes[k + 1];
-      if (!post || !next || next[0] <= x1 || next[0] - x1 > 2 * (post.w + 2)) return;
-      const px = Math.floor((x1 + next[0] - post.w) / 2);
-      tile(ctx, 'post_tile', 0, px, 0, post.w, H);
-      ui.draw(ctx, 'stud', 0, px + Math.floor(post.w / 2), y - 1);
-      ui.draw(ctx, 'stud', 0, px + Math.floor(post.w / 2), y + h);
-    });
-    const logo = ui.sprite('logo');
-    if (logo && logoX !== null) ui.draw(ctx, 'logo', 0, logoX + logo.ax, y + Math.floor((h - logo.h) / 2) + logo.ay);
+    const h = H - 1;
+    if (h <= 0) return;
+    for (const [x0, x1, lit, seed, box] of boxes) {
+      const w = x1 - x0;
+      if (w <= 2) continue;
+      const tones = cloudTones(w, h, seed, box);
+      const colors = Array.from({ length: CLOUD_TONES }, (_, t) => ui.color(lit ? `cloudLit${t}` : `cloud${t}`));
+      // Runs of one tone per row: a few hundred rectangles a cloud.
+      for (let y = 0; y < h; y++) {
+        let x = 0;
+        while (x < w) {
+          const t = tones[y * w + x];
+          let e = x + 1;
+          while (e < w && tones[y * w + e] === t) e++;
+          if (t >= 0) {
+            ctx.fillStyle = colors[t];
+            ctx.fillRect(x0 + x, y + 1, e - x, 1);
+          }
+          x = e;
+        }
+      }
+      if (lit) {
+        const at = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < w && y < h && tones[y * w + x] >= 0;
+        ctx.fillStyle = ui.color('halo0');
+        for (let y = -1; y < h; y++) {
+          for (let x = -1; x <= w; x++) {
+            if (!at(x, y) && (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1))) ctx.fillRect(x0 + x, y + 1, 1, 1);
+          }
+        }
+      }
+    }
   }
 
   /** Frame f of sprite `id` alone on its pixel canvas. */

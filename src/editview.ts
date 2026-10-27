@@ -9,10 +9,12 @@
 namespace SE {
   export class EditView {
     /** Screen pixels per tile before device scaling. */
-    tilePx = 16;
+    tilePx = EditView.MIN_TILE;
     /** Top-left of the viewport, in tiles. Fractional, so dragging is smooth. */
     scrollX = 0;
     scrollY = 0;
+    /** CSS px of the canvas's bottom that the stone beam covers: the camera stops with the last row above it. */
+    insetBottom = 0;
 
     /** Additive layers, indexed as in DATA_LAYERS. */
     layers = { oceans: true, biomes: true, cities: true, life: true, events: true, clouds: true };
@@ -29,7 +31,8 @@ namespace SE {
     /** A brush stroke runs: the world's progress waits with its full redraws (30–100 ms) until it ends. */
     holdWorld = false;
 
-    static readonly MIN_TILE = 10;
+    /** Below 18 px the 16 px landscape textures shrink and turn blurry (playtest 2026-10-26). */
+    static readonly MIN_TILE = 18;
     static readonly MAX_TILE = 48;
 
     private readonly tiles = new TileCache();
@@ -193,7 +196,7 @@ namespace SE {
       // shifting it, and every tile still lands on exactly the same pixels.
       const q = this.tilePx * (window.devicePixelRatio || 1);
       this.scrollX = Math.round((((this.scrollX % GRID_W) + GRID_W) % GRID_W) * q) / q;
-      const rows = this.rows;
+      const rows = this.rows - this.insetBottom / this.tilePx;
       if (rows >= GRID_H) this.scrollY = -(rows - GRID_H) / 2;
       else this.scrollY = Math.round(clamp(this.scrollY, 0, GRID_H - rows) * q) / q;
     }
@@ -420,6 +423,13 @@ namespace SE {
       if (!this.layers.life) return 0;
       const zoom = clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
       return this.bubbles.presence() * zoom * zoom;
+    }
+
+    /** How loud the birdsong should be, 0..1: once birds live on the planet, by the zoom squared like the bubbling. */
+    birdPresence(world: WorldState): number {
+      if (!this.layers.life || world.lifeCounts[Life.Avian] === 0) return 0;
+      const zoom = clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+      return zoom * zoom;
     }
 
     /**

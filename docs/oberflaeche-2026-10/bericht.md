@@ -1,10 +1,11 @@
 # Die lebendige Oberfläche: Gaia, Ranken und Magie
 
-Stand: 23. 10. 2026.
+Stand: 27. 10. 2026.
 
 Die Oberfläche lebt mit dem Planeten. Unten links schläft Gaia auf einem kahlen Felsen, bis das erste Leben entsteht.
 Mit den ersten Pflanzen wachsen Ranken aus ihrem Felsen die Navigationsleiste hinauf, blühen mit den Blütenpflanzen und
-welken in Krisen. Statusleiste und Navigationsleiste sind aus Holz, Pergament und Goldrahmen in Pixelkunst, Fenster
+welken in Krisen. Die Anzeigen oben sitzen in Pixelwolken über der Karte, die Navigationsleiste ist aus Holz, Pergament
+und Goldrahmen in Pixelkunst, Fenster
 gleiten mit Rankenzweigen herein, und vor jedem großen Evolutionsschritt zaubert Gaia einen leuchtenden DNA-Doppelstrang.
 Vorlage war das Konzept in `assets/ui/Gaia_Reborn_Living_UI_Concept/` (KI-Entwurf, nur Stilvorlage: jedes Pixel kommt
 aus einem Rezept).
@@ -39,8 +40,7 @@ aus einem Rezept).
 **Die Ranken (`src/vinegrowth.ts`, `src/vinelayer.ts`)**
 - Mit der ersten Pflanzengruppe (Meeresalgen) sprießt ein Trieb am Felsen. Mit jeder weiteren Gruppe und mit der
   Pflanzendecke an Land klettert die Ranke die Leiste hinauf, schickt Zweige zwischen die Knöpfe, bekommt Blätter und
-  Spiralen, klettert um das Logo und läuft unter der Statusleiste entlang; bei sehr grünem Planeten hängt am rechten Ende
-  der Leiste ein Blätterbüschel.
+  Spiralen und wächst oben links über die Leiste hinaus, wo zwischen den Statuswolken die Karte zu sehen ist.
 - Knospen und Blüten kommen mit den Blütenpflanzen und öffnen sich mit ihrer Verbreitung (stärker mit Bestäubern).
 - In einer Krise verblassen die Blätter, welken, werden braun und fallen taumelnd ab; mit der Erholung wachsen sie nach.
 - Ab und zu läuft eine Windwelle die Ranke hinauf; fährt die Maus über einen Knopf, zucken die Blätter daneben. Auf einem
@@ -49,13 +49,43 @@ aus einem Rezept).
   richtigen Zustand.
 
 **Statusleiste (`src/livingtopbar.ts`, `src/topbarart.ts`)**
-- Holzbalken mit Pergamentfeldern in Goldrahmen, Holzpfosten mit Messingnieten, der Schriftzug GAIA REBORN.
+- Kein Balken mehr: Jede Anzeige sitzt in einer weißen Haufenwolke, die Karte läuft unter der Leiste weiter und ist
+  neben und zwischen den Wolken zu sehen (Klicks zwischen den Wolken gehen an die Karte). Die Wolken berechnet
+  `src/cloudshape.ts` zur Laufzeit für jede Anzeige: flache Unterseite mit wandernder Schattenkante, darüber Kuppeln
+  nach einem von sieben Typen je Anzeige (Turm, Doppelturm, flache Krone, ansteigend, treibender Haufen, Congestus,
+  Haufen; das Zahnrad als kleines Wölkchen), Licht von oben links, ein voller Umriss in Schieferblau, heller zum Licht
+  hin. Hinter Symbol und Text liegen nur helle, ruhige Töne: Das Spiel misst, wo Symbol und Text jeder Anzeige wirklich
+  stehen, und die Wolke deckt genau diese Fläche. Der Inhalt sitzt etwas unter der Mitte (wie bei echten Haufenwolken
+  trägt die flache Unterseite den Text, oben ist Platz für die Kuppeln); bei 3 CSS-px je Kunstpixel (1440p) wird die
+  Leiste dafür 72 statt 60 px hoch. Jede Anzeige behält ihre Wolke, auch wenn sich ihre Breite ändert. Unter der Maus
+  oder bei offenem Fenster bekommt die Wolke einen blauen Rand und einen hellen Saum. Die Farben stehen als Rampen
+  `cloud`, `cloudLit` und `halo` in der UI-Palette. Entstanden aus drei Entwürfen, zwei Bewertungsrunden und einer
+  Verfeinerung.
+- O₂ und CO₂ zeigen die Moleküle aus der Luftzusammensetzung (`hud_air`, `hud_co2` sind `air_o2`, `air_co2` auf ihre
+  Pixel zugeschnitten).
+- Unter 10 °C Mitteltemperatur sinkt die Säule im Thermometer, und hinter ihm steht groß eine sechsstrahlige
+  Schneeflocke (`hud_temp`, 19 × 17, zwei Bilder: warm und kalt, aus `tools/uiart/snow.js`). Aus der Temperaturwolke schneit es dann ohne Pause bis hinunter zum Steinbalken: große, mittlere und
+  kleine Flocken, die taumeln und im Wind pendeln, die großen näher und schneller; je kälter, desto dichter (1,6 Flocken
+  je Sekunde knapp unter 10 °C, 5 ab −10 °C). Die Flocken fallen hinter Fenstern, Leiste, Gaia und dem Steinbalken
+  (`src/cloudsnow.ts`; nicht mit „Effekte reduzieren“).
 - Felder: Energie (Ω, mit Balken und Aufschlüsselung), Evolutionspunkte (mit Zuwachs und Aufschlüsselung), **Leben**
   (neu: belebte Fläche in %, mit Verlaufskurve), O₂ Luft, O₂ Meer, CO₂ und Temperatur (mit Verlaufskurven; die Gasfelder
   öffnen die Luftzusammensetzung), Erdzeit (Datum, Zeitalter, Zeitskala und ein kleiner Balken der Erdzeitalter mit
   Marke), Tempo (Weiter/Pause und vier Blatt-Punkte) und das Zahnrad mit dem Spielmenü.
 - Wird es eng, weichen erst die Verlaufskurven, dann die Beschriftungen, dann O₂ Meer, Temperatur, CO₂, Leben usw.; nichts
   wird abgeschnitten.
+
+**Steinbalken (`src/stonebeam.ts`)**
+- Am unteren Bildrand läuft eine Reihe flacher Steine über die ganze Breite; Gaias Felsen ist ihr linkes Ende, rechts
+  daneben steigt ein Findling zur Steinreihe ab (`beam_tile`, `beam_end` aus `tools/uiart/ground.js`). Der Balken wächst mit dem Planeten wie ihr Felsen (`groundLook`): kahl,
+  erste Flechten, Moospolster, üppig mit kleinen Blüten. Drei Steinvarianten wechseln sich ab, damit sich nichts sichtbar
+  wiederholt.
+- Die Kartenknöpfe unten rechts (Ebenen, Übersichtskarte, Zoom) sind entfallen: Zoomen mit Mausrad oder + und −, die
+  Übersichtskarte mit M oder im Menü Fenster, die **Kartenebenen** (Ebenen und Klima-Überlagerung) jetzt im Menü Fenster
+  oder mit **N**; sie öffnen unten rechts. Die Kamera hält die unterste Kartenreihe über dem Steinbalken, und ein Klick
+  auf eine Wolke geht nie an die Karte darunter (nur in den Lücken zwischen den Wolken).
+- Die Randabdunkelung der Karte (Vignette) ist weg, die Karte hat überall denselben Kontrast. Ein im Browser
+  zwischengespeichertes altes Stylesheet zeichnet sie auch nicht mehr (das Spiel schaltet sie selbst ab).
 
 **Navigationsleiste (`src/livingrail.ts`, `src/flyoutmenu.ts`)**
 - Neun Münzknöpfe: die sechs Werkzeuge (wie bisher, mit Tastenkürzel im Eck), ein Rankenknoten, dann **Evolution** (mit
@@ -96,8 +126,7 @@ aus einem Rezept).
   Feldkarte aus und wieder ein: Pfeil nach oben, solange sie zu sehen sind, nach unten, wenn sie eingeklappt sind; Hover
   und Tastaturfokus lassen sie aufleuchten. Die Wahl bleibt gespeichert (Einstellung `mapGlobe`).
 - Das Fenster ist ausgeklappt 696 px hoch, eingeklappt 455 px (ein verschobenes oder in der Größe geändertes Fenster wächst
-  und schrumpft um die Globuszeile), und steht 74 px vom rechten Rand, also links neben den Kartenknöpfen, damit es sie
-  auch auf niedrigen Bildschirmen nicht verdeckt; das Gaia-Fenster öffnet darunter.
+  und schrumpft um die Globuszeile), und steht 12 px vom rechten Rand; das Gaia-Fenster öffnet darunter.
 
 **Gaias Zauber (`src/gaiamagic.ts`, `src/dnahelix.ts`)**
 - Nur bei den neun großen Schritten: Leben entsteht, Landpflanzen, Gefäßpflanzen, erste Wälder, Blütenpflanzen, erste
@@ -127,9 +156,9 @@ Speicherfeld**; Spielstände bleiben unverändert und sehen nach dem Laden sofor
 
 ## 3. Pixelkunst und Technik
 
-- Alle 104 Sprites kommen aus Rezepten in `tools/uiart/` (`node tools/ui-atlas.js`), Vertrag `tools/uiart/catalog.js`.
-  Die Palette ist die der Landschaft plus 88 eigene Farben (Pergament, Gold, Holz, Haut, Haar, Ranken, Welken, Blüten,
-  Zauberlicht), 193 insgesamt (`tools/uiart/palette.js`). Der Atlas (512 × 533, 21 KB) steckt als Daten-URL in
+- Alle 109 Sprites kommen aus Rezepten in `tools/uiart/` (`node tools/ui-atlas.js`), Vertrag `tools/uiart/catalog.js`.
+  Die Palette ist die der Landschaft plus 105 eigene Farben (Pergament, Gold, Holz, Haut, Haar, Ranken, Welken, Blüten,
+  Zauberlicht, Wolken), 210 insgesamt (`tools/uiart/palette.js`). Der Atlas (512 × 577, 25 KB) steckt als Daten-URL in
   `src/uiatlas.ts`, damit er über `file://` ohne Server lädt.
 - Gaias Körper baut `tools/uiart/gaia-body.js` für alle Posen; ihre Posen haben ein leeres Gesicht, Augen, Brauen, Mund und
   Wangenröte setzt das Spiel an den Gesichtspunkt der Pose (zehn Augen, vier Brauen, acht Münder).
@@ -138,7 +167,7 @@ Speicherfeld**; Spielstände bleiben unverändert und sehen nach dem Laden sofor
 - Der Maßstab richtet sich nach der Navigationsleiste: Passen Leiste und Gaias Ecke nicht übereinander (bei dpr 1 unter
   etwa 752 px Fensterhöhe), rückt Gaia rechts neben die Leiste, statt dass alles auf halbe Größe schrumpft. Unter 2
   Gerätepixeln je Kunstpixel verschwinden die Tasten-Buchstaben in den Knöpfen (Kürzel stehen weiter im Tooltip).
-- Evolutionsbaum und Verlauf öffnen rechts neben der Leiste, das Gaia-Fenster links neben den Kartenknöpfen.
+- Evolutionsbaum und Verlauf öffnen rechts neben der Leiste, das Gaia-Fenster rechts unter der Übersichtskarte.
 - Alle Lagen und Größen der neuen Elemente stehen inline im Code: Ein veraltetes Stylesheet im Browser (schon einmal
   passiert) lässt nichts wachsen, schrumpfen oder überlaufen. **Nach dem Update einmal mit Strg+F5 neu laden.**
 - Keine Datei der Oberfläche greift beim Laden auf `document` oder `window` zu; das Bündel läuft weiter in Node-Tests und
@@ -155,6 +184,9 @@ Speicherfeld**; Spielstände bleiben unverändert und sehen nach dem Laden sofor
 
 - `tests/uiatlas.test.js` (Atlas aktuell, Rechtecke, keine DOM-Zugriffe beim Laden) und `tests/uimood.test.js`
   (schläft bis zum ersten Leben, erwacht genau einmal, Ranken erst ab der ersten Pflanze, ein geladener Planet erwacht nicht).
+- Die Wolken (`tests/uimood.test.js`): Bei allen gemessenen Größen (1080p, 1440p, 125 %) und Extremen liegen Symbol und
+  Text auf hellen Wolkentönen, und jede Anzeige behält ihre Wolke. Screenshots der Leiste bei 1915 × 941, 1280 × 800,
+  2560 × 1300 und 1536 × 864 (dpr 1,25); den Kältefall mit festgehaltener Temperatur (−6 °C).
 - Screenshots im headless Chrome bei 1920 × 1080, 1440 × 900, 1280 × 800, 1024 × 768 und dpr 1,25/1,5: leblos, junges Leben,
   üppig, Krise, Menüs, Werkzeugkarten, Fenster, Evolutionsbaum, Zauberablauf als Bildstreifen.
 - Fünf Gutachten (Logik, veraltetes CSS und Worker-Modus, Leistung, Bedienbarkeit, Optik); alle 22 bestätigten Befunde
@@ -170,6 +202,8 @@ Bilder (headless Chrome, dpr 1):
 ## 6. Einschränkungen
 
 - Nur im headless Chrome geprüft; andere Browser nicht.
+- Die Vorschau `node tools/ui-atlas.js --preview` zeigt noch die alte Holzleiste; ihre Sprites (`wood_tile`, `panel9`,
+  `post_tile`, `stud`, `logo`) nutzt das Spiel nicht mehr.
 - Den Klang des Zaubers hat niemand gehört (headless läuft stumm).
 - Tastaturbedienung mit echter Tab-Taste und Bildschirmleser nur per Skript geprüft.
 - Den echten Fall „neues Spiel, altes Stylesheet“ im Browser des Spielers nur nachgestellt (neue Regeln per CSSOM entfernt).

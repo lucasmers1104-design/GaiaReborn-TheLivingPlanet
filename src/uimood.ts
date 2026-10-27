@@ -83,6 +83,9 @@ namespace SE {
     trouble: null, steps: 0, generation: -1,
   };
 
+  /** The look of Gaia's rock and the stone beam beside it: 0 bare, 1 first lichen, 2 mossy, 3 lush. */
+  export const groundLook = (s: LivingState): number => (!s.awake ? 0 : s.greenery > 0.7 ? 3 : s.greenery > 0.35 ? 2 : 1);
+
   export class LivingMood {
     /** The latest state, for decorative layers that have no line to the app (window corners). */
     static current: LivingState = SLEEPING_STATE;

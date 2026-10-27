@@ -10,6 +10,7 @@
  *   oxygen way  24 × 16 framed cells (iron in the sea, O₂ in the sea, O₂ in
  *               the sky) and the 7 × 7 gold arrow between them
  *   summary     16 × 16 barometer and thermometer (a bigger hud_temp)
+ *   status bar  hud_air and hud_co2: the O₂ and CO₂ molecules cut to their pixels
  * One legend for all atoms, so an oxygen is the same red in every sprite.
  * Light from the upper left throughout.
  * ========================================================================== */
@@ -325,6 +326,8 @@ const SUMMARY = {
 };
 
 const mol = (name) => () => K.grid(MOL[name], { ...ATOMS, ...PUFF });
+/** A molecule cut to rows y0..y1 and columns x0..x1: the status bar's icon of the same atoms. */
+const cut = (name, x0, x1, y0, y1) => () => K.grid(MOL[name].slice(y0, y1 + 1).map((r) => r.slice(x0, x1 + 1)), ATOMS);
 const pair = ([rows, legend]) => () => K.grid(rows, legend);
 
 module.exports = {
@@ -334,6 +337,8 @@ module.exports = {
     air_co2: mol('co2'),
     air_ch4: mol('ch4'),
     air_h2o: mol('h2o'),
+    hud_air: cut('o2', 1, 18, 3, 9),
+    hud_co2: cut('co2', 0, 19, 3, 8),
     air_dust: pair(DUST),
     air_fe: cell('fe'),
     air_o2_sea: cell('o2_sea'),

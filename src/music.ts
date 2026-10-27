@@ -144,6 +144,8 @@ namespace SE {
   export const BUBBLE_VOLUME = 0.3;
   /** Loudest a hurricane's wind gets, with the storm in view and the camera close. */
   export const STORM_WIND_VOLUME = 0.5;
+  /** Loudest the birdsong gets, zoomed fully in once birds live on the planet; not yet tuned by ear. */
+  export const BIRDSONG_VOLUME = 0.25;
   /** How quickly an ambient loop follows the view, ms to cover most of a change. */
   const AMBIENT_EASE_MS = 1500;
 
@@ -180,6 +182,11 @@ namespace SE {
     }
   }
 
+  /** The whale's call, in assets/audio/sfx/. */
+  export const WHALE_CALL = 'animals/whale-sound';
+  /** The dolphins' whistle, in assets/audio/sfx/. */
+  export const DOLPHIN_WHISTLE = 'animals/dolphin-whistling-in-water';
+
   /** The effect volume 0..1, 0 while sound is off; the app points this at its settings. */
   export const SFX = { volume: (): number => 0 };
 
@@ -203,6 +210,10 @@ namespace SE {
     // The R.I.P. stamp (ripstamp.ts): both files peak near full scale; set below the disasters, not yet tuned by ear.
     'swipe': 0.6,
     'hit-sfx': 0.8,
+    // Whale call (whalelayer.ts, discoverytoast.ts); not yet tuned by ear.
+    [WHALE_CALL]: 0.6,
+    // Dolphin pods (dolphinlayer.ts); not yet tuned by ear.
+    [DOLPHIN_WHISTLE]: 0.5,
   };
 
   /** Where the bang sits in siren-and-nuke.mp3, after the siren: measured from the file's loudness. */

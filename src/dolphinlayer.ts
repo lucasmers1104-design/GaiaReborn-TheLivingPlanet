@@ -25,6 +25,8 @@ namespace SE {
   /** Sea temperature from which dolphins leap, °C: the tropics, about 27° either side of the equator on today's Earth. */
   export const DOLPHIN_WARM = 25;
   const SPRITE = 'dolphin_leap';
+  /** Share of leaping rounds in view that whistle: now and then, not every leap. */
+  const WHISTLE_CHANCE = 0.35;
   /** Frames per direction (east, then west). */
   const FRAMES = 16;
   /** Round length in s, staggered by marker rank. */
@@ -78,6 +80,8 @@ namespace SE {
     x: number;
     y: number;
     until: number;
+    /** The round whose whistle was already rolled. */
+    called: number;
   }
 
   export class DolphinLayer {
@@ -120,7 +124,7 @@ namespace SE {
         const period = PERIOD_MIN + (PERIOD_MAX - PERIOD_MIN) * m.rank;
         let pod = this.pods.get(m);
         if (!pod) {
-          pod = { tile: m.tile, flip: m.flip, offset: Math.random() * period - clock, wait: NaN, seen: 0, round: NaN, x: 0, y: 0, until: 0 };
+          pod = { tile: m.tile, flip: m.flip, offset: Math.random() * period - clock, wait: NaN, seen: 0, round: NaN, x: 0, y: 0, until: 0, called: NaN };
           this.pods.set(m, pod);
         }
         const t = clock + pod.offset;
@@ -142,6 +146,10 @@ namespace SE {
         if (rx > GRID_W - 4) rx -= GRID_W;
         const ry = ((pod.tile / GRID_W) | 0) - cam.scrollY;
         if (rx < -4 || rx > cols + 3 || ry < -2 || ry > rows + 2) continue;
+        if (pod.called !== round) {
+          pod.called = round;
+          if (Math.random() < WHISTLE_CHANCE) playSfx(DOLPHIN_WHISTLE, clamp((cam.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1) ** 2);
+        }
 
         const dir = pod.flip ? -1 : 1;
         const lead = Math.round(cam.scrollX + rx) * 16 + 8 - dir * mid;

@@ -1701,7 +1701,7 @@ var SE;
     ];
     SE.TOOL_HINTS = [
         'Tippe auf ein Feld, um Lebensraum, Arten und Klima zu sehen.',
-        'Ziehe die Karte oder fahre mit W A S D. Das Mausrad zoomt.',
+        'Ziehe die Karte oder fahre mit W A S D. Mausrad oder + und − zoomen.',
         'Formt das Gelände mit dem Pinsel: hebt Land aus dem Meer oder senkt es ab.',
         'Siedelt eine entwickelte Pflanzengruppe in einem 5 × 5-Feld an, wo sie wachsen kann.',
         'Siedelt eine entwickelte Tiergruppe, eine Stadt oder einen Terraformer an.',
@@ -53799,6 +53799,8 @@ var SE;
     /** Blowhole, snout and fluke in the east frames when the catalog's `mouth` lacks them, as shares of w and h. */
     const DEFAULT_POINTS = [0.62, 0.3, 0.92, 0.5, 0.15, 0.5];
     const WORLD_PX = SE.GRID_W * 16;
+    /** Share of surfacings in view that call: now and then, not every blow. */
+    const CALL_CHANCE = 0.35;
     /** The pixel whale for a Cetacean stage, or null where the SVG icon stays (early stages, dolphins, specialists). */
     function whaleSprite(stage, specialist) {
         if (specialist)
@@ -53899,7 +53901,7 @@ var SE;
                 if (!s) {
                     // Anywhere in its cycle; one that joins after the boil stays under until its next cycle (decide).
                     const offset = Math.random() * period - clock;
-                    s = { tile: m.tile, flip: m.flip, offset, cycle: NaN, under: true, x0: 0, x1: 0, y0: 0, y1: 0, seen: 0, holds: false };
+                    s = { tile: m.tile, flip: m.flip, offset, cycle: NaN, under: true, x0: 0, x1: 0, y0: 0, y1: 0, seen: 0, holds: false, called: NaN };
                     this.swims.set(m, s);
                 }
                 s.seen = stamp;
@@ -53965,6 +53967,11 @@ var SE;
                 ctx.setTransform(1, 0, 0, 1, 0, 0);
                 if (ph.blowAge < 0)
                     continue;
+                if (s.called !== cycle) {
+                    s.called = cycle;
+                    if (Math.random() < CALL_CHANCE)
+                        SE.playSfx(SE.WHALE_CALL, SE.clamp((cam.tilePx - SE.EditView.MIN_TILE) / (SE.EditView.MAX_TILE - SE.EditView.MIN_TILE), 0, 1) ** 2);
+                }
                 const bf = blowFrame(ph.blowAge);
                 if (bf < 0)
                     continue;
@@ -54040,6 +54047,8 @@ var SE;
     /** Sea temperature from which dolphins leap, °C: the tropics, about 27° either side of the equator on today's Earth. */
     SE.DOLPHIN_WARM = 25;
     const SPRITE = 'dolphin_leap';
+    /** Share of leaping rounds in view that whistle: now and then, not every leap. */
+    const WHISTLE_CHANCE = 0.35;
     /** Frames per direction (east, then west). */
     const FRAMES = 16;
     /** Round length in s, staggered by marker rank. */
@@ -54125,7 +54134,7 @@ var SE;
                 const period = PERIOD_MIN + (PERIOD_MAX - PERIOD_MIN) * m.rank;
                 let pod = this.pods.get(m);
                 if (!pod) {
-                    pod = { tile: m.tile, flip: m.flip, offset: Math.random() * period - clock, wait: NaN, seen: 0, round: NaN, x: 0, y: 0, until: 0 };
+                    pod = { tile: m.tile, flip: m.flip, offset: Math.random() * period - clock, wait: NaN, seen: 0, round: NaN, x: 0, y: 0, until: 0, called: NaN };
                     this.pods.set(m, pod);
                 }
                 const t = clock + pod.offset;
@@ -54151,6 +54160,11 @@ var SE;
                 const ry = ((pod.tile / SE.GRID_W) | 0) - cam.scrollY;
                 if (rx < -4 || rx > cols + 3 || ry < -2 || ry > rows + 2)
                     continue;
+                if (pod.called !== round) {
+                    pod.called = round;
+                    if (Math.random() < WHISTLE_CHANCE)
+                        SE.playSfx(SE.DOLPHIN_WHISTLE, SE.clamp((cam.tilePx - SE.EditView.MIN_TILE) / (SE.EditView.MAX_TILE - SE.EditView.MIN_TILE), 0, 1) ** 2);
+                }
                 const dir = pod.flip ? -1 : 1;
                 const lead = Math.round(cam.scrollX + rx) * 16 + 8 - dir * mid;
                 const cy = Math.round(cam.scrollY + ry) * 16 + 8;
@@ -59635,10 +59649,12 @@ var SE;
     class EditView {
         constructor(canvas) {
             /** Screen pixels per tile before device scaling. */
-            this.tilePx = 16;
+            this.tilePx = EditView.MIN_TILE;
             /** Top-left of the viewport, in tiles. Fractional, so dragging is smooth. */
             this.scrollX = 0;
             this.scrollY = 0;
+            /** CSS px of the canvas's bottom that the stone beam covers: the camera stops with the last row above it. */
+            this.insetBottom = 0;
             /** Additive layers, indexed as in DATA_LAYERS. */
             this.layers = { oceans: true, biomes: true, cities: true, life: true, events: true, clouds: true };
             /** The single active climate overlay. */
@@ -59804,7 +59820,7 @@ var SE;
             // shifting it, and every tile still lands on exactly the same pixels.
             const q = this.tilePx * (window.devicePixelRatio || 1);
             this.scrollX = Math.round((((this.scrollX % SE.GRID_W) + SE.GRID_W) % SE.GRID_W) * q) / q;
-            const rows = this.rows;
+            const rows = this.rows - this.insetBottom / this.tilePx;
             if (rows >= SE.GRID_H)
                 this.scrollY = -(rows - SE.GRID_H) / 2;
             else
@@ -60036,6 +60052,13 @@ var SE;
             const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
             return this.bubbles.presence() * zoom * zoom;
         }
+        /** How loud the birdsong should be, 0..1: once birds live on the planet, by the zoom squared like the bubbling. */
+        birdPresence(world) {
+            if (!this.layers.life || world.lifeCounts[SE.Life.Avian] === 0)
+                return 0;
+            const zoom = SE.clamp((this.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1);
+            return zoom * zoom;
+        }
         /**
          * How loud a hurricane's wind should be, 0..1: the strongest storm the
          * effect layer drew in view (fxstorm.ts) in the last half second, softer
@@ -60103,7 +60126,8 @@ var SE;
             ctx.lineCap = 'butt';
         }
     }
-    EditView.MIN_TILE = 10;
+    /** Below 18 px the 16 px landscape textures shrink and turn blurry (playtest 2026-10-26). */
+    EditView.MIN_TILE = 18;
     EditView.MAX_TILE = 48;
     SE.EditView = EditView;
 })(SE || (SE = {}));
@@ -60892,8 +60916,8 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    SE.UI_MANIFEST = { "version": 1, "width": 512, "height": 533, "sprites": { "gaia_prone": { "name": "Gaia liegt auf dem Bauch, auf die Ellbogen gestützt, und schaut zur Karte (Ruhe: Atmen, Haar weht)", "w": 64, "h": 48, "fps": 4, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27] }, "layout": null, "placeholder": false, "frames": [{ "x": 234, "y": 0, "w": 64, "h": 48 }, { "x": 298, "y": 0, "w": 64, "h": 48 }, { "x": 362, "y": 0, "w": 64, "h": 48 }, { "x": 426, "y": 0, "w": 64, "h": 48 }] }, "gaia_eyes": { "name": "Augen: 0 offen nach rechts, 1 offen nach vorn, 2 offen nach oben, 3 halb, 4 zu, 5 fröhlich ^^, 6 traurig zu, 7 staunend weit, 8 tränennass, 9 nach unten", "w": 12, "h": 5, "fps": 0, "loop": 10, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [0, 0] }, "layout": null, "placeholder": false, "frames": [{ "x": 450, "y": 520, "w": 12, "h": 5 }, { "x": 462, "y": 520, "w": 12, "h": 5 }, { "x": 474, "y": 520, "w": 12, "h": 5 }, { "x": 486, "y": 520, "w": 12, "h": 5 }, { "x": 498, "y": 520, "w": 12, "h": 5 }, { "x": 0, "y": 528, "w": 12, "h": 5 }, { "x": 12, "y": 528, "w": 12, "h": 5 }, { "x": 24, "y": 528, "w": 12, "h": 5 }, { "x": 36, "y": 528, "w": 12, "h": 5 }, { "x": 48, "y": 528, "w": 12, "h": 5 }] }, "gaia_brows": { "name": "Brauen: 0 ruhig, 1 gehoben, 2 besorgt (innen hoch), 3 traurig (außen tief)", "w": 12, "h": 2, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [0, -3] }, "layout": null, "placeholder": false, "frames": [{ "x": 233, "y": 528, "w": 12, "h": 2 }, { "x": 245, "y": 528, "w": 12, "h": 2 }, { "x": 257, "y": 528, "w": 12, "h": 2 }, { "x": 269, "y": 528, "w": 12, "h": 2 }] }, "gaia_mouth": { "name": "Mund: 0 ruhig, 1 Lächeln, 2 offenes Lachen, 3 staunendes o, 4 Schmollen, 5 zittrig besorgt, 6 schlafend, 7 traurig offen", "w": 6, "h": 3, "fps": 0, "loop": 8, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [4, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 146, "y": 528, "w": 6, "h": 3 }, { "x": 152, "y": 528, "w": 6, "h": 3 }, { "x": 158, "y": 528, "w": 6, "h": 3 }, { "x": 164, "y": 528, "w": 6, "h": 3 }, { "x": 170, "y": 528, "w": 6, "h": 3 }, { "x": 176, "y": 528, "w": 6, "h": 3 }, { "x": 182, "y": 528, "w": 6, "h": 3 }, { "x": 188, "y": 528, "w": 6, "h": 3 }] }, "gaia_blush": { "name": "Wangenröte", "w": 12, "h": 1, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [0, 4] }, "layout": null, "placeholder": false, "frames": [{ "x": 281, "y": 528, "w": 12, "h": 1 }] }, "gaia_sleep": { "name": "Gaia schläft zusammengerollt: 0–3 atmen, 4–5 regt sich im Schlaf", "w": 64, "h": 48, "fps": 2, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "zzz": [56, 19] }, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 83, "w": 64, "h": 48 }, { "x": 64, "y": 83, "w": 64, "h": 48 }, { "x": 128, "y": 83, "w": 64, "h": 48 }, { "x": 192, "y": 83, "w": 64, "h": 48 }, { "x": 256, "y": 83, "w": 64, "h": 48 }, { "x": 320, "y": 83, "w": 64, "h": 48 }] }, "gaia_wake": { "name": "Gaia erwacht: blinzelt, hebt den Kopf, schaut sich um, gähnt, stützt sich auf", "w": 64, "h": 48, "fps": 5, "loop": 14, "ax": 32, "ay": 47, "anchor": "foot", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 384, "y": 83, "w": 64, "h": 48 }, { "x": 448, "y": 83, "w": 64, "h": 48 }, { "x": 0, "y": 131, "w": 64, "h": 48 }, { "x": 64, "y": 131, "w": 64, "h": 48 }, { "x": 128, "y": 131, "w": 64, "h": 48 }, { "x": 192, "y": 131, "w": 64, "h": 48 }, { "x": 256, "y": 131, "w": 64, "h": 48 }, { "x": 320, "y": 131, "w": 64, "h": 48 }, { "x": 384, "y": 131, "w": 64, "h": 48 }, { "x": 448, "y": 131, "w": 64, "h": 48 }, { "x": 0, "y": 179, "w": 64, "h": 48 }, { "x": 64, "y": 179, "w": 64, "h": 48 }, { "x": 128, "y": 179, "w": 64, "h": 48 }, { "x": 192, "y": 179, "w": 64, "h": 48 }] }, "gaia_kick": { "name": "Freude: auf dem Bauch, die Füße schwingen, das Haar wippt", "w": 64, "h": 48, "fps": 8, "loop": 6, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27] }, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 179, "w": 64, "h": 48 }, { "x": 320, "y": 179, "w": 64, "h": 48 }, { "x": 384, "y": 179, "w": 64, "h": 48 }, { "x": 448, "y": 179, "w": 64, "h": 48 }, { "x": 0, "y": 227, "w": 64, "h": 48 }, { "x": 64, "y": 227, "w": 64, "h": 48 }] }, "gaia_chin": { "name": "Sorge: Kinn in die Hände gestützt, Schultern hochgezogen", "w": 64, "h": 48, "fps": 3, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27] }, "layout": null, "placeholder": false, "frames": [{ "x": 128, "y": 227, "w": 64, "h": 48 }, { "x": 192, "y": 227, "w": 64, "h": 48 }, { "x": 256, "y": 227, "w": 64, "h": 48 }, { "x": 320, "y": 227, "w": 64, "h": 48 }] }, "gaia_slump": { "name": "Trauer, Erschöpfung: Kopf auf den Armen, Haar und Kleid welk, langsamer Atem", "w": 64, "h": 48, "fps": 2, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 32] }, "layout": null, "placeholder": false, "frames": [{ "x": 384, "y": 227, "w": 64, "h": 48 }, { "x": 448, "y": 227, "w": 64, "h": 48 }, { "x": 0, "y": 275, "w": 64, "h": 48 }, { "x": 64, "y": 275, "w": 64, "h": 48 }] }, "gaia_lookup": { "name": "Hoffnung: hebt den Kopf zum Himmel, eine Hand halb erhoben", "w": 64, "h": 48, "fps": 4, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 25] }, "layout": null, "placeholder": false, "frames": [{ "x": 128, "y": 275, "w": 64, "h": 48 }, { "x": 192, "y": 275, "w": 64, "h": 48 }, { "x": 256, "y": 275, "w": 64, "h": 48 }, { "x": 320, "y": 275, "w": 64, "h": 48 }] }, "gaia_magic_up": { "name": "Zauber: hebt die Hand", "w": 64, "h": 48, "fps": 8, "loop": 6, "ax": 32, "ay": 47, "anchor": "foot", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 384, "y": 275, "w": 64, "h": 48 }, { "x": 448, "y": 275, "w": 64, "h": 48 }, { "x": 0, "y": 323, "w": 64, "h": 48 }, { "x": 64, "y": 323, "w": 64, "h": 48 }, { "x": 128, "y": 323, "w": 64, "h": 48 }, { "x": 192, "y": 323, "w": 64, "h": 48 }] }, "gaia_magic_hold": { "name": "Zauber: hält die Hand erhoben, Haar schwebt", "w": 64, "h": 48, "fps": 5, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27], "hand": [61, 19] }, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 323, "w": 64, "h": 48 }, { "x": 320, "y": 323, "w": 64, "h": 48 }, { "x": 384, "y": 323, "w": 64, "h": 48 }, { "x": 448, "y": 323, "w": 64, "h": 48 }] }, "gaia_magic_down": { "name": "Zauber: senkt die Hand", "w": 64, "h": 48, "fps": 8, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 371, "w": 64, "h": 48 }, { "x": 64, "y": 371, "w": 64, "h": 48 }, { "x": 128, "y": 371, "w": 64, "h": 48 }, { "x": 192, "y": 371, "w": 64, "h": 48 }] }, "gaia_orb": { "name": "Leuchtende kleine Weltkugel: dreht sich, pulsiert", "w": 15, "h": 15, "fps": 8, "loop": 16, "ax": 7, "ay": 7, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 383, "y": 445, "w": 15, "h": 15 }, { "x": 398, "y": 445, "w": 15, "h": 15 }, { "x": 413, "y": 445, "w": 15, "h": 15 }, { "x": 428, "y": 445, "w": 15, "h": 15 }, { "x": 443, "y": 445, "w": 15, "h": 15 }, { "x": 458, "y": 445, "w": 15, "h": 15 }, { "x": 473, "y": 445, "w": 15, "h": 15 }, { "x": 488, "y": 445, "w": 15, "h": 15 }, { "x": 0, "y": 469, "w": 15, "h": 15 }, { "x": 15, "y": 469, "w": 15, "h": 15 }, { "x": 30, "y": 469, "w": 15, "h": 15 }, { "x": 45, "y": 469, "w": 15, "h": 15 }, { "x": 60, "y": 469, "w": 15, "h": 15 }, { "x": 75, "y": 469, "w": 15, "h": 15 }, { "x": 90, "y": 469, "w": 15, "h": 15 }, { "x": 105, "y": 469, "w": 15, "h": 15 }] }, "gaia_orb_flare": { "name": "Die Kugel lädt sich auf: Lichtring schwillt an", "w": 25, "h": 25, "fps": 10, "loop": 6, "ax": 12, "ay": 12, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 348, "y": 419, "w": 25, "h": 25 }, { "x": 373, "y": 419, "w": 25, "h": 25 }, { "x": 398, "y": 419, "w": 25, "h": 25 }, { "x": 423, "y": 419, "w": 25, "h": 25 }, { "x": 448, "y": 419, "w": 25, "h": 25 }, { "x": 473, "y": 419, "w": 25, "h": 25 }] }, "rock": { "name": "Gaias Felsen: 0 kahl, 1 erste Flechten, 2 bemoost, 3 üppig", "w": 80, "h": 26, "fps": 0, "loop": 4, "ax": 40, "ay": 25, "anchor": "foot", "points": { "bed": [40, 6], "root": [1, 11] }, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 419, "w": 80, "h": 26 }, { "x": 80, "y": 419, "w": 80, "h": 26 }, { "x": 160, "y": 419, "w": 80, "h": 26 }, { "x": 240, "y": 419, "w": 80, "h": 26 }] }, "zzz": { "name": "Schlaf-Z, steigt auf und verblasst", "w": 7, "h": 7, "fps": 3, "loop": 4, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 26, "y": 520, "w": 7, "h": 7 }, { "x": 33, "y": 520, "w": 7, "h": 7 }, { "x": 40, "y": 520, "w": 7, "h": 7 }, { "x": 47, "y": 520, "w": 7, "h": 7 }] }, "tear": { "name": "Träne, fällt", "w": 3, "h": 5, "fps": 6, "loop": 4, "ax": 1, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 125, "y": 528, "w": 3, "h": 5 }, { "x": 128, "y": 528, "w": 3, "h": 5 }, { "x": 131, "y": 528, "w": 3, "h": 5 }, { "x": 134, "y": 528, "w": 3, "h": 5 }] }, "sweat": { "name": "Schweißtropfen (Hitze, Sorge)", "w": 3, "h": 5, "fps": 6, "loop": 3, "ax": 1, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 137, "y": 528, "w": 3, "h": 5 }, { "x": 140, "y": 528, "w": 3, "h": 5 }, { "x": 143, "y": 528, "w": 3, "h": 5 }] }, "sparkle": { "name": "Funkeln: vierzackiger Stern", "w": 7, "h": 7, "fps": 8, "loop": 4, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 54, "y": 520, "w": 7, "h": 7 }, { "x": 61, "y": 520, "w": 7, "h": 7 }, { "x": 68, "y": 520, "w": 7, "h": 7 }, { "x": 75, "y": 520, "w": 7, "h": 7 }] }, "heart": { "name": "Herzchen, ploppt auf", "w": 7, "h": 6, "fps": 6, "loop": 3, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 257, "y": 520, "w": 7, "h": 6 }, { "x": 264, "y": 520, "w": 7, "h": 6 }, { "x": 271, "y": 520, "w": 7, "h": 6 }] }, "leaf_s_r": { "name": "Blatt klein, nach rechts", "w": 7, "h": 6, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 5] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 278, "y": 520, "w": 7, "h": 6 }, { "x": 285, "y": 520, "w": 7, "h": 6 }, { "x": 292, "y": 520, "w": 7, "h": 6 }, { "x": 299, "y": 520, "w": 7, "h": 6 }, { "x": 306, "y": 520, "w": 7, "h": 6 }, { "x": 313, "y": 520, "w": 7, "h": 6 }, { "x": 320, "y": 520, "w": 7, "h": 6 }, { "x": 327, "y": 520, "w": 7, "h": 6 }, { "x": 334, "y": 520, "w": 7, "h": 6 }, { "x": 341, "y": 520, "w": 7, "h": 6 }, { "x": 348, "y": 520, "w": 7, "h": 6 }, { "x": 355, "y": 520, "w": 7, "h": 6 }] }, "leaf_s_l": { "name": "Blatt klein, nach links", "w": 7, "h": 7, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [5, 6] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 82, "y": 520, "w": 7, "h": 7 }, { "x": 89, "y": 520, "w": 7, "h": 7 }, { "x": 96, "y": 520, "w": 7, "h": 7 }, { "x": 103, "y": 520, "w": 7, "h": 7 }, { "x": 110, "y": 520, "w": 7, "h": 7 }, { "x": 117, "y": 520, "w": 7, "h": 7 }, { "x": 124, "y": 520, "w": 7, "h": 7 }, { "x": 131, "y": 520, "w": 7, "h": 7 }, { "x": 138, "y": 520, "w": 7, "h": 7 }, { "x": 145, "y": 520, "w": 7, "h": 7 }, { "x": 152, "y": 520, "w": 7, "h": 7 }, { "x": 159, "y": 520, "w": 7, "h": 7 }] }, "leaf_m_r": { "name": "Blatt mittel, nach rechts", "w": 9, "h": 9, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 8] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 93, "y": 510, "w": 9, "h": 9 }, { "x": 102, "y": 510, "w": 9, "h": 9 }, { "x": 111, "y": 510, "w": 9, "h": 9 }, { "x": 120, "y": 510, "w": 9, "h": 9 }, { "x": 129, "y": 510, "w": 9, "h": 9 }, { "x": 138, "y": 510, "w": 9, "h": 9 }, { "x": 147, "y": 510, "w": 9, "h": 9 }, { "x": 156, "y": 510, "w": 9, "h": 9 }, { "x": 165, "y": 510, "w": 9, "h": 9 }, { "x": 174, "y": 510, "w": 9, "h": 9 }, { "x": 183, "y": 510, "w": 9, "h": 9 }, { "x": 192, "y": 510, "w": 9, "h": 9 }] }, "leaf_m_l": { "name": "Blatt mittel, nach links", "w": 9, "h": 10, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [7, 9] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 410, "y": 498, "w": 9, "h": 10 }, { "x": 419, "y": 498, "w": 9, "h": 10 }, { "x": 428, "y": 498, "w": 9, "h": 10 }, { "x": 437, "y": 498, "w": 9, "h": 10 }, { "x": 446, "y": 498, "w": 9, "h": 10 }, { "x": 455, "y": 498, "w": 9, "h": 10 }, { "x": 464, "y": 498, "w": 9, "h": 10 }, { "x": 473, "y": 498, "w": 9, "h": 10 }, { "x": 482, "y": 498, "w": 9, "h": 10 }, { "x": 491, "y": 498, "w": 9, "h": 10 }, { "x": 500, "y": 498, "w": 9, "h": 10 }, { "x": 0, "y": 510, "w": 9, "h": 10 }] }, "leaf_l_r": { "name": "Blatt groß, nach rechts", "w": 12, "h": 11, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 10] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 78, "y": 498, "w": 12, "h": 11 }, { "x": 90, "y": 498, "w": 12, "h": 11 }, { "x": 102, "y": 498, "w": 12, "h": 11 }, { "x": 114, "y": 498, "w": 12, "h": 11 }, { "x": 126, "y": 498, "w": 12, "h": 11 }, { "x": 138, "y": 498, "w": 12, "h": 11 }, { "x": 150, "y": 498, "w": 12, "h": 11 }, { "x": 162, "y": 498, "w": 12, "h": 11 }, { "x": 174, "y": 498, "w": 12, "h": 11 }, { "x": 186, "y": 498, "w": 12, "h": 11 }, { "x": 198, "y": 498, "w": 12, "h": 11 }, { "x": 210, "y": 498, "w": 12, "h": 11 }] }, "leaf_l_l": { "name": "Blatt groß, nach links", "w": 11, "h": 12, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [10, 11] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 440, "y": 484, "w": 11, "h": 12 }, { "x": 451, "y": 484, "w": 11, "h": 12 }, { "x": 462, "y": 484, "w": 11, "h": 12 }, { "x": 473, "y": 484, "w": 11, "h": 12 }, { "x": 484, "y": 484, "w": 11, "h": 12 }, { "x": 495, "y": 484, "w": 11, "h": 12 }, { "x": 0, "y": 498, "w": 11, "h": 12 }, { "x": 11, "y": 498, "w": 11, "h": 12 }, { "x": 22, "y": 498, "w": 11, "h": 12 }, { "x": 33, "y": 498, "w": 11, "h": 12 }, { "x": 44, "y": 498, "w": 11, "h": 12 }, { "x": 55, "y": 498, "w": 11, "h": 12 }] }, "leaf_hang": { "name": "Hängendes Blatt (unter der Statusleiste)", "w": 7, "h": 10, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [3, 0] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 9, "y": 510, "w": 7, "h": 10 }, { "x": 16, "y": 510, "w": 7, "h": 10 }, { "x": 23, "y": 510, "w": 7, "h": 10 }, { "x": 30, "y": 510, "w": 7, "h": 10 }, { "x": 37, "y": 510, "w": 7, "h": 10 }, { "x": 44, "y": 510, "w": 7, "h": 10 }, { "x": 51, "y": 510, "w": 7, "h": 10 }, { "x": 58, "y": 510, "w": 7, "h": 10 }, { "x": 65, "y": 510, "w": 7, "h": 10 }, { "x": 72, "y": 510, "w": 7, "h": 10 }, { "x": 79, "y": 510, "w": 7, "h": 10 }, { "x": 86, "y": 510, "w": 7, "h": 10 }] }, "flower_w": { "name": "Blüte weiß mit gelber Mitte", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 201, "y": 510, "w": 9, "h": 9 }, { "x": 210, "y": 510, "w": 9, "h": 9 }, { "x": 219, "y": 510, "w": 9, "h": 9 }, { "x": 228, "y": 510, "w": 9, "h": 9 }, { "x": 237, "y": 510, "w": 9, "h": 9 }, { "x": 246, "y": 510, "w": 9, "h": 9 }] }, "flower_p": { "name": "Blüte rosa", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 255, "y": 510, "w": 9, "h": 9 }, { "x": 264, "y": 510, "w": 9, "h": 9 }, { "x": 273, "y": 510, "w": 9, "h": 9 }, { "x": 282, "y": 510, "w": 9, "h": 9 }, { "x": 291, "y": 510, "w": 9, "h": 9 }, { "x": 300, "y": 510, "w": 9, "h": 9 }] }, "flower_y": { "name": "Blüte gelb", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 309, "y": 510, "w": 9, "h": 9 }, { "x": 318, "y": 510, "w": 9, "h": 9 }, { "x": 327, "y": 510, "w": 9, "h": 9 }, { "x": 336, "y": 510, "w": 9, "h": 9 }, { "x": 345, "y": 510, "w": 9, "h": 9 }, { "x": 354, "y": 510, "w": 9, "h": 9 }] }, "flower_b": { "name": "Blüte blauviolett", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 363, "y": 510, "w": 9, "h": 9 }, { "x": 372, "y": 510, "w": 9, "h": 9 }, { "x": 381, "y": 510, "w": 9, "h": 9 }, { "x": 390, "y": 510, "w": 9, "h": 9 }, { "x": 399, "y": 510, "w": 9, "h": 9 }, { "x": 408, "y": 510, "w": 9, "h": 9 }] }, "curl_r": { "name": "Rankenspirale, nach rechts", "w": 6, "h": 6, "fps": 0, "loop": 3, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 362, "y": 520, "w": 6, "h": 6 }, { "x": 368, "y": 520, "w": 6, "h": 6 }, { "x": 374, "y": 520, "w": 6, "h": 6 }] }, "curl_l": { "name": "Rankenspirale, nach links", "w": 6, "h": 6, "fps": 0, "loop": 3, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [5, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 380, "y": 520, "w": 6, "h": 6 }, { "x": 386, "y": 520, "w": 6, "h": 6 }, { "x": 392, "y": 520, "w": 6, "h": 6 }] }, "knot": { "name": "Rankenknoten zwischen den Knopfgruppen", "w": 21, "h": 8, "fps": 0, "loop": 3, "ax": 10, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 462, "y": 510, "w": 21, "h": 8 }, { "x": 483, "y": 510, "w": 21, "h": 8 }, { "x": 0, "y": 520, "w": 21, "h": 8 }] }, "leaf_fall": { "name": "Welkes Blatt, fällt taumelnd", "w": 5, "h": 5, "fps": 8, "loop": 4, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 60, "y": 528, "w": 5, "h": 5 }, { "x": 65, "y": 528, "w": 5, "h": 5 }, { "x": 70, "y": 528, "w": 5, "h": 5 }, { "x": 75, "y": 528, "w": 5, "h": 5 }] }, "firefly": { "name": "Glühwürmchen / Pollenlicht", "w": 3, "h": 3, "fps": 6, "loop": 4, "ax": 1, "ay": 1, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 194, "y": 528, "w": 3, "h": 3 }, { "x": 197, "y": 528, "w": 3, "h": 3 }, { "x": 200, "y": 528, "w": 3, "h": 3 }, { "x": 203, "y": 528, "w": 3, "h": 3 }] }, "rail_btn": { "name": "Navigationsknopf: normal, Hover, gedrückt, gewählt, gewählt+Hover, gesperrt", "w": 24, "h": 24, "fps": 0, "loop": 6, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "icon": [5, 4] }, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 445, "w": 24, "h": 24 }, { "x": 24, "y": 445, "w": 24, "h": 24 }, { "x": 48, "y": 445, "w": 24, "h": 24 }, { "x": 72, "y": 445, "w": 24, "h": 24 }, { "x": 96, "y": 445, "w": 24, "h": 24 }, { "x": 120, "y": 445, "w": 24, "h": 24 }] }, "rail_focus": { "name": "Tastatur-Fokusring um den Knopf (golden gepunktet)", "w": 28, "h": 26, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [-2, -2] }, "layout": null, "placeholder": false, "frames": [{ "x": 320, "y": 419, "w": 28, "h": 26 }] }, "rail_tab": { "name": "Pfeillasche am gewählten Knopf: 0 ruhig, 1 leuchtend", "w": 6, "h": 12, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [23, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 66, "y": 498, "w": 6, "h": 12 }, { "x": 72, "y": 498, "w": 6, "h": 12 }] }, "badge": { "name": "Zählabzeichen: 0 ruhig, 1–3 Puls", "w": 11, "h": 11, "fps": 8, "loop": 4, "ax": 5, "ay": 5, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 222, "y": 498, "w": 11, "h": 11 }, { "x": 233, "y": 498, "w": 11, "h": 11 }, { "x": 244, "y": 498, "w": 11, "h": 11 }, { "x": 255, "y": 498, "w": 11, "h": 11 }] }, "digits": { "name": "Ziffern 0–9 und + für das Abzeichen (dunkle Tinte)", "w": 4, "h": 6, "fps": 0, "loop": 11, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 398, "y": 520, "w": 4, "h": 6 }, { "x": 402, "y": 520, "w": 4, "h": 6 }, { "x": 406, "y": 520, "w": 4, "h": 6 }, { "x": 410, "y": 520, "w": 4, "h": 6 }, { "x": 414, "y": 520, "w": 4, "h": 6 }, { "x": 418, "y": 520, "w": 4, "h": 6 }, { "x": 422, "y": 520, "w": 4, "h": 6 }, { "x": 426, "y": 520, "w": 4, "h": 6 }, { "x": 430, "y": 520, "w": 4, "h": 6 }, { "x": 434, "y": 520, "w": 4, "h": 6 }, { "x": 438, "y": 520, "w": 4, "h": 6 }] }, "wood_tile": { "name": "Holzbalken der Statusleiste, nahtlos waagerecht", "w": 32, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 195, "y": 445, "w": 32, "h": 16 }] }, "parch_tile": { "name": "Pergament, nahtlos", "w": 16, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 335, "y": 445, "w": 16, "h": 16 }] }, "panel9": { "name": "Pergamentfeld mit Goldrand (9-Slice, Ecken 4 × 4): 0 normal, 1 beleuchtet", "w": 12, "h": 12, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 224, "y": 484, "w": 12, "h": 12 }, { "x": 236, "y": 484, "w": 12, "h": 12 }] }, "post_tile": { "name": "Holzpfosten zwischen den Feldern, nahtlos senkrecht", "w": 5, "h": 8, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 21, "y": 520, "w": 5, "h": 8 }] }, "stud": { "name": "Messingniete", "w": 5, "h": 5, "fps": 0, "loop": 1, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 80, "y": 528, "w": 5, "h": 5 }] }, "logo": { "name": "Schriftzug GAIA REBORN", "w": 90, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 120, "y": 469, "w": 90, "h": 14 }] }, "win_corner_l": { "name": "Rankenzweig an der linken oberen Fensterecke: 0–3 wächst", "w": 18, "h": 14, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 330, "y": 469, "w": 18, "h": 14 }, { "x": 348, "y": 469, "w": 18, "h": 14 }, { "x": 366, "y": 469, "w": 18, "h": 14 }, { "x": 384, "y": 469, "w": 18, "h": 14 }] }, "win_corner_r": { "name": "Rankenzweig an der rechten oberen Fensterecke: 0–3 wächst", "w": 18, "h": 14, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 402, "y": 469, "w": 18, "h": 14 }, { "x": 420, "y": 469, "w": 18, "h": 14 }, { "x": 438, "y": 469, "w": 18, "h": 14 }, { "x": 456, "y": 469, "w": 18, "h": 14 }] }, "fold_tab": { "name": "Klapplasche: 0 Pfeil hoch, 1 hoch beleuchtet, 2 Pfeil runter, 3 runter beleuchtet", "w": 21, "h": 10, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 266, "y": 498, "w": 21, "h": 10 }, { "x": 287, "y": 498, "w": 21, "h": 10 }, { "x": 308, "y": 498, "w": 21, "h": 10 }, { "x": 329, "y": 498, "w": 21, "h": 10 }] }, "ico_examine": { "name": "Lupe (Untersuchen)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 474, "y": 469, "w": 14, "h": 14 }, { "x": 488, "y": 469, "w": 14, "h": 14 }] }, "ico_move": { "name": "Hand (Verschieben)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 484, "w": 14, "h": 14 }, { "x": 14, "y": 484, "w": 14, "h": 14 }] }, "ico_altitude": { "name": "Berg mit Pfeilen (Höhe ändern)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 28, "y": 484, "w": 14, "h": 14 }, { "x": 42, "y": 484, "w": 14, "h": 14 }] }, "ico_plant": { "name": "Keimling (Pflanzen)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 56, "y": 484, "w": 14, "h": 14 }, { "x": 70, "y": 484, "w": 14, "h": 14 }] }, "ico_life": { "name": "Pfote (Leben ansiedeln)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 84, "y": 484, "w": 14, "h": 14 }, { "x": 98, "y": 484, "w": 14, "h": 14 }] }, "ico_event": { "name": "Blitz (Ereignis auslösen)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 112, "y": 484, "w": 14, "h": 14 }, { "x": 126, "y": 484, "w": 14, "h": 14 }] }, "ico_evolution": { "name": "DNA-Doppelstrang (Evolution)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 140, "y": 484, "w": 14, "h": 14 }, { "x": 154, "y": 484, "w": 14, "h": 14 }] }, "ico_planet": { "name": "Globus (Planet: Modelle und Diagramme)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 168, "y": 484, "w": 14, "h": 14 }, { "x": 182, "y": 484, "w": 14, "h": 14 }] }, "ico_windows": { "name": "Offenes Buch (Fenster)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 196, "y": 484, "w": 14, "h": 14 }, { "x": 210, "y": 484, "w": 14, "h": 14 }] }, "hud_energy": { "name": "Sonne (Energie Ω)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 248, "y": 484, "w": 12, "h": 12 }] }, "hud_ep": { "name": "DNA, violett (Evolutionspunkte)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 260, "y": 484, "w": 12, "h": 12 }] }, "hud_life": { "name": "Blatt (Leben)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 272, "y": 484, "w": 12, "h": 12 }] }, "hud_air": { "name": "Luftblasen O₂ (Sauerstoff der Luft)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 284, "y": 484, "w": 12, "h": 12 }] }, "hud_sea": { "name": "Wellen (Sauerstoff im Meer)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 296, "y": 484, "w": 12, "h": 12 }] }, "hud_co2": { "name": "Graue Wolke (CO₂)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 308, "y": 484, "w": 12, "h": 12 }] }, "hud_temp": { "name": "Thermometer (Temperatur)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 320, "y": 484, "w": 12, "h": 12 }] }, "hud_time": { "name": "Sanduhr mit Blatt (Erdzeit)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 332, "y": 484, "w": 12, "h": 12 }] }, "opt_raise": { "name": "Schneeberg mit Pfeil hoch (Anheben)", "w": 18, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 299, "y": 445, "w": 18, "h": 16 }] }, "opt_lower": { "name": "Grünes Tal mit Fluss und Pfeil runter (Absenken)", "w": 18, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 317, "y": 445, "w": 18, "h": 16 }] }, "menu_geo": { "name": "Vulkan mit Glut über Gesteinsschichten (Modell Geosphäre)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 344, "y": 484, "w": 12, "h": 12 }] }, "menu_atmo": { "name": "Sonne hinter einer Wolke (Modell Atmosphäre)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 356, "y": 484, "w": 12, "h": 12 }] }, "menu_bio": { "name": "Laubbaum auf einem Grashügel (Modell Biosphäre)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 368, "y": 484, "w": 12, "h": 12 }] }, "menu_civ": { "name": "Häuschen mit rotem Dach und Rauch (Modell Zivilisation)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 380, "y": 484, "w": 12, "h": 12 }] }, "menu_air": { "name": "Windwirbel mit Luftbläschen (Diagramm Luftzusammensetzung)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 392, "y": 484, "w": 12, "h": 12 }] }, "menu_biomes": { "name": "Tortendiagramm: Wald, Wüste, Meer, Eis (Diagramm Lebensraumanteile)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 404, "y": 484, "w": 12, "h": 12 }] }, "menu_life": { "name": "Fisch mit Seetang (Diagramm Lebensformen)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 416, "y": 484, "w": 12, "h": 12 }] }, "menu_tech": { "name": "Messing-Zahnrad mit Funke (Diagramm Technologie)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 428, "y": 484, "w": 12, "h": 12 }] }, "ctl_play": { "name": "Weiter", "w": 10, "h": 10, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 350, "y": 498, "w": 10, "h": 10 }, { "x": 360, "y": 498, "w": 10, "h": 10 }] }, "ctl_pause": { "name": "Pause", "w": 10, "h": 10, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 370, "y": 498, "w": 10, "h": 10 }, { "x": 380, "y": 498, "w": 10, "h": 10 }] }, "ctl_gear": { "name": "Zahnrad (Spielmenü)", "w": 10, "h": 10, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 390, "y": 498, "w": 10, "h": 10 }, { "x": 400, "y": 498, "w": 10, "h": 10 }] }, "ctl_pip": { "name": "Tempo-Punkt: 0 aus, 1 an (ein kleines Blatt)", "w": 4, "h": 6, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 442, "y": 520, "w": 4, "h": 6 }, { "x": 446, "y": 520, "w": 4, "h": 6 }] }, "dna_bead": { "name": "Perle des Doppelstrangs: 4 Tiefen (ganz vorn groß … ganz hinten klein) × 3 Lichter (türkis, grün, violett)", "w": 7, "h": 7, "fps": 0, "loop": 12, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": "d*3+c", "placeholder": false, "frames": [{ "x": 166, "y": 520, "w": 7, "h": 7 }, { "x": 173, "y": 520, "w": 7, "h": 7 }, { "x": 180, "y": 520, "w": 7, "h": 7 }, { "x": 187, "y": 520, "w": 7, "h": 7 }, { "x": 194, "y": 520, "w": 7, "h": 7 }, { "x": 201, "y": 520, "w": 7, "h": 7 }, { "x": 208, "y": 520, "w": 7, "h": 7 }, { "x": 215, "y": 520, "w": 7, "h": 7 }, { "x": 222, "y": 520, "w": 7, "h": 7 }, { "x": 229, "y": 520, "w": 7, "h": 7 }, { "x": 236, "y": 520, "w": 7, "h": 7 }, { "x": 243, "y": 520, "w": 7, "h": 7 }] }, "aura": { "name": "Leuchten hinter der Doppelhelix (gerastert): 0–1 wächst, 2–5 atmet (klein … groß)", "w": 39, "h": 83, "fps": 0, "loop": 6, "ax": 19, "ay": 41, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 0, "w": 39, "h": 83 }, { "x": 39, "y": 0, "w": 39, "h": 83 }, { "x": 78, "y": 0, "w": 39, "h": 83 }, { "x": 117, "y": 0, "w": 39, "h": 83 }, { "x": 156, "y": 0, "w": 39, "h": 83 }, { "x": 195, "y": 0, "w": 39, "h": 83 }] }, "spark": { "name": "Funke, türkis-weiß, funkelt", "w": 5, "h": 5, "fps": 8, "loop": 4, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 85, "y": 528, "w": 5, "h": 5 }, { "x": 90, "y": 528, "w": 5, "h": 5 }, { "x": 95, "y": 528, "w": 5, "h": 5 }, { "x": 100, "y": 528, "w": 5, "h": 5 }] }, "spark_v": { "name": "Funke, violett, funkelt", "w": 5, "h": 5, "fps": 8, "loop": 4, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 105, "y": 528, "w": 5, "h": 5 }, { "x": 110, "y": 528, "w": 5, "h": 5 }, { "x": 115, "y": 528, "w": 5, "h": 5 }, { "x": 120, "y": 528, "w": 5, "h": 5 }] }, "mote": { "name": "Lichtteilchen: 3 Farben × 3 Größen", "w": 3, "h": 3, "fps": 0, "loop": 9, "ax": 1, "ay": 1, "anchor": "center", "points": {}, "layout": "c*3+z", "placeholder": false, "frames": [{ "x": 206, "y": 528, "w": 3, "h": 3 }, { "x": 209, "y": 528, "w": 3, "h": 3 }, { "x": 212, "y": 528, "w": 3, "h": 3 }, { "x": 215, "y": 528, "w": 3, "h": 3 }, { "x": 218, "y": 528, "w": 3, "h": 3 }, { "x": 221, "y": 528, "w": 3, "h": 3 }, { "x": 224, "y": 528, "w": 3, "h": 3 }, { "x": 227, "y": 528, "w": 3, "h": 3 }, { "x": 230, "y": 528, "w": 3, "h": 3 }] }, "glow": { "name": "Weiches Leuchten (gerastert): 0 klein, 1 mittel, 2 groß", "w": 17, "h": 17, "fps": 0, "loop": 3, "ax": 8, "ay": 8, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 144, "y": 445, "w": 17, "h": 17 }, { "x": 161, "y": 445, "w": 17, "h": 17 }, { "x": 178, "y": 445, "w": 17, "h": 17 }] }, "comet": { "name": "Kopf des Energiestroms, flackert", "w": 9, "h": 9, "fps": 12, "loop": 4, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 417, "y": 510, "w": 9, "h": 9 }, { "x": 426, "y": 510, "w": 9, "h": 9 }, { "x": 435, "y": 510, "w": 9, "h": 9 }, { "x": 444, "y": 510, "w": 9, "h": 9 }] }, "burst": { "name": "Lichtausbruch am Ziel: Ring dehnt sich, zerfällt in Funken", "w": 33, "h": 33, "fps": 10, "loop": 7, "ax": 16, "ay": 16, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 371, "w": 33, "h": 33 }, { "x": 289, "y": 371, "w": 33, "h": 33 }, { "x": 322, "y": 371, "w": 33, "h": 33 }, { "x": 355, "y": 371, "w": 33, "h": 33 }, { "x": 388, "y": 371, "w": 33, "h": 33 }, { "x": 421, "y": 371, "w": 33, "h": 33 }, { "x": 454, "y": 371, "w": 33, "h": 33 }] }, "air_n2": { "name": "Stickstoff N₂: zwei blaue Kugeln, Dreifachbindung", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 210, "y": 469, "w": 20, "h": 14 }] }, "air_o2": { "name": "Sauerstoff O₂: zwei rote Kugeln, Doppelbindung", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 230, "y": 469, "w": 20, "h": 14 }] }, "air_co2": { "name": "Kohlendioxid CO₂: dunkelgraues C zwischen zwei roten O, gerade, Doppelbindungen", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 250, "y": 469, "w": 20, "h": 14 }] }, "air_ch4": { "name": "Methan CH₄: dunkelgraues C, vier weiße H als Tetraeder (eins vorn, eins dahinter)", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 270, "y": 469, "w": 20, "h": 14 }] }, "air_h2o": { "name": "Wasserdampf H₂O: rotes O, zwei weiße H im Winkel, ein Dampfwölkchen", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 290, "y": 469, "w": 20, "h": 14 }] }, "air_dust": { "name": "Staub: schwebende Körner und Flocken in Braun und Grau", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 310, "y": 469, "w": 20, "h": 14 }] }, "air_fe": { "name": "Gelöstes Eisen Fe²⁺: rostorange Kugel im Meerwasser, Rostflocken sinken", "w": 24, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 227, "y": 445, "w": 24, "h": 16 }] }, "air_o2_sea": { "name": "O₂ im Meer: O₂-Molekül (zwei rote Kugeln) im Meerwasser mit Bläschen", "w": 24, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 251, "y": 445, "w": 24, "h": 16 }] }, "air_o2_sky": { "name": "O₂ in der Luft: O₂-Molekül vor hellem Himmel mit Wölkchen", "w": 24, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 275, "y": 445, "w": 24, "h": 16 }] }, "air_arrow": { "name": "Goldener Pfeil nach rechts zwischen den Sauerstoff-Stufen", "w": 7, "h": 7, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 250, "y": 520, "w": 7, "h": 7 }] }, "air_info": { "name": "Info-Zeichen: blaue runde Plakette mit weißem i", "w": 9, "h": 9, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 453, "y": 510, "w": 9, "h": 9 }] }, "air_baro": { "name": "Barometer: runde Messingdose mit Skala und Zeiger (Luftdruck)", "w": 16, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 351, "y": 445, "w": 16, "h": 16 }] }, "air_temp": { "name": "Thermometer mit roter Säule und Kugel (Mitteltemperatur)", "w": 16, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 367, "y": 445, "w": 16, "h": 16 }] } }, "colors": { "rock0": "#3d3b45", "rock1": "#5d5a62", "rock2": "#807b7c", "rock3": "#a59f97", "rock4": "#c9c2b3", "sand0": "#94704a", "sand1": "#b89262", "sand2": "#d4b17c", "sand3": "#e6c996", "sand4": "#f3dfb4", "soil0": "#3f2c27", "soil1": "#5e4334", "soil2": "#7d5d43", "soil3": "#9c7b56", "laterite0": "#6e3628", "laterite1": "#92502f", "laterite2": "#b46c3d", "laterite3": "#cf8a55", "mud0": "#2e3125", "mud1": "#464a33", "mud2": "#626543", "mud3": "#7e7f55", "straw0": "#7c6c36", "straw1": "#a28f45", "straw2": "#c6b25a", "straw3": "#e2d17e", "meadow0": "#3b6a2f", "meadow1": "#568a35", "meadow2": "#78a83e", "meadow3": "#a2c759", "moss0": "#45512a", "moss1": "#63712f", "moss2": "#869238", "moss3": "#adb24c", "leaf0": "#1f4330", "leaf1": "#2c5f3a", "leaf2": "#3d7d44", "leaf3": "#579c4e", "pine0": "#142a2c", "pine1": "#1d4040", "pine2": "#29584f", "pine3": "#3a735e", "pine4": "#4f8f6a", "jungle0": "#0f3a2a", "jungle1": "#175a33", "jungle2": "#217a3a", "jungle3": "#3a9a42", "lichen0": "#a9b08f", "lichen1": "#cdd0b0", "ice0": "#5e7fa3", "ice1": "#86a7c6", "ice2": "#b0cbe0", "ice3": "#d6e6f0", "ice4": "#f3f8fb", "water0": "#0a2048", "water1": "#10346a", "water2": "#184e88", "water3": "#226ca4", "water4": "#3088b4", "water5": "#3e9cbc", "water6": "#58b2c2", "water7": "#80c8cc", "bark0": "#3a2620", "bark1": "#5e3f2c", "bark2": "#7d5a3c", "blossom0": "#e98fb0", "blossom1": "#f7c3d4", "yellow0": "#f0c64a", "white0": "#f2efe2", "red0": "#8e2f33", "red1": "#c4453f", "orange0": "#df8a3a", "violet0": "#9a6aa8", "violet1": "#c49ad0", "mask0": "#ffffff", "waterWarm0": "#1f9fb0", "waterWarm1": "#2fb8bf", "waterWarm2": "#49cfc8", "waterWarm3": "#7fe0d6", "reefUnder0": "#8f8274", "reefUnder1": "#a586c3", "reefUnder2": "#a89573", "reefUnder3": "#c48fb1", "reefUnder4": "#c59a69", "reefUnder5": "#b4a77d", "reefUnder6": "#b2b27c", "reefUnder7": "#9fd9c2", "reefUnder8": "#bfe8d2", "shelf0": "#1b548d", "shelf1": "#1d5b92", "shelf2": "#206196", "shelf3": "#22679b", "shelf4": "#256da0", "shelf5": "#2874a5", "coral0": "#3b9099", "coral1": "#6b817c", "coral2": "#707a9e", "coral3": "#7c798e", "coral4": "#7b7f67", "coral5": "#598775", "coral6": "#88a177", "coral7": "#a19f93", "coral8": "#b1aea0", "coral9": "#aea2c5", "parch0": "#b4885a", "parch1": "#d3ab76", "parch2": "#e9cb98", "parch3": "#f6e2bb", "parch4": "#fdf1d8", "parch5": "#fffaee", "gold0": "#5e3410", "gold1": "#8f531a", "gold2": "#c27f2a", "gold3": "#e3a63f", "gold4": "#f6cc6a", "gold5": "#fde9a6", "wood0": "#1f120a", "wood1": "#36210f", "wood2": "#523319", "wood3": "#704725", "wood4": "#8f5e33", "wood5": "#b07c47", "ink0": "#140d08", "ink1": "#2a1a0e", "skin0": "#6e3e2c", "skin1": "#a3644a", "skin2": "#cf9168", "skin3": "#ebb88c", "skin4": "#f9d9b5", "skin5": "#fff0dc", "hair0": "#0e2a16", "hair1": "#1a4520", "hair2": "#286426", "hair3": "#3e862b", "hair4": "#62a834", "hair5": "#94cc48", "hair6": "#c9eb72", "dress0": "#16301a", "dress1": "#234d24", "dress2": "#336d2c", "dress3": "#4a8d34", "dress4": "#6faf45", "vine0": "#102e10", "vine1": "#1d4c16", "vine2": "#2f6e1c", "vine3": "#4a9423", "vine4": "#72b92e", "vine5": "#a6db4a", "vine6": "#d9f283", "stem0": "#261c0c", "stem1": "#433214", "stem2": "#5f4a1d", "stem3": "#7c6428", "stem4": "#9a8238", "faded0": "#3f4a30", "faded1": "#5d6b43", "faded2": "#808e5c", "faded3": "#a7b17e", "faded4": "#cdd2a6", "wilt0": "#3c2810", "wilt1": "#644219", "wilt2": "#8c6127", "wilt3": "#b4853c", "wilt4": "#d6ad62", "petal0": "#8c3a5a", "petal1": "#c4628a", "petal2": "#ec94b4", "petal3": "#f9c6d8", "petal4": "#fff0f5", "petalY0": "#9a6a12", "petalY1": "#d49a22", "petalY2": "#f4c93e", "petalY3": "#ffe789", "petalB0": "#3c3f8f", "petalB1": "#5f6cc4", "petalB2": "#8fa0e6", "petalB3": "#c5d0fa", "glowT0": "#0d4652", "glowT1": "#167f8c", "glowT2": "#2fbcc4", "glowT3": "#6fe6e0", "glowT4": "#b9fbf2", "glowT5": "#efffff", "glowG0": "#1e6a33", "glowG1": "#3fae4c", "glowG2": "#7ee372", "glowG3": "#c2fbb2", "glowV0": "#34205c", "glowV1": "#5c3b9a", "glowV2": "#8f67d8", "glowV3": "#bf9dfa", "glowV4": "#e8dcff" } };
-    SE.UI_ATLAS_PNG = 'data:image/png;base64,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';
+    SE.UI_MANIFEST = { "version": 1, "width": 512, "height": 577, "sprites": { "gaia_prone": { "name": "Gaia liegt auf dem Bauch, auf die Ellbogen gestützt, und schaut zur Karte (Ruhe: Atmen, Haar weht)", "w": 64, "h": 48, "fps": 4, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27] }, "layout": null, "placeholder": false, "frames": [{ "x": 234, "y": 0, "w": 64, "h": 48 }, { "x": 298, "y": 0, "w": 64, "h": 48 }, { "x": 362, "y": 0, "w": 64, "h": 48 }, { "x": 426, "y": 0, "w": 64, "h": 48 }] }, "gaia_eyes": { "name": "Augen: 0 offen nach rechts, 1 offen nach vorn, 2 offen nach oben, 3 halb, 4 zu, 5 fröhlich ^^, 6 traurig zu, 7 staunend weit, 8 tränennass, 9 nach unten", "w": 12, "h": 5, "fps": 0, "loop": 10, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [0, 0] }, "layout": null, "placeholder": false, "frames": [{ "x": 4, "y": 571, "w": 12, "h": 5 }, { "x": 16, "y": 571, "w": 12, "h": 5 }, { "x": 28, "y": 571, "w": 12, "h": 5 }, { "x": 40, "y": 571, "w": 12, "h": 5 }, { "x": 52, "y": 571, "w": 12, "h": 5 }, { "x": 64, "y": 571, "w": 12, "h": 5 }, { "x": 76, "y": 571, "w": 12, "h": 5 }, { "x": 88, "y": 571, "w": 12, "h": 5 }, { "x": 100, "y": 571, "w": 12, "h": 5 }, { "x": 112, "y": 571, "w": 12, "h": 5 }] }, "gaia_brows": { "name": "Brauen: 0 ruhig, 1 gehoben, 2 besorgt (innen hoch), 3 traurig (außen tief)", "w": 12, "h": 2, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [0, -3] }, "layout": null, "placeholder": false, "frames": [{ "x": 307, "y": 571, "w": 12, "h": 2 }, { "x": 319, "y": 571, "w": 12, "h": 2 }, { "x": 331, "y": 571, "w": 12, "h": 2 }, { "x": 343, "y": 571, "w": 12, "h": 2 }] }, "gaia_mouth": { "name": "Mund: 0 ruhig, 1 Lächeln, 2 offenes Lachen, 3 staunendes o, 4 Schmollen, 5 zittrig besorgt, 6 schlafend, 7 traurig offen", "w": 6, "h": 3, "fps": 0, "loop": 8, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [4, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 220, "y": 571, "w": 6, "h": 3 }, { "x": 226, "y": 571, "w": 6, "h": 3 }, { "x": 232, "y": 571, "w": 6, "h": 3 }, { "x": 238, "y": 571, "w": 6, "h": 3 }, { "x": 244, "y": 571, "w": 6, "h": 3 }, { "x": 250, "y": 571, "w": 6, "h": 3 }, { "x": 256, "y": 571, "w": 6, "h": 3 }, { "x": 262, "y": 571, "w": 6, "h": 3 }] }, "gaia_blush": { "name": "Wangenröte", "w": 12, "h": 1, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [0, 4] }, "layout": null, "placeholder": false, "frames": [{ "x": 355, "y": 571, "w": 12, "h": 1 }] }, "gaia_sleep": { "name": "Gaia schläft zusammengerollt: 0–3 atmen, 4–5 regt sich im Schlaf", "w": 64, "h": 48, "fps": 2, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "zzz": [56, 19] }, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 83, "w": 64, "h": 48 }, { "x": 64, "y": 83, "w": 64, "h": 48 }, { "x": 128, "y": 83, "w": 64, "h": 48 }, { "x": 192, "y": 83, "w": 64, "h": 48 }, { "x": 256, "y": 83, "w": 64, "h": 48 }, { "x": 320, "y": 83, "w": 64, "h": 48 }] }, "gaia_wake": { "name": "Gaia erwacht: blinzelt, hebt den Kopf, schaut sich um, gähnt, stützt sich auf", "w": 64, "h": 48, "fps": 5, "loop": 14, "ax": 32, "ay": 47, "anchor": "foot", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 384, "y": 83, "w": 64, "h": 48 }, { "x": 448, "y": 83, "w": 64, "h": 48 }, { "x": 0, "y": 131, "w": 64, "h": 48 }, { "x": 64, "y": 131, "w": 64, "h": 48 }, { "x": 128, "y": 131, "w": 64, "h": 48 }, { "x": 192, "y": 131, "w": 64, "h": 48 }, { "x": 256, "y": 131, "w": 64, "h": 48 }, { "x": 320, "y": 131, "w": 64, "h": 48 }, { "x": 384, "y": 131, "w": 64, "h": 48 }, { "x": 448, "y": 131, "w": 64, "h": 48 }, { "x": 0, "y": 179, "w": 64, "h": 48 }, { "x": 64, "y": 179, "w": 64, "h": 48 }, { "x": 128, "y": 179, "w": 64, "h": 48 }, { "x": 192, "y": 179, "w": 64, "h": 48 }] }, "gaia_kick": { "name": "Freude: auf dem Bauch, die Füße schwingen, das Haar wippt", "w": 64, "h": 48, "fps": 8, "loop": 6, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27] }, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 179, "w": 64, "h": 48 }, { "x": 320, "y": 179, "w": 64, "h": 48 }, { "x": 384, "y": 179, "w": 64, "h": 48 }, { "x": 448, "y": 179, "w": 64, "h": 48 }, { "x": 0, "y": 227, "w": 64, "h": 48 }, { "x": 64, "y": 227, "w": 64, "h": 48 }] }, "gaia_chin": { "name": "Sorge: Kinn in die Hände gestützt, Schultern hochgezogen", "w": 64, "h": 48, "fps": 3, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27] }, "layout": null, "placeholder": false, "frames": [{ "x": 128, "y": 227, "w": 64, "h": 48 }, { "x": 192, "y": 227, "w": 64, "h": 48 }, { "x": 256, "y": 227, "w": 64, "h": 48 }, { "x": 320, "y": 227, "w": 64, "h": 48 }] }, "gaia_slump": { "name": "Trauer, Erschöpfung: Kopf auf den Armen, Haar und Kleid welk, langsamer Atem", "w": 64, "h": 48, "fps": 2, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 32] }, "layout": null, "placeholder": false, "frames": [{ "x": 384, "y": 227, "w": 64, "h": 48 }, { "x": 448, "y": 227, "w": 64, "h": 48 }, { "x": 0, "y": 275, "w": 64, "h": 48 }, { "x": 64, "y": 275, "w": 64, "h": 48 }] }, "gaia_lookup": { "name": "Hoffnung: hebt den Kopf zum Himmel, eine Hand halb erhoben", "w": 64, "h": 48, "fps": 4, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 25] }, "layout": null, "placeholder": false, "frames": [{ "x": 128, "y": 275, "w": 64, "h": 48 }, { "x": 192, "y": 275, "w": 64, "h": 48 }, { "x": 256, "y": 275, "w": 64, "h": 48 }, { "x": 320, "y": 275, "w": 64, "h": 48 }] }, "gaia_magic_up": { "name": "Zauber: hebt die Hand", "w": 64, "h": 48, "fps": 8, "loop": 6, "ax": 32, "ay": 47, "anchor": "foot", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 384, "y": 275, "w": 64, "h": 48 }, { "x": 448, "y": 275, "w": 64, "h": 48 }, { "x": 0, "y": 323, "w": 64, "h": 48 }, { "x": 64, "y": 323, "w": 64, "h": 48 }, { "x": 128, "y": 323, "w": 64, "h": 48 }, { "x": 192, "y": 323, "w": 64, "h": 48 }] }, "gaia_magic_hold": { "name": "Zauber: hält die Hand erhoben, Haar schwebt", "w": 64, "h": 48, "fps": 5, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": { "face": [46, 27], "hand": [61, 19] }, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 323, "w": 64, "h": 48 }, { "x": 320, "y": 323, "w": 64, "h": 48 }, { "x": 384, "y": 323, "w": 64, "h": 48 }, { "x": 448, "y": 323, "w": 64, "h": 48 }] }, "gaia_magic_down": { "name": "Zauber: senkt die Hand", "w": 64, "h": 48, "fps": 8, "loop": 4, "ax": 32, "ay": 47, "anchor": "foot", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 371, "w": 64, "h": 48 }, { "x": 64, "y": 371, "w": 64, "h": 48 }, { "x": 128, "y": 371, "w": 64, "h": 48 }, { "x": 192, "y": 371, "w": 64, "h": 48 }] }, "gaia_orb": { "name": "Leuchtende kleine Weltkugel: dreht sich, pulsiert", "w": 15, "h": 15, "fps": 8, "loop": 16, "ax": 7, "ay": 7, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 108, "y": 469, "w": 15, "h": 15 }, { "x": 123, "y": 469, "w": 15, "h": 15 }, { "x": 138, "y": 469, "w": 15, "h": 15 }, { "x": 153, "y": 469, "w": 15, "h": 15 }, { "x": 168, "y": 469, "w": 15, "h": 15 }, { "x": 183, "y": 469, "w": 15, "h": 15 }, { "x": 198, "y": 469, "w": 15, "h": 15 }, { "x": 213, "y": 469, "w": 15, "h": 15 }, { "x": 228, "y": 469, "w": 15, "h": 15 }, { "x": 243, "y": 469, "w": 15, "h": 15 }, { "x": 258, "y": 469, "w": 15, "h": 15 }, { "x": 273, "y": 469, "w": 15, "h": 15 }, { "x": 288, "y": 469, "w": 15, "h": 15 }, { "x": 303, "y": 469, "w": 15, "h": 15 }, { "x": 318, "y": 469, "w": 15, "h": 15 }, { "x": 333, "y": 469, "w": 15, "h": 15 }] }, "gaia_orb_flare": { "name": "Die Kugel lädt sich auf: Lichtring schwillt an", "w": 25, "h": 25, "fps": 10, "loop": 6, "ax": 12, "ay": 12, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 348, "y": 419, "w": 25, "h": 25 }, { "x": 373, "y": 419, "w": 25, "h": 25 }, { "x": 398, "y": 419, "w": 25, "h": 25 }, { "x": 423, "y": 419, "w": 25, "h": 25 }, { "x": 448, "y": 419, "w": 25, "h": 25 }, { "x": 473, "y": 419, "w": 25, "h": 25 }] }, "rock": { "name": "Gaias Felsen: 0 kahl, 1 erste Flechten, 2 bemoost, 3 üppig", "w": 80, "h": 26, "fps": 0, "loop": 4, "ax": 40, "ay": 25, "anchor": "foot", "points": { "bed": [40, 6], "root": [1, 11] }, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 419, "w": 80, "h": 26 }, { "x": 80, "y": 419, "w": 80, "h": 26 }, { "x": 160, "y": 419, "w": 80, "h": 26 }, { "x": 240, "y": 419, "w": 80, "h": 26 }] }, "zzz": { "name": "Schlaf-Z, steigt auf und verblasst", "w": 7, "h": 7, "fps": 3, "loop": 4, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 44, "y": 563, "w": 7, "h": 7 }, { "x": 51, "y": 563, "w": 7, "h": 7 }, { "x": 58, "y": 563, "w": 7, "h": 7 }, { "x": 65, "y": 563, "w": 7, "h": 7 }] }, "tear": { "name": "Träne, fällt", "w": 3, "h": 5, "fps": 6, "loop": 4, "ax": 1, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 199, "y": 571, "w": 3, "h": 5 }, { "x": 202, "y": 571, "w": 3, "h": 5 }, { "x": 205, "y": 571, "w": 3, "h": 5 }, { "x": 208, "y": 571, "w": 3, "h": 5 }] }, "sweat": { "name": "Schweißtropfen (Hitze, Sorge)", "w": 3, "h": 5, "fps": 6, "loop": 3, "ax": 1, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 211, "y": 571, "w": 3, "h": 5 }, { "x": 214, "y": 571, "w": 3, "h": 5 }, { "x": 217, "y": 571, "w": 3, "h": 5 }] }, "sparkle": { "name": "Funkeln: vierzackiger Stern", "w": 7, "h": 7, "fps": 8, "loop": 4, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 72, "y": 563, "w": 7, "h": 7 }, { "x": 79, "y": 563, "w": 7, "h": 7 }, { "x": 86, "y": 563, "w": 7, "h": 7 }, { "x": 93, "y": 563, "w": 7, "h": 7 }] }, "heart": { "name": "Herzchen, ploppt auf", "w": 7, "h": 6, "fps": 6, "loop": 3, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 323, "y": 563, "w": 7, "h": 6 }, { "x": 330, "y": 563, "w": 7, "h": 6 }, { "x": 337, "y": 563, "w": 7, "h": 6 }] }, "leaf_s_r": { "name": "Blatt klein, nach rechts", "w": 7, "h": 6, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 5] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 344, "y": 563, "w": 7, "h": 6 }, { "x": 351, "y": 563, "w": 7, "h": 6 }, { "x": 358, "y": 563, "w": 7, "h": 6 }, { "x": 365, "y": 563, "w": 7, "h": 6 }, { "x": 372, "y": 563, "w": 7, "h": 6 }, { "x": 379, "y": 563, "w": 7, "h": 6 }, { "x": 386, "y": 563, "w": 7, "h": 6 }, { "x": 393, "y": 563, "w": 7, "h": 6 }, { "x": 400, "y": 563, "w": 7, "h": 6 }, { "x": 407, "y": 563, "w": 7, "h": 6 }, { "x": 414, "y": 563, "w": 7, "h": 6 }, { "x": 421, "y": 563, "w": 7, "h": 6 }] }, "leaf_s_l": { "name": "Blatt klein, nach links", "w": 7, "h": 7, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [5, 6] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 100, "y": 563, "w": 7, "h": 7 }, { "x": 107, "y": 563, "w": 7, "h": 7 }, { "x": 114, "y": 563, "w": 7, "h": 7 }, { "x": 121, "y": 563, "w": 7, "h": 7 }, { "x": 128, "y": 563, "w": 7, "h": 7 }, { "x": 135, "y": 563, "w": 7, "h": 7 }, { "x": 142, "y": 563, "w": 7, "h": 7 }, { "x": 149, "y": 563, "w": 7, "h": 7 }, { "x": 156, "y": 563, "w": 7, "h": 7 }, { "x": 163, "y": 563, "w": 7, "h": 7 }, { "x": 170, "y": 563, "w": 7, "h": 7 }, { "x": 177, "y": 563, "w": 7, "h": 7 }] }, "leaf_m_r": { "name": "Blatt mittel, nach rechts", "w": 9, "h": 9, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 8] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 93, "y": 553, "w": 9, "h": 9 }, { "x": 102, "y": 553, "w": 9, "h": 9 }, { "x": 111, "y": 553, "w": 9, "h": 9 }, { "x": 120, "y": 553, "w": 9, "h": 9 }, { "x": 129, "y": 553, "w": 9, "h": 9 }, { "x": 138, "y": 553, "w": 9, "h": 9 }, { "x": 147, "y": 553, "w": 9, "h": 9 }, { "x": 156, "y": 553, "w": 9, "h": 9 }, { "x": 165, "y": 553, "w": 9, "h": 9 }, { "x": 174, "y": 553, "w": 9, "h": 9 }, { "x": 183, "y": 553, "w": 9, "h": 9 }, { "x": 192, "y": 553, "w": 9, "h": 9 }] }, "leaf_m_l": { "name": "Blatt mittel, nach links", "w": 9, "h": 10, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [7, 9] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 410, "y": 541, "w": 9, "h": 10 }, { "x": 419, "y": 541, "w": 9, "h": 10 }, { "x": 428, "y": 541, "w": 9, "h": 10 }, { "x": 437, "y": 541, "w": 9, "h": 10 }, { "x": 446, "y": 541, "w": 9, "h": 10 }, { "x": 455, "y": 541, "w": 9, "h": 10 }, { "x": 464, "y": 541, "w": 9, "h": 10 }, { "x": 473, "y": 541, "w": 9, "h": 10 }, { "x": 482, "y": 541, "w": 9, "h": 10 }, { "x": 491, "y": 541, "w": 9, "h": 10 }, { "x": 500, "y": 541, "w": 9, "h": 10 }, { "x": 0, "y": 553, "w": 9, "h": 10 }] }, "leaf_l_r": { "name": "Blatt groß, nach rechts", "w": 12, "h": 11, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 10] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 12, "y": 541, "w": 12, "h": 11 }, { "x": 24, "y": 541, "w": 12, "h": 11 }, { "x": 36, "y": 541, "w": 12, "h": 11 }, { "x": 48, "y": 541, "w": 12, "h": 11 }, { "x": 60, "y": 541, "w": 12, "h": 11 }, { "x": 72, "y": 541, "w": 12, "h": 11 }, { "x": 84, "y": 541, "w": 12, "h": 11 }, { "x": 96, "y": 541, "w": 12, "h": 11 }, { "x": 108, "y": 541, "w": 12, "h": 11 }, { "x": 120, "y": 541, "w": 12, "h": 11 }, { "x": 132, "y": 541, "w": 12, "h": 11 }, { "x": 144, "y": 541, "w": 12, "h": 11 }] }, "leaf_l_l": { "name": "Blatt groß, nach links", "w": 11, "h": 12, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [10, 11] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 376, "y": 527, "w": 11, "h": 12 }, { "x": 387, "y": 527, "w": 11, "h": 12 }, { "x": 398, "y": 527, "w": 11, "h": 12 }, { "x": 409, "y": 527, "w": 11, "h": 12 }, { "x": 420, "y": 527, "w": 11, "h": 12 }, { "x": 431, "y": 527, "w": 11, "h": 12 }, { "x": 442, "y": 527, "w": 11, "h": 12 }, { "x": 453, "y": 527, "w": 11, "h": 12 }, { "x": 464, "y": 527, "w": 11, "h": 12 }, { "x": 475, "y": 527, "w": 11, "h": 12 }, { "x": 486, "y": 527, "w": 11, "h": 12 }, { "x": 497, "y": 527, "w": 11, "h": 12 }] }, "leaf_hang": { "name": "Hängendes Blatt (unter der Statusleiste)", "w": 7, "h": 10, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [3, 0] }, "layout": "v*3+s", "placeholder": false, "frames": [{ "x": 9, "y": 553, "w": 7, "h": 10 }, { "x": 16, "y": 553, "w": 7, "h": 10 }, { "x": 23, "y": 553, "w": 7, "h": 10 }, { "x": 30, "y": 553, "w": 7, "h": 10 }, { "x": 37, "y": 553, "w": 7, "h": 10 }, { "x": 44, "y": 553, "w": 7, "h": 10 }, { "x": 51, "y": 553, "w": 7, "h": 10 }, { "x": 58, "y": 553, "w": 7, "h": 10 }, { "x": 65, "y": 553, "w": 7, "h": 10 }, { "x": 72, "y": 553, "w": 7, "h": 10 }, { "x": 79, "y": 553, "w": 7, "h": 10 }, { "x": 86, "y": 553, "w": 7, "h": 10 }] }, "flower_w": { "name": "Blüte weiß mit gelber Mitte", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 201, "y": 553, "w": 9, "h": 9 }, { "x": 210, "y": 553, "w": 9, "h": 9 }, { "x": 219, "y": 553, "w": 9, "h": 9 }, { "x": 228, "y": 553, "w": 9, "h": 9 }, { "x": 237, "y": 553, "w": 9, "h": 9 }, { "x": 246, "y": 553, "w": 9, "h": 9 }] }, "flower_p": { "name": "Blüte rosa", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 255, "y": 553, "w": 9, "h": 9 }, { "x": 264, "y": 553, "w": 9, "h": 9 }, { "x": 273, "y": 553, "w": 9, "h": 9 }, { "x": 282, "y": 553, "w": 9, "h": 9 }, { "x": 291, "y": 553, "w": 9, "h": 9 }, { "x": 300, "y": 553, "w": 9, "h": 9 }] }, "flower_y": { "name": "Blüte gelb", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 309, "y": 553, "w": 9, "h": 9 }, { "x": 318, "y": 553, "w": 9, "h": 9 }, { "x": 327, "y": 553, "w": 9, "h": 9 }, { "x": 336, "y": 553, "w": 9, "h": 9 }, { "x": 345, "y": 553, "w": 9, "h": 9 }, { "x": 354, "y": 553, "w": 9, "h": 9 }] }, "flower_b": { "name": "Blüte blauviolett", "w": 9, "h": 9, "fps": 0, "loop": 6, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 363, "y": 553, "w": 9, "h": 9 }, { "x": 372, "y": 553, "w": 9, "h": 9 }, { "x": 381, "y": 553, "w": 9, "h": 9 }, { "x": 390, "y": 553, "w": 9, "h": 9 }, { "x": 399, "y": 553, "w": 9, "h": 9 }, { "x": 408, "y": 553, "w": 9, "h": 9 }] }, "curl_r": { "name": "Rankenspirale, nach rechts", "w": 6, "h": 6, "fps": 0, "loop": 3, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [0, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 428, "y": 563, "w": 6, "h": 6 }, { "x": 434, "y": 563, "w": 6, "h": 6 }, { "x": 440, "y": 563, "w": 6, "h": 6 }] }, "curl_l": { "name": "Rankenspirale, nach links", "w": 6, "h": 6, "fps": 0, "loop": 3, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "base": [5, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 446, "y": 563, "w": 6, "h": 6 }, { "x": 452, "y": 563, "w": 6, "h": 6 }, { "x": 458, "y": 563, "w": 6, "h": 6 }] }, "knot": { "name": "Rankenknoten zwischen den Knopfgruppen", "w": 21, "h": 8, "fps": 0, "loop": 3, "ax": 10, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 462, "y": 553, "w": 21, "h": 8 }, { "x": 483, "y": 553, "w": 21, "h": 8 }, { "x": 0, "y": 563, "w": 21, "h": 8 }] }, "leaf_fall": { "name": "Welkes Blatt, fällt taumelnd", "w": 5, "h": 5, "fps": 8, "loop": 4, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 124, "y": 571, "w": 5, "h": 5 }, { "x": 129, "y": 571, "w": 5, "h": 5 }, { "x": 134, "y": 571, "w": 5, "h": 5 }, { "x": 139, "y": 571, "w": 5, "h": 5 }] }, "firefly": { "name": "Glühwürmchen / Pollenlicht", "w": 3, "h": 3, "fps": 6, "loop": 4, "ax": 1, "ay": 1, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 268, "y": 571, "w": 3, "h": 3 }, { "x": 271, "y": 571, "w": 3, "h": 3 }, { "x": 274, "y": 571, "w": 3, "h": 3 }, { "x": 277, "y": 571, "w": 3, "h": 3 }] }, "rail_btn": { "name": "Navigationsknopf: normal, Hover, gedrückt, gewählt, gewählt+Hover, gesperrt", "w": 24, "h": 24, "fps": 0, "loop": 6, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "icon": [5, 4] }, "layout": null, "placeholder": false, "frames": [{ "x": 176, "y": 445, "w": 24, "h": 24 }, { "x": 200, "y": 445, "w": 24, "h": 24 }, { "x": 224, "y": 445, "w": 24, "h": 24 }, { "x": 248, "y": 445, "w": 24, "h": 24 }, { "x": 272, "y": 445, "w": 24, "h": 24 }, { "x": 296, "y": 445, "w": 24, "h": 24 }] }, "rail_focus": { "name": "Tastatur-Fokusring um den Knopf (golden gepunktet)", "w": 28, "h": 26, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [-2, -2] }, "layout": null, "placeholder": false, "frames": [{ "x": 320, "y": 419, "w": 28, "h": 26 }] }, "rail_tab": { "name": "Pfeillasche am gewählten Knopf: 0 ruhig, 1 leuchtend", "w": 6, "h": 12, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": { "at": [23, 5] }, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 541, "w": 6, "h": 12 }, { "x": 6, "y": 541, "w": 6, "h": 12 }] }, "badge": { "name": "Zählabzeichen: 0 ruhig, 1–3 Puls", "w": 11, "h": 11, "fps": 8, "loop": 4, "ax": 5, "ay": 5, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 156, "y": 541, "w": 11, "h": 11 }, { "x": 167, "y": 541, "w": 11, "h": 11 }, { "x": 178, "y": 541, "w": 11, "h": 11 }, { "x": 189, "y": 541, "w": 11, "h": 11 }] }, "digits": { "name": "Ziffern 0–9 und + für das Abzeichen (dunkle Tinte)", "w": 4, "h": 6, "fps": 0, "loop": 11, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 464, "y": 563, "w": 4, "h": 6 }, { "x": 468, "y": 563, "w": 4, "h": 6 }, { "x": 472, "y": 563, "w": 4, "h": 6 }, { "x": 476, "y": 563, "w": 4, "h": 6 }, { "x": 480, "y": 563, "w": 4, "h": 6 }, { "x": 484, "y": 563, "w": 4, "h": 6 }, { "x": 488, "y": 563, "w": 4, "h": 6 }, { "x": 492, "y": 563, "w": 4, "h": 6 }, { "x": 496, "y": 563, "w": 4, "h": 6 }, { "x": 500, "y": 563, "w": 4, "h": 6 }, { "x": 504, "y": 563, "w": 4, "h": 6 }] }, "wood_tile": { "name": "Holzbalken der Statusleiste, nahtlos waagerecht", "w": 32, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 409, "y": 445, "w": 32, "h": 16 }] }, "parch_tile": { "name": "Pergament, nahtlos", "w": 16, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 60, "y": 469, "w": 16, "h": 16 }] }, "panel9": { "name": "Pergamentfeld mit Goldrand (9-Slice, Ecken 4 × 4): 0 normal, 1 beleuchtet", "w": 12, "h": 12, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 196, "y": 527, "w": 12, "h": 12 }, { "x": 208, "y": 527, "w": 12, "h": 12 }] }, "post_tile": { "name": "Holzpfosten zwischen den Feldern, nahtlos senkrecht", "w": 5, "h": 8, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 21, "y": 563, "w": 5, "h": 8 }] }, "stud": { "name": "Messingniete", "w": 5, "h": 5, "fps": 0, "loop": 1, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 144, "y": 571, "w": 5, "h": 5 }] }, "logo": { "name": "Schriftzug GAIA REBORN", "w": 90, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 96, "y": 513, "w": 90, "h": 14 }] }, "win_corner_l": { "name": "Rankenzweig an der linken oberen Fensterecke: 0–3 wächst", "w": 18, "h": 14, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 306, "y": 513, "w": 18, "h": 14 }, { "x": 324, "y": 513, "w": 18, "h": 14 }, { "x": 342, "y": 513, "w": 18, "h": 14 }, { "x": 360, "y": 513, "w": 18, "h": 14 }] }, "win_corner_r": { "name": "Rankenzweig an der rechten oberen Fensterecke: 0–3 wächst", "w": 18, "h": 14, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 378, "y": 513, "w": 18, "h": 14 }, { "x": 396, "y": 513, "w": 18, "h": 14 }, { "x": 414, "y": 513, "w": 18, "h": 14 }, { "x": 432, "y": 513, "w": 18, "h": 14 }] }, "fold_tab": { "name": "Klapplasche: 0 Pfeil hoch, 1 hoch beleuchtet, 2 Pfeil runter, 3 runter beleuchtet", "w": 21, "h": 10, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 266, "y": 541, "w": 21, "h": 10 }, { "x": 287, "y": 541, "w": 21, "h": 10 }, { "x": 308, "y": 541, "w": 21, "h": 10 }, { "x": 329, "y": 541, "w": 21, "h": 10 }] }, "ico_examine": { "name": "Lupe (Untersuchen)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 450, "y": 513, "w": 14, "h": 14 }, { "x": 464, "y": 513, "w": 14, "h": 14 }] }, "ico_move": { "name": "Hand (Verschieben)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 478, "y": 513, "w": 14, "h": 14 }, { "x": 492, "y": 513, "w": 14, "h": 14 }] }, "ico_altitude": { "name": "Berg mit Pfeilen (Höhe ändern)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 527, "w": 14, "h": 14 }, { "x": 14, "y": 527, "w": 14, "h": 14 }] }, "ico_plant": { "name": "Keimling (Pflanzen)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 28, "y": 527, "w": 14, "h": 14 }, { "x": 42, "y": 527, "w": 14, "h": 14 }] }, "ico_life": { "name": "Pfote (Leben ansiedeln)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 56, "y": 527, "w": 14, "h": 14 }, { "x": 70, "y": 527, "w": 14, "h": 14 }] }, "ico_event": { "name": "Blitz (Ereignis auslösen)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 84, "y": 527, "w": 14, "h": 14 }, { "x": 98, "y": 527, "w": 14, "h": 14 }] }, "ico_evolution": { "name": "DNA-Doppelstrang (Evolution)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 112, "y": 527, "w": 14, "h": 14 }, { "x": 126, "y": 527, "w": 14, "h": 14 }] }, "ico_planet": { "name": "Globus (Planet: Modelle und Diagramme)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 140, "y": 527, "w": 14, "h": 14 }, { "x": 154, "y": 527, "w": 14, "h": 14 }] }, "ico_windows": { "name": "Offenes Buch (Fenster)", "w": 14, "h": 14, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 168, "y": 527, "w": 14, "h": 14 }, { "x": 182, "y": 527, "w": 14, "h": 14 }] }, "hud_energy": { "name": "Sonne (Energie Ω)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 220, "y": 527, "w": 12, "h": 12 }] }, "hud_ep": { "name": "DNA, violett (Evolutionspunkte)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 232, "y": 527, "w": 12, "h": 12 }] }, "hud_life": { "name": "Blatt (Leben)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 244, "y": 527, "w": 12, "h": 12 }] }, "hud_sea": { "name": "Wellen (Sauerstoff im Meer)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 527, "w": 12, "h": 12 }] }, "hud_time": { "name": "Sanduhr mit Blatt (Erdzeit)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 268, "y": 527, "w": 12, "h": 12 }] }, "opt_raise": { "name": "Schneeberg mit Pfeil hoch (Anheben)", "w": 18, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 24, "y": 469, "w": 18, "h": 16 }] }, "opt_lower": { "name": "Grünes Tal mit Fluss und Pfeil runter (Absenken)", "w": 18, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 42, "y": 469, "w": 18, "h": 16 }] }, "menu_geo": { "name": "Vulkan mit Glut über Gesteinsschichten (Modell Geosphäre)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 280, "y": 527, "w": 12, "h": 12 }] }, "menu_atmo": { "name": "Sonne hinter einer Wolke (Modell Atmosphäre)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 292, "y": 527, "w": 12, "h": 12 }] }, "menu_bio": { "name": "Laubbaum auf einem Grashügel (Modell Biosphäre)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 304, "y": 527, "w": 12, "h": 12 }] }, "menu_civ": { "name": "Häuschen mit rotem Dach und Rauch (Modell Zivilisation)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 316, "y": 527, "w": 12, "h": 12 }] }, "menu_air": { "name": "Windwirbel mit Luftbläschen (Diagramm Luftzusammensetzung)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 328, "y": 527, "w": 12, "h": 12 }] }, "menu_biomes": { "name": "Tortendiagramm: Wald, Wüste, Meer, Eis (Diagramm Lebensraumanteile)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 340, "y": 527, "w": 12, "h": 12 }] }, "menu_life": { "name": "Fisch mit Seetang (Diagramm Lebensformen)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 352, "y": 527, "w": 12, "h": 12 }] }, "menu_tech": { "name": "Messing-Zahnrad mit Funke (Diagramm Technologie)", "w": 12, "h": 12, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 364, "y": 527, "w": 12, "h": 12 }] }, "ctl_play": { "name": "Weiter", "w": 10, "h": 10, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 350, "y": 541, "w": 10, "h": 10 }, { "x": 360, "y": 541, "w": 10, "h": 10 }] }, "ctl_pause": { "name": "Pause", "w": 10, "h": 10, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 370, "y": 541, "w": 10, "h": 10 }, { "x": 380, "y": 541, "w": 10, "h": 10 }] }, "ctl_gear": { "name": "Zahnrad (Spielmenü)", "w": 10, "h": 10, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 390, "y": 541, "w": 10, "h": 10 }, { "x": 400, "y": 541, "w": 10, "h": 10 }] }, "ctl_pip": { "name": "Tempo-Punkt: 0 aus, 1 an (ein kleines Blatt)", "w": 4, "h": 6, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 508, "y": 563, "w": 4, "h": 6 }, { "x": 0, "y": 571, "w": 4, "h": 6 }] }, "dna_bead": { "name": "Perle des Doppelstrangs: 4 Tiefen (ganz vorn groß … ganz hinten klein) × 3 Lichter (türkis, grün, violett)", "w": 7, "h": 7, "fps": 0, "loop": 12, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": "d*3+c", "placeholder": false, "frames": [{ "x": 184, "y": 563, "w": 7, "h": 7 }, { "x": 191, "y": 563, "w": 7, "h": 7 }, { "x": 198, "y": 563, "w": 7, "h": 7 }, { "x": 205, "y": 563, "w": 7, "h": 7 }, { "x": 212, "y": 563, "w": 7, "h": 7 }, { "x": 219, "y": 563, "w": 7, "h": 7 }, { "x": 226, "y": 563, "w": 7, "h": 7 }, { "x": 233, "y": 563, "w": 7, "h": 7 }, { "x": 240, "y": 563, "w": 7, "h": 7 }, { "x": 247, "y": 563, "w": 7, "h": 7 }, { "x": 254, "y": 563, "w": 7, "h": 7 }, { "x": 261, "y": 563, "w": 7, "h": 7 }] }, "aura": { "name": "Leuchten hinter der Doppelhelix (gerastert): 0–1 wächst, 2–5 atmet (klein … groß)", "w": 39, "h": 83, "fps": 0, "loop": 6, "ax": 19, "ay": 41, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 0, "w": 39, "h": 83 }, { "x": 39, "y": 0, "w": 39, "h": 83 }, { "x": 78, "y": 0, "w": 39, "h": 83 }, { "x": 117, "y": 0, "w": 39, "h": 83 }, { "x": 156, "y": 0, "w": 39, "h": 83 }, { "x": 195, "y": 0, "w": 39, "h": 83 }] }, "spark": { "name": "Funke, türkis-weiß, funkelt", "w": 5, "h": 5, "fps": 8, "loop": 4, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 149, "y": 571, "w": 5, "h": 5 }, { "x": 154, "y": 571, "w": 5, "h": 5 }, { "x": 159, "y": 571, "w": 5, "h": 5 }, { "x": 164, "y": 571, "w": 5, "h": 5 }] }, "spark_v": { "name": "Funke, violett, funkelt", "w": 5, "h": 5, "fps": 8, "loop": 4, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 169, "y": 571, "w": 5, "h": 5 }, { "x": 174, "y": 571, "w": 5, "h": 5 }, { "x": 179, "y": 571, "w": 5, "h": 5 }, { "x": 184, "y": 571, "w": 5, "h": 5 }] }, "mote": { "name": "Lichtteilchen: 3 Farben × 3 Größen", "w": 3, "h": 3, "fps": 0, "loop": 9, "ax": 1, "ay": 1, "anchor": "center", "points": {}, "layout": "c*3+z", "placeholder": false, "frames": [{ "x": 280, "y": 571, "w": 3, "h": 3 }, { "x": 283, "y": 571, "w": 3, "h": 3 }, { "x": 286, "y": 571, "w": 3, "h": 3 }, { "x": 289, "y": 571, "w": 3, "h": 3 }, { "x": 292, "y": 571, "w": 3, "h": 3 }, { "x": 295, "y": 571, "w": 3, "h": 3 }, { "x": 298, "y": 571, "w": 3, "h": 3 }, { "x": 301, "y": 571, "w": 3, "h": 3 }, { "x": 304, "y": 571, "w": 3, "h": 3 }] }, "glow": { "name": "Weiches Leuchten (gerastert): 0 klein, 1 mittel, 2 groß", "w": 17, "h": 17, "fps": 0, "loop": 3, "ax": 8, "ay": 8, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 358, "y": 445, "w": 17, "h": 17 }, { "x": 375, "y": 445, "w": 17, "h": 17 }, { "x": 392, "y": 445, "w": 17, "h": 17 }] }, "comet": { "name": "Kopf des Energiestroms, flackert", "w": 9, "h": 9, "fps": 12, "loop": 4, "ax": 4, "ay": 4, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 417, "y": 553, "w": 9, "h": 9 }, { "x": 426, "y": 553, "w": 9, "h": 9 }, { "x": 435, "y": 553, "w": 9, "h": 9 }, { "x": 444, "y": 553, "w": 9, "h": 9 }] }, "burst": { "name": "Lichtausbruch am Ziel: Ring dehnt sich, zerfällt in Funken", "w": 33, "h": 33, "fps": 10, "loop": 7, "ax": 16, "ay": 16, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 256, "y": 371, "w": 33, "h": 33 }, { "x": 289, "y": 371, "w": 33, "h": 33 }, { "x": 322, "y": 371, "w": 33, "h": 33 }, { "x": 355, "y": 371, "w": 33, "h": 33 }, { "x": 388, "y": 371, "w": 33, "h": 33 }, { "x": 421, "y": 371, "w": 33, "h": 33 }, { "x": 454, "y": 371, "w": 33, "h": 33 }] }, "air_n2": { "name": "Stickstoff N₂: zwei blaue Kugeln, Dreifachbindung", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 186, "y": 513, "w": 20, "h": 14 }] }, "air_o2": { "name": "Sauerstoff O₂: zwei rote Kugeln, Doppelbindung", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 206, "y": 513, "w": 20, "h": 14 }] }, "air_co2": { "name": "Kohlendioxid CO₂: dunkelgraues C zwischen zwei roten O, gerade, Doppelbindungen", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 226, "y": 513, "w": 20, "h": 14 }] }, "air_ch4": { "name": "Methan CH₄: dunkelgraues C, vier weiße H als Tetraeder (eins vorn, eins dahinter)", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 246, "y": 513, "w": 20, "h": 14 }] }, "air_h2o": { "name": "Wasserdampf H₂O: rotes O, zwei weiße H im Winkel, ein Dampfwölkchen", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 266, "y": 513, "w": 20, "h": 14 }] }, "hud_air": { "name": "Sauerstoff O₂ der Statusleiste: das Molekül aus air_o2", "w": 18, "h": 7, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 26, "y": 563, "w": 18, "h": 7 }] }, "hud_co2": { "name": "Kohlendioxid CO₂ der Statusleiste: das Molekül aus air_co2", "w": 20, "h": 6, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 303, "y": 563, "w": 20, "h": 6 }] }, "air_dust": { "name": "Staub: schwebende Körner und Flocken in Braun und Grau", "w": 20, "h": 14, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 286, "y": 513, "w": 20, "h": 14 }] }, "air_fe": { "name": "Gelöstes Eisen Fe²⁺: rostorange Kugel im Meerwasser, Rostflocken sinken", "w": 24, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 441, "y": 445, "w": 24, "h": 16 }] }, "air_o2_sea": { "name": "O₂ im Meer: O₂-Molekül (zwei rote Kugeln) im Meerwasser mit Bläschen", "w": 24, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 465, "y": 445, "w": 24, "h": 16 }] }, "air_o2_sky": { "name": "O₂ in der Luft: O₂-Molekül vor hellem Himmel mit Wölkchen", "w": 24, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 469, "w": 24, "h": 16 }] }, "air_arrow": { "name": "Goldener Pfeil nach rechts zwischen den Sauerstoff-Stufen", "w": 7, "h": 7, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 268, "y": 563, "w": 7, "h": 7 }] }, "air_info": { "name": "Info-Zeichen: blaue runde Plakette mit weißem i", "w": 9, "h": 9, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 453, "y": 553, "w": 9, "h": 9 }] }, "air_baro": { "name": "Barometer: runde Messingdose mit Skala und Zeiger (Luftdruck)", "w": 16, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 76, "y": 469, "w": 16, "h": 16 }] }, "air_temp": { "name": "Thermometer mit roter Säule und Kugel (Mitteltemperatur)", "w": 16, "h": 16, "fps": 0, "loop": 1, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 92, "y": 469, "w": 16, "h": 16 }] }, "hud_temp": { "name": "Thermometer (Temperatur): 0 Säule hoch; 1 kalt (unter 10 °C): Säule tief, große sechsstrahlige Schneeflocke dahinter", "w": 19, "h": 17, "fps": 0, "loop": 2, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 320, "y": 445, "w": 19, "h": 17 }, { "x": 339, "y": 445, "w": 19, "h": 17 }] }, "snow_l": { "name": "Große Schneeflocke, sechsstrahlig, taumelt im Fallen", "w": 11, "h": 11, "fps": 6, "loop": 6, "ax": 5, "ay": 5, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 200, "y": 541, "w": 11, "h": 11 }, { "x": 211, "y": 541, "w": 11, "h": 11 }, { "x": 222, "y": 541, "w": 11, "h": 11 }, { "x": 233, "y": 541, "w": 11, "h": 11 }, { "x": 244, "y": 541, "w": 11, "h": 11 }, { "x": 255, "y": 541, "w": 11, "h": 11 }] }, "snow_m": { "name": "Mittlere Schneeflocke, taumelt im Fallen", "w": 7, "h": 7, "fps": 6, "loop": 4, "ax": 3, "ay": 3, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 275, "y": 563, "w": 7, "h": 7 }, { "x": 282, "y": 563, "w": 7, "h": 7 }, { "x": 289, "y": 563, "w": 7, "h": 7 }, { "x": 296, "y": 563, "w": 7, "h": 7 }] }, "snow_s": { "name": "Kleine Schneeflocke, funkelt", "w": 5, "h": 5, "fps": 3, "loop": 2, "ax": 2, "ay": 2, "anchor": "center", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 189, "y": 571, "w": 5, "h": 5 }, { "x": 194, "y": 571, "w": 5, "h": 5 }] }, "beam_tile": { "name": "Steinbalken, nahtlos waagerecht aneinander: Bild = Variante · 4 + Aussehen (3 Varianten; 0 kahl, 1 Flechten, 2 Moos, 3 üppig)", "w": 96, "h": 14, "fps": 0, "loop": 12, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 348, "y": 469, "w": 96, "h": 14 }, { "x": 0, "y": 485, "w": 96, "h": 14 }, { "x": 96, "y": 485, "w": 96, "h": 14 }, { "x": 192, "y": 485, "w": 96, "h": 14 }, { "x": 288, "y": 485, "w": 96, "h": 14 }, { "x": 384, "y": 485, "w": 96, "h": 14 }, { "x": 0, "y": 499, "w": 96, "h": 14 }, { "x": 96, "y": 499, "w": 96, "h": 14 }, { "x": 192, "y": 499, "w": 96, "h": 14 }, { "x": 288, "y": 499, "w": 96, "h": 14 }, { "x": 384, "y": 499, "w": 96, "h": 14 }, { "x": 0, "y": 513, "w": 96, "h": 14 }] }, "beam_end": { "name": "Anfang des Balkens rechts an Gaias Felsen: runder und kleiner Findling, zur Steinreihe abfallend; 0 kahl … 3 üppig", "w": 44, "h": 24, "fps": 0, "loop": 4, "ax": 0, "ay": 0, "anchor": "topleft", "points": {}, "layout": null, "placeholder": false, "frames": [{ "x": 0, "y": 445, "w": 44, "h": 24 }, { "x": 44, "y": 445, "w": 44, "h": 24 }, { "x": 88, "y": 445, "w": 44, "h": 24 }, { "x": 132, "y": 445, "w": 44, "h": 24 }] } }, "colors": { "rock0": "#3d3b45", "rock1": "#5d5a62", "rock2": "#807b7c", "rock3": "#a59f97", "rock4": "#c9c2b3", "sand0": "#94704a", "sand1": "#b89262", "sand2": "#d4b17c", "sand3": "#e6c996", "sand4": "#f3dfb4", "soil0": "#3f2c27", "soil1": "#5e4334", "soil2": "#7d5d43", "soil3": "#9c7b56", "laterite0": "#6e3628", "laterite1": "#92502f", "laterite2": "#b46c3d", "laterite3": "#cf8a55", "mud0": "#2e3125", "mud1": "#464a33", "mud2": "#626543", "mud3": "#7e7f55", "straw0": "#7c6c36", "straw1": "#a28f45", "straw2": "#c6b25a", "straw3": "#e2d17e", "meadow0": "#3b6a2f", "meadow1": "#568a35", "meadow2": "#78a83e", "meadow3": "#a2c759", "moss0": "#45512a", "moss1": "#63712f", "moss2": "#869238", "moss3": "#adb24c", "leaf0": "#1f4330", "leaf1": "#2c5f3a", "leaf2": "#3d7d44", "leaf3": "#579c4e", "pine0": "#142a2c", "pine1": "#1d4040", "pine2": "#29584f", "pine3": "#3a735e", "pine4": "#4f8f6a", "jungle0": "#0f3a2a", "jungle1": "#175a33", "jungle2": "#217a3a", "jungle3": "#3a9a42", "lichen0": "#a9b08f", "lichen1": "#cdd0b0", "ice0": "#5e7fa3", "ice1": "#86a7c6", "ice2": "#b0cbe0", "ice3": "#d6e6f0", "ice4": "#f3f8fb", "water0": "#0a2048", "water1": "#10346a", "water2": "#184e88", "water3": "#226ca4", "water4": "#3088b4", "water5": "#3e9cbc", "water6": "#58b2c2", "water7": "#80c8cc", "bark0": "#3a2620", "bark1": "#5e3f2c", "bark2": "#7d5a3c", "blossom0": "#e98fb0", "blossom1": "#f7c3d4", "yellow0": "#f0c64a", "white0": "#f2efe2", "red0": "#8e2f33", "red1": "#c4453f", "orange0": "#df8a3a", "violet0": "#9a6aa8", "violet1": "#c49ad0", "mask0": "#ffffff", "waterWarm0": "#1f9fb0", "waterWarm1": "#2fb8bf", "waterWarm2": "#49cfc8", "waterWarm3": "#7fe0d6", "reefUnder0": "#8f8274", "reefUnder1": "#a586c3", "reefUnder2": "#a89573", "reefUnder3": "#c48fb1", "reefUnder4": "#c59a69", "reefUnder5": "#b4a77d", "reefUnder6": "#b2b27c", "reefUnder7": "#9fd9c2", "reefUnder8": "#bfe8d2", "shelf0": "#1b548d", "shelf1": "#1d5b92", "shelf2": "#206196", "shelf3": "#22679b", "shelf4": "#256da0", "shelf5": "#2874a5", "coral0": "#3b9099", "coral1": "#6b817c", "coral2": "#707a9e", "coral3": "#7c798e", "coral4": "#7b7f67", "coral5": "#598775", "coral6": "#88a177", "coral7": "#a19f93", "coral8": "#b1aea0", "coral9": "#aea2c5", "parch0": "#b4885a", "parch1": "#d3ab76", "parch2": "#e9cb98", "parch3": "#f6e2bb", "parch4": "#fdf1d8", "parch5": "#fffaee", "gold0": "#5e3410", "gold1": "#8f531a", "gold2": "#c27f2a", "gold3": "#e3a63f", "gold4": "#f6cc6a", "gold5": "#fde9a6", "wood0": "#1f120a", "wood1": "#36210f", "wood2": "#523319", "wood3": "#704725", "wood4": "#8f5e33", "wood5": "#b07c47", "ink0": "#140d08", "ink1": "#2a1a0e", "skin0": "#6e3e2c", "skin1": "#a3644a", "skin2": "#cf9168", "skin3": "#ebb88c", "skin4": "#f9d9b5", "skin5": "#fff0dc", "hair0": "#0e2a16", "hair1": "#1a4520", "hair2": "#286426", "hair3": "#3e862b", "hair4": "#62a834", "hair5": "#94cc48", "hair6": "#c9eb72", "dress0": "#16301a", "dress1": "#234d24", "dress2": "#336d2c", "dress3": "#4a8d34", "dress4": "#6faf45", "vine0": "#102e10", "vine1": "#1d4c16", "vine2": "#2f6e1c", "vine3": "#4a9423", "vine4": "#72b92e", "vine5": "#a6db4a", "vine6": "#d9f283", "stem0": "#261c0c", "stem1": "#433214", "stem2": "#5f4a1d", "stem3": "#7c6428", "stem4": "#9a8238", "faded0": "#3f4a30", "faded1": "#5d6b43", "faded2": "#808e5c", "faded3": "#a7b17e", "faded4": "#cdd2a6", "wilt0": "#3c2810", "wilt1": "#644219", "wilt2": "#8c6127", "wilt3": "#b4853c", "wilt4": "#d6ad62", "petal0": "#8c3a5a", "petal1": "#c4628a", "petal2": "#ec94b4", "petal3": "#f9c6d8", "petal4": "#fff0f5", "petalY0": "#9a6a12", "petalY1": "#d49a22", "petalY2": "#f4c93e", "petalY3": "#ffe789", "petalB0": "#3c3f8f", "petalB1": "#5f6cc4", "petalB2": "#8fa0e6", "petalB3": "#c5d0fa", "glowT0": "#0d4652", "glowT1": "#167f8c", "glowT2": "#2fbcc4", "glowT3": "#6fe6e0", "glowT4": "#b9fbf2", "glowT5": "#efffff", "glowG0": "#1e6a33", "glowG1": "#3fae4c", "glowG2": "#7ee372", "glowG3": "#c2fbb2", "glowV0": "#34205c", "glowV1": "#5c3b9a", "glowV2": "#8f67d8", "glowV3": "#bf9dfa", "glowV4": "#e8dcff", "cloud0": "#4b5d7c", "cloud1": "#6f80a0", "cloud2": "#8f9fb7", "cloud3": "#adbacc", "cloud4": "#c8d2df", "cloud5": "#dde4ed", "cloud6": "#eef2f7", "cloud7": "#ffffff", "cloudLit0": "#2f6db0", "cloudLit1": "#4f89cc", "cloudLit2": "#9fb9d9", "cloudLit3": "#bcd0e8", "cloudLit4": "#d5e3f3", "cloudLit5": "#e8f0fa", "cloudLit6": "#f5f9fd", "cloudLit7": "#ffffff", "halo0": "#d8ecff" } };
+    SE.UI_ATLAS_PNG = 'data:image/png;base64,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';
 })(SE || (SE = {}));
 /* =============================================================================
  * Gaia Reborn — the living interface's pixel art on screen
@@ -62425,6 +62449,8 @@ var SE;
         awake: false, greenery: 0, bloom: 0, vitality: 1, emotion: 'sleeping', mood: 0.5, moodLevel: 2,
         trouble: null, steps: 0, generation: -1,
     };
+    /** The look of Gaia's rock and the stone beam beside it: 0 bare, 1 first lichen, 2 mossy, 3 lush. */
+    SE.groundLook = (s) => (!s.awake ? 0 : s.greenery > 0.7 ? 3 : s.greenery > 0.35 ? 2 : 1);
     class LivingMood {
         constructor() {
             this.state = SE.SLEEPING_STATE;
@@ -72194,6 +72220,8 @@ var SE;
         showNext() {
             if (this.card || this.fading || this.queue.length === 0 || this.hooks.held())
                 return;
+            if (this.queue.some((e) => e.c === SE.Life.Cetacean))
+                SE.playSfx(SE.WHALE_CALL);
             if (this.queue.length >= DISCOVERY_BUNDLE)
                 this.showBundle(this.queue.splice(0));
             else
@@ -73583,7 +73611,7 @@ var SE;
      * The version from package.json, written into simulation.js by
      * tools/stamp-version.js after every build; 'dev' in a bare `tsc` build.
      */
-    SE.APP_VERSION = '0.92.5';
+    SE.APP_VERSION = '0.92.6';
     function titleArt(name) {
         return `assets/title/${name}.svg`;
     }
@@ -74444,6 +74472,8 @@ var SE;
     SE.BUBBLE_VOLUME = 0.3;
     /** Loudest a hurricane's wind gets, with the storm in view and the camera close. */
     SE.STORM_WIND_VOLUME = 0.5;
+    /** Loudest the birdsong gets, zoomed fully in once birds live on the planet; not yet tuned by ear. */
+    SE.BIRDSONG_VOLUME = 0.25;
     /** How quickly an ambient loop follows the view, ms to cover most of a change. */
     const AMBIENT_EASE_MS = 1500;
     /**
@@ -74480,6 +74510,10 @@ var SE;
         }
     }
     SE.AmbientLoop = AmbientLoop;
+    /** The whale's call, in assets/audio/sfx/. */
+    SE.WHALE_CALL = 'animals/whale-sound';
+    /** The dolphins' whistle, in assets/audio/sfx/. */
+    SE.DOLPHIN_WHISTLE = 'animals/dolphin-whistling-in-water';
     /** The effect volume 0..1, 0 while sound is off; the app points this at its settings. */
     SE.SFX = { volume: () => 0 };
     /**
@@ -74502,6 +74536,10 @@ var SE;
         // The R.I.P. stamp (ripstamp.ts): both files peak near full scale; set below the disasters, not yet tuned by ear.
         'swipe': 0.6,
         'hit-sfx': 0.8,
+        // Whale call (whalelayer.ts, discoverytoast.ts); not yet tuned by ear.
+        [SE.WHALE_CALL]: 0.6,
+        // Dolphin pods (dolphinlayer.ts); not yet tuned by ear.
+        [SE.DOLPHIN_WHISTLE]: 0.5,
     };
     /** Where the bang sits in siren-and-nuke.mp3, after the siren: measured from the file's loudness. */
     SE.NUKE_BOOM_MS = 12150;
@@ -79863,13 +79901,336 @@ var SE;
     }
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — the status bar's clouds: shape and light (no DOM)
+ * -----------------------------------------------------------------------------
+ * One white cumulus per readout (topbarart.ts draws it, livingtopbar.ts
+ * places it): a core over the readout's icon and text (`box`, measured in the
+ * game), a crown of domes in the free rows above it after one of seven
+ * archetypes picked by the panel's seed (a tower, twin towers, a flat top, a
+ * rising slope, a drifting heap, a congestus, a mound; a small panel gets a
+ * small cumulus), rounded ends and a flat base. A smooth union of the circles
+ * rounds the notches; each puff is lit as a sphere from the upper left; behind
+ * the readout lies only a calm band; below it a shade that wanders and
+ * deepens to the lower right; a full outline, lighter where it faces the
+ * light. The style comes from the seed alone and the positions from seed and
+ * size, so a panel keeps its cloud when its width changes.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /**
+     * Tones per pixel, indices into the palette ramps 'cloud' and 'cloudLit': 0 outline in shadow, 1 outline
+     * facing the light, 2 deep underside, 3 shade, 4 soft shade, 5 cool body, 6 body, 7 white.
+     */
+    SE.CLOUD_TONES = 8;
+    /** Light from the upper left, towards the viewer. */
+    const LX = -0.52, LY = -0.7, LZ = 0.49;
+    /** Art px of the fillet between two puffs in the smooth union. */
+    const FILLET = 1.8;
+    const ARCH = ['tower', 'twin', 'flat', 'slope', 'drift', 'congestus', 'mound', 'tower'];
+    /** How high the two ends' upper puffs reach (0 the top row … 1 the core's top), before mirroring. */
+    const ENDS = {
+        tower: [0.72, 0.8], twin: [0.7, 0.82], flat: [0.42, 0.48], slope: [0.9, 0.2], drift: [0.95, 0.6], congestus: [0.62, 0.7], mound: [0.85, 0.8],
+    };
+    const smin = (a, b) => {
+        const e = Math.max(FILLET - Math.abs(a - b), 0) / FILLET;
+        return Math.min(a, b) - e * e * FILLET * 0.25;
+    };
+    /** The cloud w × h art px around `box` for panel `seed`: a tone per pixel (CLOUD_TONES), -1 where the map shows. */
+    function cloudTones(w, h, seed, box) {
+        const [bx0, by0, bx1, by1] = box;
+        const st = new SE.Rng(seed * 7919 + 1013);
+        const rng = new SE.Rng((seed * 7919 + w * 131 + h * 17 + 3) >>> 0);
+        const small = w < 1.5 * h || bx1 - bx0 < 0.5 * h;
+        // A small cloud floats a little higher, so it keeps a cumulus's proportions instead of a pillar's.
+        const base = small ? Math.min(h - 1, by1 + Math.max(2, Math.round(h * 0.12))) : h - 1;
+        // The core: the box plus a 1-px ring.
+        const xl = Math.max(0, bx0 - 1), xr = Math.min(w - 1, bx1);
+        const yt = Math.max(0, by0 - 1);
+        const boxH = Math.max(1, by1 - by0);
+        const span = xr + 1 - xl;
+        const flip = st.next() < 0.5;
+        const arch = ARCH[seed % ARCH.length];
+        const S = [];
+        const put = (x, y, r, z, kind = 2) => {
+            const rr = Math.max(1.2, Math.min(r, (w - 1.2) / 2));
+            const s = { x: SE.clamp(x, rr + 0.4, w - rr - 0.4), y: Math.max(y, rr + 0.05), r: rr, z, kind };
+            S.push(s);
+            return s;
+        };
+        const X = (t) => xl + (flip ? 1 - t : t) * span;
+        const T = (lvl) => lvl * yt;
+        // A dome with its top on row `top`, centred on row `c` inside the body: higher domes are bigger arcs.
+        const dome = (x, top, c, z = 2) => put(x, c, Math.max(1.5, c - top), z);
+        const cRow = (f) => yt + boxH * f;
+        // A tower: a narrow puff on top, wider supports below it down to the body.
+        const tower = (x, top, r, lean, z = 2.6) => {
+            let c = put(x, top + r, r, z);
+            for (let n = 0; n < 4 && c.y < yt + 1; n++)
+                c = put(c.x + lean * c.r * 0.3, c.y + c.r * 0.85, c.r * 1.22, z - 0.3);
+        };
+        if (small) {
+            // A wide base mass, one dome off-centre, a smaller one on the other side; the feet rise to the main
+            // dome's widest row, so the sides only widen downwards.
+            const sd = flip ? -1 : 1;
+            const rm = SE.clamp(w * 0.3, 2.5, 12);
+            const top = Math.min(T(st.range(0.05, 0.3)), yt - 2);
+            const m = put(w / 2 + sd * w * st.range(0.04, 0.07), Math.max(top + rm, yt + 0.5 - rm * 0.2), rm, 2.4);
+            const rb = SE.clamp(Math.min(w * 0.3, (base + 0.5 - m.y) / 1.75), 2.5, 10);
+            put(rb + 0.5, base + 0.5 - rb * 0.75, rb, 1, 1);
+            put(w - rb - 0.5, base + 0.5 - rb * 0.75, rb, 1, 1);
+            const r2 = rm * st.range(0.58, 0.66);
+            put(w / 2 - sd * w * st.range(0.16, 0.2), Math.max(T(st.range(0.45, 0.65)) + r2, yt), r2, 2);
+        }
+        else {
+            // Ends: an upper puff hides the core's top corner, a foot rounds the corner on the base, a middle puff between.
+            const endStyle = [st.next() < 0.5 ? 'round' : 'skirt', st.next() < 0.45 && w >= 54 ? 'bulge' : st.next() < 0.5 ? 'round' : 'skirt'];
+            for (const sd of [-1, 1]) {
+                const style = endStyle[sd < 0 ? 0 : 1];
+                const [eU, eM, eF] = style === 'round' ? [st.range(3.6, 4.8), st.range(1.4, 2.2), st.range(0.4, 1)]
+                    : style === 'skirt' ? [st.range(4.6, 5.6), st.range(2.6, 3.4), st.range(0.3, 0.7)]
+                        : [st.range(1.2, 2), st.range(1, 1.6), st.range(1.6, 2.4)];
+                const rF = SE.clamp(h * st.range(0.27, 0.33), 2.5, 12);
+                // The corner to hide, in a frame where this end is on the left; the upper puff's radius keeps that corner
+                // inside a circle tangent to x = eU and y = top: r² − (2a + 2b − 0.8) r + a² + b² − 0.16 ≤ 0.
+                const ax = (sd < 0 ? xl + 0.5 : w - xr - 0.5) - eU, ay = yt + 0.5;
+                const top = T(ENDS[arch][(sd < 0) !== flip ? 0 : 1]);
+                const bq = ay - top;
+                const B = 2 * ax + 2 * bq - 0.8, C = ax * ax + bq * bq - 0.16, disc = B * B - 4 * C;
+                let rU = Math.max(cRow(0.25) - top, h * 0.2);
+                if (disc > 0)
+                    rU = SE.clamp(rU, (B - Math.sqrt(disc)) / 2 + 0.2, (B + Math.sqrt(disc)) / 2 - 0.2);
+                const at = (e, r) => (sd < 0 ? e + r : w - e - r);
+                const U = put(at(eU, rU), top + rU, rU, 2);
+                const F = put(at(eF, rF), base + 0.5 - rF * 0.6, rF, 1, 1);
+                if (F.y - U.y > Math.max(U.r, F.r) * 0.7) {
+                    const rM = (U.r + F.r) / 2;
+                    put(at(eM, rM), (U.y + F.y) / 2, rM, 1.5, 1);
+                }
+            }
+            // Crown: the archetype's domes at relative places along the core's top.
+            const j = () => rng.range(-0.025, 0.025);
+            const tr = SE.clamp(h * 0.17, 2, 7);
+            const lean = flip ? -1 : 1;
+            if (arch === 'tower') {
+                const t = st.range(0.26, 0.4);
+                tower(X(t + j()), T(0), tr, lean);
+                dome(X(t + 0.3 + j()), T(st.range(0.5, 0.58)), cRow(0.35));
+                dome(X(0.86 + j()), T(st.range(0.7, 0.8)), cRow(0.25));
+            }
+            else if (arch === 'twin') {
+                const c = st.range(0.42, 0.56), sep = Math.min(span * 0.4, tr * 2.6);
+                dome(X(c), T(0.55), cRow(0.4));
+                tower(X(c) - sep / 2, T(0), tr * 0.95, -1);
+                tower(X(c) + sep / 2, T(st.range(0.12, 0.22)), tr * 0.9, 1);
+                dome(X(c > 0.5 ? 0.14 : 0.86), T(0.76), cRow(0.25));
+            }
+            else if (arch === 'flat') {
+                const r0 = cRow(0.6) - T(0.4);
+                const n = Math.max(2, Math.round(span / (r0 * 1.15)));
+                for (let i = 0; i < n; i++)
+                    dome(X((i + 0.5) / n + j()), T(st.range(0.36, 0.44)), cRow(0.6));
+                dome(X(st.range(0.3, 0.6)), T(0.18), cRow(0.05), 2.4);
+            }
+            else if (arch === 'slope') {
+                dome(X(0.16 + j()), T(0.8), cRow(0.25));
+                dome(X(0.4 + j()), T(0.56), cRow(0.3));
+                dome(X(0.64 + j()), T(0.3), cRow(0.35));
+                dome(X(0.84), T(0), cRow(0.4), 2.4);
+            }
+            else if (arch === 'drift') {
+                dome(X(0.58 + j()), T(0.22), cRow(0.35), 2.3);
+                dome(X(0.84 + j()), T(0.5), cRow(0.3));
+                dome(X(0.32 + j()), T(0.74), cRow(0.25));
+            }
+            else if (arch === 'congestus') {
+                const t = st.range(0.42, 0.55);
+                tower(X(t), T(0), tr * 1.15, lean);
+                dome(X(t - 0.16 + j()), T(0.45), cRow(0.45));
+                dome(X(t + 0.15 + j()), T(0.38), cRow(0.45), 2.3);
+                dome(X(t + 0.3 + j()), T(0.62), cRow(0.4));
+                dome(X(t - 0.32 + j()), T(0.66), cRow(0.4));
+            }
+            else {
+                dome(X(st.range(0.44, 0.56)), T(0.02), Math.min(cRow(0.45), T(0.02) + span * 0.3), 2.4);
+                dome(X(0.14 + j()), T(0.7), cRow(0.25));
+                dome(X(0.86 + j()), T(0.64), cRow(0.25));
+            }
+        }
+        // Shoulders where the core's top edge would still show as a straight line.
+        const prof = (x) => {
+            let p = 99;
+            for (const s of S) {
+                const dx = x + 0.5 - s.x;
+                if (Math.abs(dx) < s.r)
+                    p = Math.min(p, s.y - Math.sqrt(s.r * s.r - dx * dx));
+            }
+            return p;
+        };
+        for (let x = xl, run = -1; x <= xr + 1; x++) {
+            const open = x <= xr && prof(x) > yt - 0.6;
+            if (open && run < 0)
+                run = x;
+            if (!open && run >= 0) {
+                const len = x - run;
+                if (len >= Math.max(5, h * 0.3)) {
+                    const n = Math.max(1, Math.round(len / (h * 1.1)));
+                    for (let i = 0; i < n; i++)
+                        dome(run + (i + 0.5) * (len / n) + rng.range(-1, 1), T(rng.range(0.6, 0.85)), cRow(rng.range(0.3, 0.45)), 1.9);
+                }
+                run = -1;
+            }
+        }
+        // Back puffs in the crown's notches, peeking above the lower neighbour only (small ones would read as nubs).
+        const crown = S.filter((s) => s.kind === 2 && s.y - s.r < yt - 0.5).sort((a, b) => a.x - b.x);
+        const backP = arch === 'congestus' ? 0.35 : arch === 'flat' ? 0.25 : 0.55;
+        for (let k = 0; k + 1 < crown.length; k++) {
+            const a = crown[k], b = crown[k + 1];
+            if (b.x - a.x < (a.r + b.r) * 0.45 || st.next() > backP)
+                continue;
+            const r = Math.min(a.r, b.r) * rng.range(0.5, 0.65);
+            const vx = (a.x * b.r + b.x * a.r) / (a.r + b.r);
+            const t = Math.max(a.y - a.r, b.y - b.r) - rng.range(1.3, 2.3);
+            if (r < 2.2 || prof(Math.round(vx)) - t < 2 || t < 0)
+                continue;
+            put(vx, t + r, r, 0, 0);
+        }
+        // Rasterise: the smooth union's distance, the puffs' heightfield and its owner per pixel.
+        const N = w * h;
+        const D = new Float32Array(N).fill(99);
+        const Z = new Float32Array(N).fill(-99);
+        const O = new Int16Array(N).fill(-1);
+        const core = (x, y) => x >= xl && x <= xr && y >= yt && y <= base;
+        S.forEach((s, k) => {
+            const xa = Math.max(0, Math.floor(s.x - s.r - FILLET)), xb = Math.min(w - 1, Math.ceil(s.x + s.r + FILLET));
+            const ya = Math.max(0, Math.floor(s.y - s.r - FILLET)), yb = Math.min(base, Math.ceil(s.y + s.r + FILLET));
+            for (let y = ya; y <= yb; y++) {
+                for (let x = xa; x <= xb; x++) {
+                    const dx = x + 0.5 - s.x, dy = y + 0.5 - s.y, q = dx * dx + dy * dy, d = Math.sqrt(q) - s.r;
+                    const i = y * w + x;
+                    D[i] = smin(D[i], d);
+                    if (d < 0) {
+                        const z = s.z + Math.sqrt(s.r * s.r - q);
+                        if (z > Z[i]) {
+                            Z[i] = z;
+                            O[i] = k;
+                        }
+                    }
+                }
+            }
+        });
+        for (let y = yt; y <= base; y++)
+            for (let x = xl; x <= xr; x++)
+                D[y * w + x] = Math.min(D[y * w + x], -0.5);
+        const inside = (x, y) => x >= 0 && y >= 0 && x < w && y <= base && D[y * w + x] < 0;
+        // Drop 1-px spikes (nothing left, right and above), top-down so a whole spike goes.
+        for (let y = 0; y < base; y++) {
+            for (let x = 0; x < w; x++) {
+                if (!core(x, y) && inside(x, y) && !inside(x - 1, y) && !inside(x + 1, y) && !inside(x, y - 1))
+                    D[y * w + x] = 1;
+            }
+        }
+        // The underside: per column the shade's depth, a smooth walk that deepens to the lower right.
+        const bottom = new Int16Array(w).fill(-1);
+        for (let x = 0; x < w; x++)
+            for (let y = base; y >= 0; y--)
+                if (inside(x, y)) {
+                    bottom[x] = y;
+                    break;
+                }
+        const knots = [];
+        for (let k = 0; k < Math.ceil(w / 19) + 2; k++)
+            knots.push(rng.next());
+        const zone = base - by1;
+        const under = (x) => {
+            const f = x / 19, k = Math.floor(f), a = f - k, sm = a * a * (3 - 2 * a);
+            const n = knots[k] + (knots[k + 1] - knots[k]) * sm;
+            return zone * SE.clamp(0.42 + 0.3 * (x / w - 0.5) + 0.6 * (n - 0.5), 0.2, 0.9);
+        };
+        const light = (k, px, py) => {
+            const q = S[k];
+            const mx = (px + 0.5 - q.x) / q.r, my = (py + 0.5 - q.y) / q.r;
+            return (mx * LX + my * LY + Math.sqrt(Math.max(0, 1 - mx * mx - my * my)) * LZ + 0.5) / 1.4;
+        };
+        const out = new Int8Array(N).fill(-1);
+        // Behind the readout: white at its top, a cool body tone towards its bottom.
+        const band = (y) => 0.98 - 0.5 * ((y - by0 + 0.5) / boxH);
+        for (let y = 0; y <= base; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = y * w + x;
+                if (!inside(x, y))
+                    continue;
+                const up = !inside(x, y - 1), dn = !inside(x, y + 1), lf = !inside(x - 1, y), rt = !inside(x + 1, y);
+                if (up || dn || lf || rt) {
+                    const ox = (rt ? 1 : 0) - (lf ? 1 : 0), oy = (dn ? 1 : 0) - (up ? 1 : 0), ol = Math.sqrt(ox * ox + oy * oy) || 1;
+                    out[i] = (ox * LX + oy * LY) / ol > 0.3 ? 1 : 0;
+                    continue;
+                }
+                let nx = 0, ny = -0.15, nz = 0.99;
+                const k = O[i];
+                const db = Math.max(bx0 - x, 0, x - (bx1 - 1), by0 - y, y - (by1 - 1));
+                if (k >= 0) {
+                    const s = S[k];
+                    nx = (x + 0.5 - s.x) / s.r;
+                    ny = (y + 0.5 - s.y) / s.r;
+                    nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+                }
+                else if (!core(x, y)) {
+                    const gx = D[i + 1] - D[i - 1], gy = D[i + w] - D[i - w], gl = Math.sqrt(gx * gx + gy * gy) || 1;
+                    nx = (gx / gl) * 0.8;
+                    ny = (gy / gl) * 0.8;
+                    nz = 0.6;
+                }
+                let v = k < 0 && core(x, y) ? band(y) : (nx * LX + ny * LY + nz * LZ + 0.5) / 1.4;
+                // Feet and side puffs follow the body's gradient, so the lower body has no bright patches.
+                if (k >= 0 && S[k].kind === 1 && y >= by0)
+                    v = v * 0.4 + band(y) * 0.6;
+                v -= 0.14 * SE.clamp((y - by0) / Math.max(1, base - by0), 0, 1);
+                const wb = SE.clamp(1 - db / 2.5, 0, 1);
+                v = v * (1 - wb) + band(SE.clamp(y, by0, by1 - 1)) * wb;
+                // A crease where this puff meets a brighter one to the right or below.
+                if (k >= 0 && db > 2 && S[k].kind !== 1) {
+                    const kr = O[i + 1], kd = y < base ? O[i + w] : -1;
+                    if ((kr >= 0 && kr !== k && light(kr, x + 1, y) > light(k, x, y) + 0.12)
+                        || (kd >= 0 && kd !== k && light(kd, x, y + 1) > light(k, x, y) + 0.12))
+                        v = Math.min(v, 0.45);
+                }
+                let t = v > 0.68 ? 7 : v > 0.52 ? 6 : v > 0.38 ? 5 : v > 0.24 ? 4 : 3;
+                if (db === 0)
+                    t = Math.max(t, 5);
+                else {
+                    // Below the readout only the wandering shade darkens.
+                    if (y >= by1)
+                        t = Math.max(t, 5);
+                    const dyB = bottom[x] - y, uu = under(x);
+                    if (dyB <= uu - Math.max(1.6, 0.55 * zone) && x > w * 0.6)
+                        t = Math.min(t, 2);
+                    else if (dyB <= uu)
+                        t = 3;
+                    else if (dyB <= uu + 1.4)
+                        t = Math.min(t, 4);
+                }
+                out[i] = t;
+            }
+        }
+        // The shadow end only darkens outwards: no lighter pixel right of a darker one.
+        for (let y = 0; y < base; y++) {
+            for (let x = bx1 + 1; x < w; x++) {
+                const i = y * w + x;
+                if (out[i] >= 2 && out[i - 1] >= 2 && out[i] > out[i - 1])
+                    out[i] = out[i - 1];
+            }
+        }
+        return out;
+    }
+    SE.cloudTones = cloudTones;
+})(SE || (SE = {}));
+/* =============================================================================
  * Gaia Reborn — the status bar's pixel art
  * -----------------------------------------------------------------------------
  * What the living status bar (livingtopbar.ts) draws on its pixel canvases:
- * the wood beam with a gold-rimmed parchment panel behind every chip, wood
- * posts with brass studs between the panels and the logo; single sprites;
- * the Ω store, the era bar and the sparklines. Everything in art px on a
- * PixelCanvas; the bar decides when to draw.
+ * a white cumulus (cloudshape.ts) behind every chip, the map showing between
+ * them; single sprites; the Ω store, the era bar and the sparklines.
+ * Everything in art px on a PixelCanvas; the bar decides when to draw.
  * ========================================================================== */
 var SE;
 (function (SE) {
@@ -79883,77 +80244,13 @@ var SE;
         'moss2', 'pine3', 'glowG3', 'wilt3', 'water6', 'red1',
         'violet0', 'glowT2', 'vine4', 'orange0', 'yellow0', 'petalY3',
     ];
-    /** Wood rows above and below the panels: 3, fewer where the 60 px bar is only some 20 art px tall (3 CSS px per art px), so a panel keeps room for the logo inside its rim. */
-    SE.topbarMargin = (rows) => SE.clamp(Math.floor((rows - 18) / 2), 1, 3);
-    const frames = new Map();
-    let framesVersion = -1;
-    /** One frame of a sprite alone on a small canvas, for slicing and tiling. */
-    function frame(id, f) {
-        const ui = SE.UiArt.shared();
-        if (framesVersion !== ui.version) {
-            frames.clear();
-            framesVersion = ui.version;
-        }
-        const key = `${id}:${f}`;
-        const have = frames.get(key);
-        const sp = ui.sprite(id);
-        if (have || !sp || !ui.ready)
-            return have ?? null;
-        const c = document.createElement('canvas');
-        c.width = sp.w;
-        c.height = sp.h;
-        const ctx = c.getContext('2d');
-        if (!ctx)
-            return null;
-        ui.draw(ctx, id, f, sp.ax, sp.ay);
-        frames.set(key, c);
-        return c;
-    }
-    /** The part (sx, sy, sw, sh) of `src` repeated over the box (x, y, w, h), cut at its far edges. */
-    function rep(ctx, src, sx, sy, sw, sh, x, y, w, h) {
-        if (sw <= 0 || sh <= 0)
-            return;
-        for (let ty = y; ty < y + h; ty += sh) {
-            const ch = Math.min(sh, y + h - ty);
-            for (let tx = x; tx < x + w; tx += sw) {
-                const cw = Math.min(sw, x + w - tx);
-                ctx.drawImage(src, sx, sy, cw, ch, tx, ty, cw, ch);
-            }
-        }
-    }
-    function tile(ctx, id, f, x, y, w, h) {
-        const src = frame(id, f);
-        if (src)
-            rep(ctx, src, 0, 0, src.width, src.height, x, y, w, h);
-    }
-    /** The gold-rimmed panel, nine-sliced: corners (a third of the sprite) as drawn, edges and centre repeated. */
-    function nine(ctx, f, x, y, w, h) {
-        const s = frame('panel9', f);
-        if (!s || w <= 0 || h <= 0)
-            return;
-        const cx = Math.floor(s.width / 3);
-        const cy = Math.floor(s.height / 3);
-        const mw = s.width - 2 * cx;
-        const mh = s.height - 2 * cy;
-        const rx = s.width - cx;
-        const ry = s.height - cy;
-        rep(ctx, s, cx, cy, mw, mh, x + cx, y + cy, w - 2 * cx, h - 2 * cy);
-        rep(ctx, s, cx, 0, mw, cy, x + cx, y, w - 2 * cx, cy);
-        rep(ctx, s, cx, ry, mw, cy, x + cx, y + h - cy, w - 2 * cx, cy);
-        rep(ctx, s, 0, cy, cx, mh, x, y + cy, cx, h - 2 * cy);
-        rep(ctx, s, rx, cy, cx, mh, x + w - cx, y + cy, cx, h - 2 * cy);
-        ctx.drawImage(s, 0, 0, cx, cy, x, y, cx, cy);
-        ctx.drawImage(s, rx, 0, cx, cy, x + w - cx, y, cx, cy);
-        ctx.drawImage(s, 0, ry, cx, cy, x, y + h - cy, cx, cy);
-        ctx.drawImage(s, rx, ry, cx, cy, x + w - cx, y + h - cy, cx, cy);
-    }
     /**
-     * The bar's background, W × H art px of which `rows` are the bar: wood, a
-     * panel for every box, a post with a stud above and below where two panels
-     * are close, and the logo with its left edge at art px `logoX` (null while
-     * the plaque is hidden). Without the atlas only cleared.
+     * The bar's background, W × H art px: no beam, the map shows through; a
+     * cloud behind every panel from the bar's second row down, so the map
+     * shows above it too; a lit cloud with a halo. Without the atlas only
+     * cleared.
      */
-    function drawTopbarBg(pc, W, H, rows, boxes, logoX, sc) {
+    function drawTopbarClouds(pc, W, H, boxes, sc) {
         const ui = SE.UiArt.shared();
         pc.size(W, H, sc);
         pc.place({ left: 0, top: 0 });
@@ -79961,25 +80258,43 @@ var SE;
         if (!ui.ready)
             return;
         const ctx = pc.ctx;
-        tile(ctx, 'wood_tile', 0, 0, 0, W, H);
-        const y = SE.topbarMargin(rows);
-        const h = rows - 2 * y;
-        const post = ui.sprite('post_tile');
-        boxes.forEach(([x0, x1, f], k) => {
-            nine(ctx, f, x0, y, x1 - x0, h);
-            const next = boxes[k + 1];
-            if (!post || !next || next[0] <= x1 || next[0] - x1 > 2 * (post.w + 2))
-                return;
-            const px = Math.floor((x1 + next[0] - post.w) / 2);
-            tile(ctx, 'post_tile', 0, px, 0, post.w, H);
-            ui.draw(ctx, 'stud', 0, px + Math.floor(post.w / 2), y - 1);
-            ui.draw(ctx, 'stud', 0, px + Math.floor(post.w / 2), y + h);
-        });
-        const logo = ui.sprite('logo');
-        if (logo && logoX !== null)
-            ui.draw(ctx, 'logo', 0, logoX + logo.ax, y + Math.floor((h - logo.h) / 2) + logo.ay);
+        const h = H - 1;
+        if (h <= 0)
+            return;
+        for (const [x0, x1, lit, seed, box] of boxes) {
+            const w = x1 - x0;
+            if (w <= 2)
+                continue;
+            const tones = SE.cloudTones(w, h, seed, box);
+            const colors = Array.from({ length: SE.CLOUD_TONES }, (_, t) => ui.color(lit ? `cloudLit${t}` : `cloud${t}`));
+            // Runs of one tone per row: a few hundred rectangles a cloud.
+            for (let y = 0; y < h; y++) {
+                let x = 0;
+                while (x < w) {
+                    const t = tones[y * w + x];
+                    let e = x + 1;
+                    while (e < w && tones[y * w + e] === t)
+                        e++;
+                    if (t >= 0) {
+                        ctx.fillStyle = colors[t];
+                        ctx.fillRect(x0 + x, y + 1, e - x, 1);
+                    }
+                    x = e;
+                }
+            }
+            if (lit) {
+                const at = (x, y) => x >= 0 && y >= 0 && x < w && y < h && tones[y * w + x] >= 0;
+                ctx.fillStyle = ui.color('halo0');
+                for (let y = -1; y < h; y++) {
+                    for (let x = -1; x <= w; x++) {
+                        if (!at(x, y) && (at(x - 1, y) || at(x + 1, y) || at(x, y - 1) || at(x, y + 1)))
+                            ctx.fillRect(x0 + x, y + 1, 1, 1);
+                    }
+                }
+            }
+        }
     }
-    SE.drawTopbarBg = drawTopbarBg;
+    SE.drawTopbarClouds = drawTopbarClouds;
     /** Frame f of sprite `id` alone on its pixel canvas. */
     function drawUiSprite(pc, id, f, sc) {
         const ui = SE.UiArt.shared();
@@ -80133,12 +80448,196 @@ var SE;
     SE.drawSparkline = drawSparkline;
 })(SE || (SE = {}));
 /* =============================================================================
+ * Gaia Reborn — snow from the temperature cloud
+ * -----------------------------------------------------------------------------
+ * While the planet's mean temperature is below 10 °C, snow falls without a
+ * pause from the status bar's temperature cloud (livingtopbar.ts) down over
+ * the map to the stone beam: big, middle and small flakes (atlas sprites
+ * snow_l, snow_m, snow_s, each tumbling at its own phase), the big ones nearer
+ * and faster, all swaying in a light breeze; the colder, the thicker. A canvas
+ * as wide as the stage (the breeze carries flakes far aside on a long fall),
+ * above the map, behind the stone beam, Gaia, the rail and the windows; its
+ * top reaches up behind the clouds, so the flakes come out of the cloud. It
+ * animates only while flakes are in the air.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** Flakes per second just below the snow line and from 20 °C below it on. */
+    const RATE = [1.6, 5];
+    const COLDEST = 20;
+    /** Big to small: the share of flakes, fall speed in art px per second, sway in art px. */
+    const KINDS = [
+        { id: 'snow_l', share: 0.25, speed: [24, 30], sway: [3, 5] },
+        { id: 'snow_m', share: 0.35, speed: [17, 23], sway: [2, 4] },
+        { id: 'snow_s', share: 0.4, speed: [11, 16], sway: [1, 3] },
+    ];
+    /** Art px in from the cloud's ends where flakes start. */
+    const INSET = 8;
+    /** The longest frame step that still counts as time passing: after a hidden tab, no sudden flurry. */
+    const MAX_DT = 0.1;
+    const Z = 20;
+    const between = (r) => r[0] + Math.random() * (r[1] - r[0]);
+    class CloudSnow {
+        constructor(stage) {
+            this.stage = stage;
+            this.pc = new SE.PixelCanvas('cloud-snow', Z);
+            this.flakes = [];
+            /** Flakes per second; 0 while it does not snow. */
+            this.rate = 0;
+            /** Flakes owed by the time passed, a fraction carried over. */
+            this.due = 0;
+            this.last = 0;
+            this.raf = 0;
+            /** The cloud's columns in art px of the stage and the bar's rows above the stage, while the cloud is shown. */
+            this.box = null;
+            stage.appendChild(this.pc.canvas);
+        }
+        /**
+         * With every status update: degrees below the snow line (0 or less: no
+         * snow), the cloud's box (null while it is hidden) and whether effects
+         * are reduced (then no flakes at all).
+         */
+        set(below, box, still) {
+            if (box) {
+                const sc = SE.uiScale();
+                this.pc.size(Math.ceil(this.stage.clientWidth / sc.u), box[2] + Math.ceil(this.stage.clientHeight / sc.u), sc);
+                this.pc.place({ left: 0, top: -box[2] * sc.u });
+            }
+            this.box = box;
+            this.rate = below > 0 && box && !still ? RATE[0] + (RATE[1] - RATE[0]) * SE.clamp(below / COLDEST, 0, 1) : 0;
+            if (still && this.flakes.length) {
+                this.flakes = [];
+                this.pc.clear();
+            }
+            if (this.rate > 0 || this.flakes.length)
+                this.wake();
+        }
+        wake() {
+            if (this.raf)
+                return;
+            this.last = performance.now();
+            this.raf = requestAnimationFrame((now) => this.frame(now));
+        }
+        frame(now) {
+            this.raf = 0;
+            const dt = SE.clamp((now - this.last) / 1000, 0, MAX_DT);
+            this.last = now;
+            const box = this.box;
+            if (this.rate > 0 && box) {
+                this.due += dt * this.rate;
+                for (; this.due >= 1; this.due--)
+                    this.spawn(box, now);
+            }
+            const bottom = this.pc.h + 8;
+            this.flakes = this.flakes.filter((f) => f.y + ((now - f.t0) / 1000) * f.speed < bottom);
+            this.draw(now);
+            if (this.rate > 0 || this.flakes.length)
+                this.raf = requestAnimationFrame((t) => this.frame(t));
+        }
+        spawn(box, now) {
+            let pick = Math.random();
+            const kind = KINDS.find((k) => (pick -= k.share) < 0) ?? KINDS[KINDS.length - 1];
+            const w = box[1] - box[0];
+            this.flakes.push({
+                id: kind.id,
+                x: box[0] + INSET + Math.random() * Math.max(1, w - 2 * INSET),
+                // Inside the cloud's lower part: the cloud covers the flake until it falls out of its belly.
+                y: box[2] * 0.62,
+                t0: now,
+                speed: between(kind.speed),
+                sway: between(kind.sway),
+                freq: 0.8 + Math.random() * 0.9,
+                phase: Math.random() * 6.3,
+                drift: (Math.random() - 0.5) * 3,
+            });
+        }
+        draw(now) {
+            const ui = SE.UiArt.shared();
+            this.pc.clear();
+            if (!ui.ready)
+                return;
+            const ctx = this.pc.ctx;
+            for (const f of this.flakes) {
+                const t = (now - f.t0) / 1000;
+                const x = Math.round(f.x + f.sway * Math.sin(f.phase + f.freq * t) + f.drift * t);
+                const y = Math.round(f.y + f.speed * t);
+                ui.draw(ctx, f.id, ui.loopFrame(f.id, now, f.phase), x, y);
+            }
+        }
+    }
+    SE.CloudSnow = CloudSnow;
+})(SE || (SE = {}));
+/* =============================================================================
+ * Gaia Reborn — the stone beam along the bottom edge
+ * -----------------------------------------------------------------------------
+ * A row of flat stones across the bottom of the map with Gaia's rock at its
+ * left end (gaiacompanion.ts draws the rock in front); right of the rock a
+ * boulder steps down to the row. Moss grows on it with the planet, as on her
+ * rock (groundLook). One pixel canvas above the map and the falling snow,
+ * below Gaia's corner, the rail and the windows; redrawn only when the width,
+ * the scale, the look or the art changes.
+ * ========================================================================== */
+var SE;
+(function (SE) {
+    /** The tiles' variants along the row (as tools' beam previews lay them): no variant twice in a row. */
+    const ORDER = [0, 1, 2, 0, 2, 1];
+    /** Art px of beam_end tucked under the rock's right flank. */
+    const TUCK = 6;
+    const Z = 30;
+    class StoneBeam {
+        constructor(stage) {
+            this.stage = stage;
+            /** CSS px of the stone row at the bottom of the stage (0 until the art is ready). */
+            this.height = 0;
+            this.pc = new SE.PixelCanvas('stone-beam', Z);
+            this.sig = '';
+            stage.appendChild(this.pc.canvas);
+        }
+        /** About ten times a second, with the living state; draws only when what it shows changed. */
+        update(state) {
+            const ui = SE.UiArt.shared();
+            const sc = SE.uiScale();
+            const look = SE.groundLook(state);
+            const W = Math.ceil(this.stage.clientWidth / sc.u);
+            const sig = `${look}|${W}|${sc.s}|${sc.dpr}|${sc.beside}|${ui.version}|${ui.ready}`;
+            if (sig === this.sig)
+                return;
+            this.sig = sig;
+            const tile = ui.sprite('beam_tile');
+            const end = ui.sprite('beam_end');
+            const rock = ui.sprite('rock');
+            if (!ui.ready || !tile || W <= 0) {
+                this.pc.size(0, 0, sc);
+                this.height = 0;
+                return;
+            }
+            this.height = tile.h * sc.u;
+            const H = Math.max(tile.h, end?.h ?? 0);
+            this.pc.size(W, H, sc);
+            this.pc.place({ left: 0, bottom: 0 });
+            this.pc.clear();
+            const ctx = this.pc.ctx;
+            for (let i = 0, x = 0; x < W; i++, x += tile.w)
+                ui.draw(ctx, 'beam_tile', ORDER[i % ORDER.length] * 4 + look, x + tile.ax, H - tile.h + tile.ay);
+            if (end && rock) {
+                // Gaia's corner stands right of the rail when the stage is too short for both (uiScale().beside).
+                const scene = sc.beside ? SE.UI_RAIL.left + SE.UI_RAIL.width : 0;
+                const x = scene + SE.UI_SCENE.rockFootX - rock.ax + rock.w - TUCK;
+                ui.draw(ctx, 'beam_end', look, x + end.ax, H - end.h + end.ay);
+            }
+        }
+    }
+    SE.StoneBeam = StoneBeam;
+})(SE || (SE = {}));
+/* =============================================================================
  * Gaia Reborn — the living status bar
  * -----------------------------------------------------------------------------
- * The top bar in the living style: a wood beam, a gold-rimmed parchment panel
- * behind every chip, wood posts with brass studs between the panels and the
- * GAIA REBORN plaque, all in one pixel canvas behind the content that is
- * redrawn only when the layout, a highlight, the scale or the art changes.
+ * The top bar in the living style: no beam any more, a cream pixel cloud
+ * behind every chip with the map running on beneath and between them (the
+ * map's canvas reaches up under the bar: app.ts), all in one pixel canvas
+ * behind the content that is redrawn only when the layout, a highlight, the
+ * scale or the art changes. Below 10 °C the thermometer sinks, a big
+ * snowflake shows behind it and snow falls from its cloud (cloudsnow.ts).
  * The text stays crisp DOM and grows a little with the art at large scales;
  * icons, sparklines, the Ω bar and the era bar are small pixel canvases
  * inside the chips (the drawing: topbarart.ts). When the bar runs out of room the
@@ -80149,9 +80648,16 @@ var SE;
  * ========================================================================== */
 var SE;
 (function (SE) {
-    /** Art px: the chips' side padding, the plaque's padding (the left one is room for the vines). */
-    const PAD = 5;
-    const BRAND_PAD = [10, 6];
+    /** Art px: the chips' side padding (room for the clouds' round ends) and the gap between the clouds, where the map shows. */
+    const PAD = 8;
+    const GAP = 5;
+    /** °C: below this mean temperature the thermometer sinks and it snows from its cloud. */
+    const SNOW_BELOW = 10;
+    /** CSS px of the bar (styles.css --topbar-h) and the art rows it keeps at least, so the clouds have room above the readouts. */
+    const BAR_PX = 60;
+    const MIN_ROWS = 24;
+    /** Art rows the panels' content moves down from the bar's middle, by the bar's rows: cumulus carry their bulk on top. */
+    const lift = (rows) => Math.max(0, Math.round((rows - 20) / 5));
     /** CSS px of the Earth-time line with full and with short era names: the longest dates (and the planet age) measured in the pixel font. */
     const DATE_W = [240, 206];
     /** The text's scale beside u CSS px per art px: from u 2 on it grows at a quarter of the art's pace (×1.25 at 3), so the icons never dwarf it and the panels still hold it. */
@@ -80175,9 +80681,36 @@ var SE;
     /** A CSS length of n art px, and of n px of text: the bar carries the scales as --lt-u and --lt-f. */
     const ap = (n) => `calc(var(--lt-u) * ${n})`;
     const tp = (n) => `calc(var(--lt-f) * ${n}px)`;
-    const PANEL = { position: 'relative', display: 'flex', alignItems: 'center', height: 'var(--lt-ch)', boxSizing: 'border-box', whiteSpace: 'nowrap' };
+    /** The top padding that moves a panel's content down by the lift (centred in the rest of the bar's height). */
+    const LIFT_PAD = 'calc(var(--lt-u) * var(--lt-lift) * 2)';
+    // The bar lets the pointer through to the map; only the clouds take it, each panel as tall as its cloud.
+    const PANEL = { position: 'relative', display: 'flex', alignItems: 'center', height: 'var(--topbar-h)', paddingTop: LIFT_PAD, boxSizing: 'border-box', whiteSpace: 'nowrap', pointerEvents: 'auto' };
     const COLUMN = { display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: '0' };
     const BUTTON = { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', padding: '0', border: '0', background: 'transparent', cursor: 'pointer' };
+    /**
+     * Where a panel's icon and text are, in art px of its cloud (x from the panel's left edge, y from the cloud's
+     * top, which is the bar's second row): the union of its shown children, so the cloud can keep them all on white.
+     */
+    function content(p, left, top, u, w, h) {
+        let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+        for (const c of p.children) {
+            if (c.classList.contains('sr-only'))
+                continue;
+            const q = c.getBoundingClientRect();
+            if (q.width < 2 || q.height < 2)
+                continue;
+            l = Math.min(l, q.left);
+            t = Math.min(t, q.top);
+            r = Math.max(r, q.right);
+            b = Math.max(b, q.bottom);
+        }
+        if (l > r)
+            return [0, 0, 0, 0];
+        return [
+            SE.clamp(Math.floor((l - left) / u), 0, w), SE.clamp(Math.floor((t - top) / u) - 1, 0, h),
+            SE.clamp(Math.ceil((r - left) / u), 0, w), SE.clamp(Math.ceil((b - top) / u) - 1, 0, h),
+        ];
+    }
     /** A pixel canvas that sits in the flow of a chip. */
     function inline(cls) {
         const pc = new SE.PixelCanvas(cls, 0);
@@ -80185,14 +80718,16 @@ var SE;
         return pc;
     }
     class LivingTopbar {
-        constructor(top, hud, hooks) {
+        /** `stage`: the map's stage, where the snow falls. */
+        constructor(top, hud, stage, hooks) {
             this.top = top;
             this.hud = hud;
             this.hooks = hooks;
             /** The Ω and EP drop-down; the app closes it on Escape. */
             this.info = new SE.HudInfo();
+            /** "Effekte reduzieren": no snow in flight. */
+            this.reduced = () => false;
             this.bg = new SE.PixelCanvas('lt-bg', -1);
-            this.brand = SE.make('div', 'lt-brand');
             this.chips = {};
             this.time = SE.make('div', 'lt-chip lt-time');
             this.timeIcon = inline('lt-ico');
@@ -80227,18 +80762,21 @@ var SE;
             this.eraSig = '';
             this.omegaSig = '';
             this.artVersion = -1;
+            this.cold = false;
+            /** The temperature cloud's columns and the bar's rows in art px, while it is shown. */
+            this.tempBox = null;
             this.queued = false;
             this.refit = false;
             const ui = SE.UiArt.shared();
             ui.load();
-            const post = ui.sprite('post_tile');
-            const gap = ap((post?.w ?? 5) + 2);
+            const gap = ap(GAP);
             top.classList.remove('glass');
             // Its own stacking context, so the background canvas (z -1) stays inside the bar, under all of its content.
-            css(top, { position: 'relative', zIndex: '600', padding: `0 ${ap(2)}`, gap, background: ui.color('wood1') });
+            css(top, { position: 'relative', zIndex: '600', padding: `0 ${ap(2)}`, gap, background: 'transparent', pointerEvents: 'none' });
             // 'safe': content too wide overflows to the right, where fit() sees it in scrollWidth (and is never pushed off the left edge).
-            css(hud, { display: 'flex', alignItems: 'center', justifyContent: 'safe flex-end', flex: '1 1 auto', minWidth: '0', marginLeft: '0', gap });
-            top.prepend(this.bg.canvas); // the GAIA REBORN plaque (this.brand) is no longer shown
+            css(hud, { display: 'flex', alignItems: 'center', justifyContent: 'safe flex-end', flex: '1 1 auto', minWidth: '0', marginLeft: '0', gap, pointerEvents: 'none' });
+            top.prepend(this.bg.canvas);
+            this.snow = new SE.CloudSnow(stage);
             for (const spec of CHIPS)
                 this.chips[spec.key] = this.chip(spec);
             const c = this.chips;
@@ -80301,6 +80839,12 @@ var SE;
             put(c.air.value, `${SE.fmt.one(w.o2)} %`);
             put(c.co2.value, `${SE.fmt.int(w.co2)} ppm`);
             put(c.temp.value, `${SE.fmt.one(w.globalTemp)} °C`);
+            const cold = w.globalTemp < SNOW_BELOW;
+            if (cold !== this.cold) {
+                this.cold = cold;
+                SE.drawUiSprite(c.temp.icon, 'hud_temp', cold ? 1 : 0, SE.uiScale());
+            }
+            this.snow.set(SNOW_BELOW - w.globalTemp, this.tempBox, this.reduced());
             for (const spec of CHIPS) {
                 const { el, value } = c[spec.key];
                 const name = `${spec.name}: ${value.textContent}`;
@@ -80348,7 +80892,7 @@ var SE;
         /* ------------------------------------------------------------ build -- */
         chip(spec) {
             const el = SE.make('div', `lt-chip lt-${spec.key}`);
-            css(el, { ...PANEL, flex: 'none', padding: `0 ${ap(PAD)}`, gap: ap(3) });
+            css(el, { ...PANEL, flex: 'none', padding: `${LIFT_PAD} ${ap(PAD)} 0`, gap: ap(3) });
             // Focusable, so the explanation is reachable by keyboard, not only by hovering.
             el.dataset.tip = spec.tip;
             el.tabIndex = 0;
@@ -80400,7 +80944,7 @@ var SE;
         }
         buildTime() {
             const t = this.time;
-            css(t, { ...PANEL, flex: 'none', padding: `0 ${ap(PAD)}`, gap: ap(3) });
+            css(t, { ...PANEL, flex: 'none', padding: `${LIFT_PAD} ${ap(PAD)} 0`, gap: ap(3) });
             t.dataset.tip = 'Erdzeit und Zeitalter (Optionen: Datum vor heute oder Planetenalter)';
             t.tabIndex = 0;
             t.setAttribute('role', 'group');
@@ -80422,7 +80966,7 @@ var SE;
             const pip = ui.sprite('ctl_pip');
             const h = ap((ctl?.h ?? 10) + 4);
             const box = this.speedBox;
-            css(box, { ...PANEL, flex: 'none', padding: `0 ${ap(4)}`, gap: ap(1) });
+            css(box, { ...PANEL, flex: 'none', padding: `${LIFT_PAD} ${ap(PAD)} 0`, gap: ap(1) });
             box.setAttribute('role', 'group');
             box.setAttribute('aria-label', 'Tempo');
             const btn = (b, w, onClick) => {
@@ -80505,6 +81049,9 @@ var SE;
         }
         rescale() {
             const sc = SE.uiScale();
+            // At 3 CSS px per art px the 60 px bar is 20 rows, room for the readouts but not for the clouds' domes. Inline on
+            // the root: the grid row and everything placed under the bar follow it, with any stylesheet.
+            document.documentElement.style.setProperty('--topbar-h', `${Math.max(BAR_PX, Math.round(MIN_ROWS * sc.u))}px`);
             const rows = Math.round(this.top.clientHeight / sc.u);
             const sig = `${sc.s}|${sc.dpr}|${rows}`;
             if (sig === this.scaleSig)
@@ -80512,14 +81059,12 @@ var SE;
             this.scaleSig = sig;
             this.top.style.setProperty('--lt-u', `${sc.u}px`);
             this.top.style.setProperty('--lt-f', String(fontScale(sc.u)));
-            this.top.style.setProperty('--lt-ch', `${(rows - 2 * SE.topbarMargin(rows)) * sc.u}px`);
+            this.top.style.setProperty('--lt-lift', String(lift(rows)));
             this.sparkSig = this.eraSig = this.omegaSig = '';
             this.drawIcons();
         }
         /* ------------------------------------------------------------- draw -- */
         lit(p) {
-            if (p === this.brand)
-                return false;
             if (p === this.hover || p.getAttribute('aria-expanded') === 'true')
                 return true;
             const a = document.activeElement;
@@ -80527,7 +81072,7 @@ var SE;
                 return true;
             return p.classList.contains('lt-air') && this.hooks.airOpen();
         }
-        /** Wood, panels, posts, studs and the logo, from the boxes' places after layout. */
+        /** A cloud behind every panel, from the boxes' places after layout. */
         drawBg() {
             const ui = SE.UiArt.shared();
             const sc = SE.uiScale();
@@ -80536,12 +81081,19 @@ var SE;
             const W = Math.ceil(this.top.clientWidth / u - 1e-6);
             const H = Math.max(rows, Math.ceil(this.top.clientHeight / u - 1e-6));
             const left = this.top.getBoundingClientRect().left;
+            const top = this.top.getBoundingClientRect().top;
             const boxes = [];
-            for (const p of this.panels) {
+            this.tempBox = null;
+            this.panels.forEach((p, k) => {
                 const r = p.getBoundingClientRect();
-                if (r.width > 0)
-                    boxes.push([Math.round((r.left - left) / u), Math.round((r.right - left) / u), this.lit(p) ? 1 : 0]);
-            }
+                if (r.width <= 0)
+                    return;
+                const x0 = Math.round((r.left - left) / u);
+                const x1 = Math.round((r.right - left) / u);
+                if (p === this.chips.temp.el)
+                    this.tempBox = [x0, x1, rows];
+                boxes.push([x0, x1, this.lit(p) ? 1 : 0, k, content(p, r.left, top, u, x1 - x0, H - 1)]);
+            });
             const sig = `${W}|${H}|${rows}|${sc.s}|${sc.dpr}|${ui.version}|${boxes.join(';')}`;
             if (sig === this.bgSig)
                 return;
@@ -80549,13 +81101,12 @@ var SE;
             this.top.classList.toggle('lt-noart', !ui.ready);
             // The ink comes with the parchment it is drawn on: an older stylesheet would leave the text light on the pale panels.
             this.hud.style.color = ui.ready ? ui.color('ink1') : '';
-            const brandShown = this.brand.getBoundingClientRect().width > 0;
-            SE.drawTopbarBg(this.bg, W, H, rows, boxes, brandShown ? boxes[0][0] + BRAND_PAD[0] : null, sc);
+            SE.drawTopbarClouds(this.bg, W, H, boxes, sc);
         }
         drawIcons() {
             const sc = SE.uiScale();
             for (const spec of CHIPS)
-                SE.drawUiSprite(this.chips[spec.key].icon, spec.icon, 0, sc);
+                SE.drawUiSprite(this.chips[spec.key].icon, spec.icon, spec.key === 'temp' && this.cold ? 1 : 0, sc);
             SE.drawUiSprite(this.timeIcon, 'hud_time', 0, sc);
             this.drawControls(sc);
         }
@@ -80898,9 +81449,9 @@ var SE;
  * From the rail's buttons, its knot, the rock's root point and the top bar's
  * logo plaque (all in art px) one vine is planned: a stem from Gaia's rock up
  * the rail's left edge into the top bar, where it climbs round the plaque's
- * left end and sends a run along the bar's bottom edge; side branches through
- * the gaps between the buttons, curling up or down beside them; leaves,
- * curls and flowers; at full green a cluster hanging from the bar's right end.
+ * left end (no plaque: up into the open band, where the map shows between the
+ * status clouds); side branches through the gaps between the buttons,
+ * curling up or down beside them; leaves, curls and flowers.
  * Every part carries the greenery it is born at, so greenery 0 → 1 reveals the
  * vine in order (a sprout on the rock at about 0.04, halfway up at 0.3, lush
  * at 1); leaves carry their own wilt and fall thresholds in vitality, flowers
@@ -80919,9 +81470,6 @@ var SE;
     /** Greenery from one leaf size to the next; bloom from one flower stage to the next. */
     const LEAF_AGE = 0.05;
     const BLOOM_STEP = 0.08;
-    /** The right-end cluster under the top bar: greenery it starts at, per art px. */
-    const G_CLUSTER = 0.72;
-    const CLUSTER_G = 0.004;
     /** Greenery from which the vine turns lush: clusters at the joints, leaves in front of the rims. */
     const LUSH = 0.78;
     /** Vitality below which the tendril curls (no wilt frames of their own) have shrivelled away. */
@@ -81091,7 +81639,7 @@ var SE;
             leaf(bt.x + 19, bt.y + 4, 'r', 0, LUSH + 0.04 + 0.1 * r.next(), 1, k + 26, r);
             flower(bt.x + 29, bt.y + 9 + dy, Math.max(g0 + 0.08, 0.45), 0.2 + 0.65 * r.next(), 0, r);
         });
-        /* ---- the top bar: round the plaque's left end, a run along the bottom edge ---- */
+        /* ---- the top bar: round the plaque's left end ---- */
         const rb = dice(5, 0);
         const kc = (inStage + n - 1) >> 1;
         // Round the plaque's left end: leaves out to the left where the bar leaves room, else in front of its frame
@@ -81108,36 +81656,6 @@ var SE;
         else
             flower(trunk[n - 1].x + 1, trunk[n - 1].y + 1, G_TOP, 0.15, 2, rb);
         flower(trunk[n - 4].x - 1, trunk[n - 4].y + 2, G_TOP, 0.35, 2, rb);
-        const runEnd = Math.min(a.barW - 44, b ? b.x + SE.clamp(Math.round(b.w * 0.6), 16, 72) : xTop + 56);
-        if (runEnd > xTop + 8) {
-            const path = [[xTop + 1, -1]];
-            lineTo(path, runEnd, -1);
-            const br = branch(inStage, path, 2, 0.02);
-            for (let m = 4, j = 0; m < br.length - 3; m += 9 + rb.int(4), j++) {
-                const p = br[m];
-                if (j % 3 === 2)
-                    flower(p.x, p.y + 4, p.birth + 0.02, 0.1 + 0.6 * rb.next(), 2, rb);
-                else
-                    onStem(p, 'hang', 0, 0.01 + 0.05 * rb.next(), inStage + m, rb);
-            }
-            const tip = br[br.length - 1];
-            curls.push({ x: tip.x, y: tip.y, dir: 'r', birth: tip.birth + 0.004, layer: 2 });
-        }
-        /* ---- lush: a cluster hanging from the bar's right end, grown in from beyond the edge ---- */
-        if (a.barW > 160) {
-            const path = [[a.barW, -1]];
-            lineTo(path, a.barW - 26, -1);
-            lineTo(path, a.barW - 30, 1);
-            const out = path.map(([x, y], m) => ({ x, y, w: 1, birth: G_CLUSTER + m * CLUSTER_G, wood: false, layer: 2 }));
-            pixels.push(...out);
-            const rc = dice(6, 0);
-            const wave = n + 40;
-            for (const m of [3, 10, 17, 24])
-                onStem(out[m], 'hang', 0, 0.03 + 0.06 * rc.next(), wave + m, rc);
-            // Hanging, not reaching up: the bar's speed controls sit right above.
-            onStem(out[out.length - 1], 'hang', 0, 0.02, wave + out.length, rc);
-            flower(a.barW - 14, 5, G_CLUSTER + 0.08, 0.45, 2, rc);
-        }
         leaves.sort((p, q) => p.birth - q.birth);
         return { pixels, trunk, leaves, flowers, curls, reach };
     }
@@ -82196,7 +82714,7 @@ var SE;
         /** Draw list: id, frame, x, y per sprite (anchor at x, y), back to front. */
         compose(now) {
             const s = this.state;
-            const ops = ['rock', !s.awake ? 0 : s.greenery > 0.7 ? 3 : s.greenery > 0.35 ? 2 : 1, SE.UI_SCENE.rockFootX, SE.UI_SCENE.h - 1];
+            const ops = ['rock', SE.groundLook(s), SE.UI_SCENE.rockFootX, SE.UI_SCENE.h - 1];
             const [bx, by] = this.bed();
             const c = this.clip;
             ops.push(c.id, this.clipFrame(now), bx, by);
@@ -84635,6 +85153,8 @@ var SE;
             this.bubblingTarget = 0;
             this.stormWind = new SE.AmbientLoop('assets/audio/sfx/hurricane-wind.mp3', SE.STORM_WIND_VOLUME);
             this.stormWindTarget = 0;
+            this.birdsong = new SE.AmbientLoop('assets/audio/ambient/birds-chirping-relaxing-nature-sounds.mp3', SE.BIRDSONG_VOLUME);
+            this.birdsongTarget = 0;
             this.lastSurfCheck = 0;
             this.toolButtons = new Map();
             this.layerButtons = [];
@@ -84760,7 +85280,9 @@ var SE;
                     this.surfTarget = quiet ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
                     this.bubblingTarget = quiet ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
                     this.stormWindTarget = quiet ? 0 : this.editView.stormPresence(now) * this.settings.ambientVolume;
+                    this.birdsongTarget = quiet ? 0 : this.editView.birdPresence(this.world) * this.settings.ambientVolume;
                 }
+                this.birdsong.update(this.birdsongTarget, delta, now);
                 this.surf.update(this.surfTarget, delta, now);
                 this.bubbling.update(this.bubblingTarget, delta, now);
                 this.stormWind.update(this.stormWindTarget, delta, now);
@@ -84900,9 +85422,14 @@ var SE;
         /* ============================================================ stage === */
         buildStage() {
             const canvas = SE.make('canvas', 'world-canvas');
-            canvas.setAttribute('aria-label', 'Planetenkarte – Werkzeug anwenden, ziehen zum Verschieben, Mausrad zum Zoomen');
+            canvas.setAttribute('aria-label', 'Planetenkarte – Werkzeug anwenden, ziehen zum Verschieben, Mausrad oder + und − zum Zoomen');
             canvas.tabIndex = 0;
             this.canvas = canvas;
+            // The map runs on up under the status bar's clouds (livingtopbar.ts); everything else keeps to the stage. Inline: safe with a stale stylesheet.
+            Object.assign(canvas.style, { top: 'calc(-1 * var(--topbar-h))', height: 'calc(100% + var(--topbar-h))' });
+            this.stage.style.overflow = 'visible';
+            // The map's edge vignette is gone; a cached older styles.css would still lay it over the map below the clouds.
+            document.head.appendChild(SE.make('style', undefined, '#desktop::after { content: none; }'));
             this.stage.appendChild(canvas);
             this.editView = new SE.EditView(canvas);
             this.editView.reduceEffects = this.settings.reduceEffects;
@@ -84968,29 +85495,14 @@ var SE;
             this.setDockCollapsed(this.settings.dockCollapsed);
             /* ---- next step ---- */
             this.goalNotice = new SE.GoalNotice(this.stage, (id) => this.openTree(id));
-            /* ---- map controls: layers, overview map, zoom ---- */
-            const zoom = SE.make('div', 'map-zoom glass');
-            zoom.setAttribute('role', 'toolbar');
-            zoom.setAttribute('aria-label', 'Karte');
-            zoom.setAttribute('aria-orientation', 'vertical');
-            this.layerBtn = SE.button({
-                label: 'Kartenebenen', icon: SE.uiIcon('layers'), cls: 'icon-btn', showLabel: false, title: 'Kartenebenen und Klima-Überlagerung',
-                onClick: () => this.setLayersOpen(this.layerPop.hidden),
-            });
-            this.layerBtn.setAttribute('aria-expanded', 'false');
-            this.layerBtn.setAttribute('aria-controls', 'layer-pop');
-            this.mapBtn = SE.button({
-                label: 'Übersichtskarte', icon: SE.uiIcon('map'), cls: 'icon-btn', showLabel: false, title: 'Übersichtskarte (M)',
-                onClick: () => this.windows.toggle('map'),
-            });
-            zoom.append(this.layerBtn, this.mapBtn, SE.make('div', 'map-zoom-sep'), SE.button({ label: 'Hineinzoomen', icon: SE.uiIcon('zoom-in'), cls: 'icon-btn', showLabel: false, title: 'Hineinzoomen (+)', onClick: () => this.zoomMap(1.25) }), SE.button({ label: 'Herauszoomen', icon: SE.uiIcon('zoom-out'), cls: 'icon-btn', showLabel: false, title: 'Herauszoomen (−)', onClick: () => this.zoomMap(0.8) }));
+            /* ---- the map layers: a popover opened from the menu "Fenster" or with N (zoom: wheel, + and −) ---- */
             this.layerPop = this.buildLayerPopover();
-            this.stage.append(this.layerPop, zoom);
-            // A click anywhere else closes the popover, as a menu would.
+            this.stage.appendChild(this.layerPop);
+            // A click anywhere else closes the popover, as a menu would; one in the menu that opens it leaves it to the item.
             document.addEventListener('pointerdown', (e) => {
-                if (this.layerPop.hidden || !(e.target instanceof Node))
+                if (this.layerPop.hidden || !(e.target instanceof Element))
                     return;
-                if (!this.layerPop.contains(e.target) && !this.layerBtn.contains(e.target))
+                if (!this.layerPop.contains(e.target) && !e.target.closest('[role="menu"]'))
                     this.setLayersOpen(false);
             });
             this.hoverTip = SE.make('div', 'hover-tip');
@@ -84999,6 +85511,7 @@ var SE;
             /* ---- the living interface: Gaia in the corner, the vines, her magic ---- */
             this.companion = new SE.GaiaCompanion(this.stage, { openGaiaWindow: () => this.windows.show('gaia') });
             this.vines = new SE.VineLayer(this.stage, SE.el('topbar'));
+            this.beam = new SE.StoneBeam(this.stage);
             this.gaiaMagic = new SE.GaiaMagic({
                 companion: this.companion,
                 tileClient: (tile) => this.tileClient(tile),
@@ -85019,9 +85532,11 @@ var SE;
             const r = this.canvas.getBoundingClientRect();
             const x = r.left + rx * v.tilePx;
             const y = r.top + (Math.floor(tile / SE.GRID_W) + 0.5 - v.scrollY) * v.tilePx;
-            return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? { x, y } : null;
+            // The canvas reaches up under the status bar and down under the stone beam: only the stage between counts.
+            const s = this.stage.getBoundingClientRect();
+            return x >= r.left && x <= r.right && y >= s.top && y <= s.bottom - this.beam.height ? { x, y } : null;
         }
-        /** The map-layers popover beside the map controls: additive layers and one climate overlay. */
+        /** The map-layers popover at the bottom right: additive layers and one climate overlay. */
         buildLayerPopover() {
             const pop = SE.make('section', 'layer-pop glass');
             pop.id = 'layer-pop';
@@ -85030,6 +85545,7 @@ var SE;
             const head = SE.make('div', 'layer-pop-head');
             const title = SE.make('h2', 'layer-pop-title', 'Kartenebenen');
             title.id = 'layer-pop-title';
+            title.tabIndex = -1;
             head.append(SE.img(SE.uiIcon('layers'), 'ico'), title, SE.button({
                 label: 'Kartenebenen schließen', icon: SE.uiIcon('close'), cls: 'icon-btn layer-pop-close', showLabel: false,
                 onClick: () => this.setLayersOpen(false, true),
@@ -85076,13 +85592,17 @@ var SE;
             return pop;
         }
         setLayersOpen(open, refocus = false) {
+            const hadFocus = this.layerPop.contains(document.activeElement);
             this.layerPop.hidden = !open;
-            SE.setPressed(this.layerBtn, open);
-            this.layerBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-            if (open)
+            if (open) {
                 this.syncLayerButtons();
-            if (refocus)
-                this.layerBtn.focus();
+                // Like a window, its heading takes the focus: from the menu or with N the keyboard lands in it.
+                this.layerPop.querySelector('.layer-pop-title')?.focus({ preventScroll: true });
+            }
+            // A popover hidden with the focus inside would drop it to the page.
+            if (refocus || (!open && hadFocus))
+                this.canvas.focus({ preventScroll: true });
+            this.flyout.refresh();
         }
         syncLayerButtons() {
             const keys = ['oceans', 'biomes', 'cities', 'life', 'events', 'clouds'];
@@ -85093,8 +85613,6 @@ var SE;
                 b.setAttribute('aria-checked', on ? 'true' : 'false');
                 b.tabIndex = on ? 0 : -1;
             }
-            // The layers button glows while the map shows a climate overlay.
-            this.layerBtn.classList.toggle('lit', this.editView.overlay !== SE.Overlay.None);
             this.renderOverlayLegend();
         }
         /** The colour scale of the active climate overlay, under its radio list. */
@@ -85305,11 +85823,10 @@ var SE;
         }
         /* ======================================================== windows === */
         buildMapWindow() {
-            // 12 px clear of the map controls (50 px wide, 12 px from the right edge): as tall as it is, it would cover them.
             const folded = () => !this.settings.mapGlobe;
             const win = this.windows.create({
                 id: 'map', title: 'Übersichtskarte', icon: SE.uiIcon('map'),
-                x: -74, y: 12, width: 500, cls: 'win-map',
+                x: -12, y: 12, width: 500, cls: 'win-map',
                 // Read at every reset and screen change, so the window fits its globe row shown or folded away.
                 get height() { return folded() ? MAP_WINDOW_FOLDED_H : MAP_WINDOW_H; },
             });
@@ -85411,18 +85928,18 @@ var SE;
                 SE.renderMapInfo(this.mapInfoEl, this.world, this.mapView.mode, at.x, at.y, !!this.mapField);
         }
         buildInfoWindows() {
-            // Gaia: below the overview map, 12 px clear of the map controls (50 px wide, 12 px from the right edge).
-            const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: SE.uiIcon('gaia'), cls: 'win-gaia', x: -74, y: 12 + MAP_WINDOW_H + 8, width: 300, height: 396 });
+            // Gaia: below the overview map, 12 px from the right edge like it.
+            const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: SE.uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 12 + MAP_WINDOW_H + 8, width: 300, height: 396 });
             const gaiaWrap = SE.make('div', 'gaia-layout');
             gaia.body.appendChild(gaiaWrap);
             this.gaiaPanel = new SE.GaiaPanel(gaiaWrap);
             // History: 4 px clear of the tool card (beside the rail, 340 px wide)
-            // and of the overview map (500 px wide, 74 px from the right), down to
+            // and of the overview map (500 px wide, 12 px from the right), down to
             // just above the bottom.
             const histX = this.rail.width + 344;
             const hist = this.windows.create({
                 id: 'history', title: 'Verlauf', icon: SE.uiIcon('history'), resetOnOpen: true,
-                x: histX, y: 12, width: -(histX + 578), height: -(12 + 27),
+                x: histX, y: 12, width: -(histX + 516), height: -(12 + 27),
             });
             const histWrap = SE.make('div', 'hist-layout');
             hist.body.appendChild(histWrap);
@@ -85537,7 +86054,7 @@ var SE;
         }
         /* ============================================================ HUD === */
         buildHud() {
-            this.hud = new SE.LivingTopbar(SE.el('topbar'), SE.el('hud'), {
+            this.hud = new SE.LivingTopbar(SE.el('topbar'), SE.el('hud'), this.stage, {
                 speedNames: SPEED_NAMES,
                 togglePause: () => this.togglePause(),
                 setSpeed: (s) => this.setSpeed(s),
@@ -85549,7 +86066,7 @@ var SE;
                 fillEp: (pop) => SE.fillEpInfo(pop, this.world, this.evolution, this.params),
             });
             this.hudInfo = this.hud.info;
-            this.hudInfo.reduced = () => this.settings.reduceEffects || prefersReducedMotion();
+            this.hudInfo.reduced = this.hud.reduced = () => this.settings.reduceEffects || prefersReducedMotion();
             this.syncSpeedButtons();
         }
         syncSpeedButtons() {
@@ -85612,6 +86129,7 @@ var SE;
                         winItem('Raumfahrt', 'spaceport', 'rocket'),
                         winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'X'),
                         winItem('Übersichtskarte', 'map', 'map', 'M'),
+                        { label: 'Kartenebenen', icon: SE.uiIcon('layers'), hint: 'N', action: () => this.setLayersOpen(this.layerPop.hidden), checked: () => !this.layerPop.hidden },
                         winItem('Gaia', 'gaia', 'gaia'),
                         winItem('Verlauf', 'history', 'history'),
                         winItem('Bericht', 'report', 'report', 'B'),
@@ -85705,7 +86223,6 @@ var SE;
         }
         syncWindowButtons() {
             this.syncEvolutionButton(this.evolution.availableIds().length);
-            SE.setPressed(this.mapBtn, this.windows.isVisible('map'));
             this.flyout.refresh();
         }
         /**
@@ -85814,6 +86331,10 @@ var SE;
                     case 'm':
                     case 'M':
                         this.windows.toggle('map');
+                        return;
+                    case 'n':
+                    case 'N':
+                        this.setLayersOpen(this.layerPop.hidden);
                         return;
                     case 'b':
                     case 'B':
@@ -86976,6 +87497,8 @@ var SE;
             this.living = this.livingMood.update(w, this.history, performance.now());
             this.companion.update(this.living);
             this.vines.update(this.living);
+            this.beam.update(this.living);
+            this.editView.insetBottom = this.beam.height;
             const stage = SE.omegaStage(w);
             if (stage > this.omegaStageSeen) {
                 const s = SE.OMEGA_STAGES[stage];

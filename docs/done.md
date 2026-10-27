@@ -25,3 +25,4 @@ Every change shipped with `scripts/ship.mjs`, newest last.
 - 2026-10-24 v0.92.3 feat(climate): gas detail view and refined gas budget
 - 2026-10-25 v0.92.4 feat(map): experimental WebGL2 water effects, gas balance polish
 - 2026-10-25 v0.92.5 feat(game): difficulty levels with hard climate and extinction
+- 2026-10-27 v0.92.6 feat(ui): nature sounds, snowy living UI and trailer tools

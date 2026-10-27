@@ -1,10 +1,12 @@
 /* =============================================================================
  * Gaia Reborn — the living status bar
  * -----------------------------------------------------------------------------
- * The top bar in the living style: a wood beam, a gold-rimmed parchment panel
- * behind every chip, wood posts with brass studs between the panels and the
- * GAIA REBORN plaque, all in one pixel canvas behind the content that is
- * redrawn only when the layout, a highlight, the scale or the art changes.
+ * The top bar in the living style: no beam any more, a cream pixel cloud
+ * behind every chip with the map running on beneath and between them (the
+ * map's canvas reaches up under the bar: app.ts), all in one pixel canvas
+ * behind the content that is redrawn only when the layout, a highlight, the
+ * scale or the art changes. Below 10 °C the thermometer sinks, a big
+ * snowflake shows behind it and snow falls from its cloud (cloudsnow.ts).
  * The text stays crisp DOM and grows a little with the art at large scales;
  * icons, sparklines, the Ω bar and the era bar are small pixel canvases
  * inside the chips (the drawing: topbarart.ts). When the bar runs out of room the
@@ -30,9 +32,16 @@ namespace SE {
     fillEp(pop: HTMLElement): void;
   }
 
-  /** Art px: the chips' side padding, the plaque's padding (the left one is room for the vines). */
-  const PAD = 5;
-  const BRAND_PAD = [10, 6] as const;
+  /** Art px: the chips' side padding (room for the clouds' round ends) and the gap between the clouds, where the map shows. */
+  const PAD = 8;
+  const GAP = 5;
+  /** °C: below this mean temperature the thermometer sinks and it snows from its cloud. */
+  const SNOW_BELOW = 10;
+  /** CSS px of the bar (styles.css --topbar-h) and the art rows it keeps at least, so the clouds have room above the readouts. */
+  const BAR_PX = 60;
+  const MIN_ROWS = 24;
+  /** Art rows the panels' content moves down from the bar's middle, by the bar's rows: cumulus carry their bulk on top. */
+  const lift = (rows: number): number => Math.max(0, Math.round((rows - 20) / 5));
   /** CSS px of the Earth-time line with full and with short era names: the longest dates (and the planet age) measured in the pixel font. */
   const DATE_W = [240, 206] as const;
   /** The text's scale beside u CSS px per art px: from u 2 on it grows at a quarter of the art's pace (×1.25 at 3), so the icons never dwarf it and the panels still hold it. */
@@ -88,9 +97,31 @@ namespace SE {
   const ap = (n: number): string => `calc(var(--lt-u) * ${n})`;
   const tp = (n: number): string => `calc(var(--lt-f) * ${n}px)`;
 
-  const PANEL: Style = { position: 'relative', display: 'flex', alignItems: 'center', height: 'var(--lt-ch)', boxSizing: 'border-box', whiteSpace: 'nowrap' };
+  /** The top padding that moves a panel's content down by the lift (centred in the rest of the bar's height). */
+  const LIFT_PAD = 'calc(var(--lt-u) * var(--lt-lift) * 2)';
+  // The bar lets the pointer through to the map; only the clouds take it, each panel as tall as its cloud.
+  const PANEL: Style = { position: 'relative', display: 'flex', alignItems: 'center', height: 'var(--topbar-h)', paddingTop: LIFT_PAD, boxSizing: 'border-box', whiteSpace: 'nowrap', pointerEvents: 'auto' };
   const COLUMN: Style = { display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: '0' };
   const BUTTON: Style = { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', padding: '0', border: '0', background: 'transparent', cursor: 'pointer' };
+
+  /**
+   * Where a panel's icon and text are, in art px of its cloud (x from the panel's left edge, y from the cloud's
+   * top, which is the bar's second row): the union of its shown children, so the cloud can keep them all on white.
+   */
+  function content(p: HTMLElement, left: number, top: number, u: number, w: number, h: number): readonly [number, number, number, number] {
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    for (const c of p.children) {
+      if (c.classList.contains('sr-only')) continue;
+      const q = c.getBoundingClientRect();
+      if (q.width < 2 || q.height < 2) continue;
+      l = Math.min(l, q.left); t = Math.min(t, q.top); r = Math.max(r, q.right); b = Math.max(b, q.bottom);
+    }
+    if (l > r) return [0, 0, 0, 0];
+    return [
+      clamp(Math.floor((l - left) / u), 0, w), clamp(Math.floor((t - top) / u) - 1, 0, h),
+      clamp(Math.ceil((r - left) / u), 0, w), clamp(Math.ceil((b - top) / u) - 1, 0, h),
+    ];
+  }
 
   /** A pixel canvas that sits in the flow of a chip. */
   function inline(cls: string): PixelCanvas {
@@ -102,8 +133,10 @@ namespace SE {
   export class LivingTopbar {
     /** The Ω and EP drop-down; the app closes it on Escape. */
     readonly info = new HudInfo();
+    /** "Effekte reduzieren": no snow in flight. */
+    reduced = (): boolean => false;
     private readonly bg = new PixelCanvas('lt-bg', -1);
-    private readonly brand = make('div', 'lt-brand');
+    private readonly snow: CloudSnow;
     private readonly chips = {} as Record<ChipKey, Chip>;
     private readonly time = make('div', 'lt-chip lt-time');
     private readonly timeIcon = inline('lt-ico');
@@ -138,20 +171,24 @@ namespace SE {
     private eraSig = '';
     private omegaSig = '';
     private artVersion = -1;
+    private cold = false;
+    /** The temperature cloud's columns and the bar's rows in art px, while it is shown. */
+    private tempBox: [number, number, number] | null = null;
     private queued = false;
     private refit = false;
 
-    constructor(private readonly top: HTMLElement, private readonly hud: HTMLElement, private readonly hooks: TopbarHooks) {
+    /** `stage`: the map's stage, where the snow falls. */
+    constructor(private readonly top: HTMLElement, private readonly hud: HTMLElement, stage: HTMLElement, private readonly hooks: TopbarHooks) {
       const ui = UiArt.shared();
       ui.load();
-      const post = ui.sprite('post_tile');
-      const gap = ap((post?.w ?? 5) + 2);
+      const gap = ap(GAP);
       top.classList.remove('glass');
       // Its own stacking context, so the background canvas (z -1) stays inside the bar, under all of its content.
-      css(top, { position: 'relative', zIndex: '600', padding: `0 ${ap(2)}`, gap, background: ui.color('wood1') });
+      css(top, { position: 'relative', zIndex: '600', padding: `0 ${ap(2)}`, gap, background: 'transparent', pointerEvents: 'none' });
       // 'safe': content too wide overflows to the right, where fit() sees it in scrollWidth (and is never pushed off the left edge).
-      css(hud, { display: 'flex', alignItems: 'center', justifyContent: 'safe flex-end', flex: '1 1 auto', minWidth: '0', marginLeft: '0', gap });
-      top.prepend(this.bg.canvas); // the GAIA REBORN plaque (this.brand) is no longer shown
+      css(hud, { display: 'flex', alignItems: 'center', justifyContent: 'safe flex-end', flex: '1 1 auto', minWidth: '0', marginLeft: '0', gap, pointerEvents: 'none' });
+      top.prepend(this.bg.canvas);
+      this.snow = new CloudSnow(stage);
 
       for (const spec of CHIPS) this.chips[spec.key] = this.chip(spec);
       const c = this.chips;
@@ -210,6 +247,12 @@ namespace SE {
       put(c.air.value, `${fmt.one(w.o2)} %`);
       put(c.co2.value, `${fmt.int(w.co2)} ppm`);
       put(c.temp.value, `${fmt.one(w.globalTemp)} °C`);
+      const cold = w.globalTemp < SNOW_BELOW;
+      if (cold !== this.cold) {
+        this.cold = cold;
+        drawUiSprite(c.temp.icon, 'hud_temp', cold ? 1 : 0, uiScale());
+      }
+      this.snow.set(SNOW_BELOW - w.globalTemp, this.tempBox, this.reduced());
       for (const spec of CHIPS) {
         const { el, value } = c[spec.key];
         const name = `${spec.name}: ${value.textContent}`;
@@ -255,7 +298,7 @@ namespace SE {
 
     private chip(spec: ChipSpec): Chip {
       const el = make('div', `lt-chip lt-${spec.key}`);
-      css(el, { ...PANEL, flex: 'none', padding: `0 ${ap(PAD)}`, gap: ap(3) });
+      css(el, { ...PANEL, flex: 'none', padding: `${LIFT_PAD} ${ap(PAD)} 0`, gap: ap(3) });
       // Focusable, so the explanation is reachable by keyboard, not only by hovering.
       el.dataset.tip = spec.tip;
       el.tabIndex = 0;
@@ -303,7 +346,7 @@ namespace SE {
 
     private buildTime(): void {
       const t = this.time;
-      css(t, { ...PANEL, flex: 'none', padding: `0 ${ap(PAD)}`, gap: ap(3) });
+      css(t, { ...PANEL, flex: 'none', padding: `${LIFT_PAD} ${ap(PAD)} 0`, gap: ap(3) });
       t.dataset.tip = 'Erdzeit und Zeitalter (Optionen: Datum vor heute oder Planetenalter)';
       t.tabIndex = 0;
       t.setAttribute('role', 'group');
@@ -326,7 +369,7 @@ namespace SE {
       const pip = ui.sprite('ctl_pip');
       const h = ap((ctl?.h ?? 10) + 4);
       const box = this.speedBox;
-      css(box, { ...PANEL, flex: 'none', padding: `0 ${ap(4)}`, gap: ap(1) });
+      css(box, { ...PANEL, flex: 'none', padding: `${LIFT_PAD} ${ap(PAD)} 0`, gap: ap(1) });
       box.setAttribute('role', 'group');
       box.setAttribute('aria-label', 'Tempo');
       const btn = (b: HTMLButtonElement, w: number, onClick: () => void): void => {
@@ -413,13 +456,16 @@ namespace SE {
 
     private rescale(): void {
       const sc = uiScale();
+      // At 3 CSS px per art px the 60 px bar is 20 rows, room for the readouts but not for the clouds' domes. Inline on
+      // the root: the grid row and everything placed under the bar follow it, with any stylesheet.
+      document.documentElement.style.setProperty('--topbar-h', `${Math.max(BAR_PX, Math.round(MIN_ROWS * sc.u))}px`);
       const rows = Math.round(this.top.clientHeight / sc.u);
       const sig = `${sc.s}|${sc.dpr}|${rows}`;
       if (sig === this.scaleSig) return;
       this.scaleSig = sig;
       this.top.style.setProperty('--lt-u', `${sc.u}px`);
       this.top.style.setProperty('--lt-f', String(fontScale(sc.u)));
-      this.top.style.setProperty('--lt-ch', `${(rows - 2 * topbarMargin(rows)) * sc.u}px`);
+      this.top.style.setProperty('--lt-lift', String(lift(rows)));
       this.sparkSig = this.eraSig = this.omegaSig = '';
       this.drawIcons();
     }
@@ -427,14 +473,13 @@ namespace SE {
     /* ------------------------------------------------------------- draw -- */
 
     private lit(p: HTMLElement): boolean {
-      if (p === this.brand) return false;
       if (p === this.hover || p.getAttribute('aria-expanded') === 'true') return true;
       const a = document.activeElement;
       if (a instanceof HTMLElement && p.contains(a) && a.matches(':focus-visible')) return true;
       return p.classList.contains('lt-air') && this.hooks.airOpen();
     }
 
-    /** Wood, panels, posts, studs and the logo, from the boxes' places after layout. */
+    /** A cloud behind every panel, from the boxes' places after layout. */
     private drawBg(): void {
       const ui = UiArt.shared();
       const sc = uiScale();
@@ -443,24 +488,29 @@ namespace SE {
       const W = Math.ceil(this.top.clientWidth / u - 1e-6);
       const H = Math.max(rows, Math.ceil(this.top.clientHeight / u - 1e-6));
       const left = this.top.getBoundingClientRect().left;
-      const boxes: [number, number, number][] = [];
-      for (const p of this.panels) {
+      const top = this.top.getBoundingClientRect().top;
+      const boxes: TopbarPanel[] = [];
+      this.tempBox = null;
+      this.panels.forEach((p, k) => {
         const r = p.getBoundingClientRect();
-        if (r.width > 0) boxes.push([Math.round((r.left - left) / u), Math.round((r.right - left) / u), this.lit(p) ? 1 : 0]);
-      }
+        if (r.width <= 0) return;
+        const x0 = Math.round((r.left - left) / u);
+        const x1 = Math.round((r.right - left) / u);
+        if (p === this.chips.temp.el) this.tempBox = [x0, x1, rows];
+        boxes.push([x0, x1, this.lit(p) ? 1 : 0, k, content(p, r.left, top, u, x1 - x0, H - 1)]);
+      });
       const sig = `${W}|${H}|${rows}|${sc.s}|${sc.dpr}|${ui.version}|${boxes.join(';')}`;
       if (sig === this.bgSig) return;
       this.bgSig = sig;
       this.top.classList.toggle('lt-noart', !ui.ready);
       // The ink comes with the parchment it is drawn on: an older stylesheet would leave the text light on the pale panels.
       this.hud.style.color = ui.ready ? ui.color('ink1') : '';
-      const brandShown = this.brand.getBoundingClientRect().width > 0;
-      drawTopbarBg(this.bg, W, H, rows, boxes, brandShown ? boxes[0][0] + BRAND_PAD[0] : null, sc);
+      drawTopbarClouds(this.bg, W, H, boxes, sc);
     }
 
     private drawIcons(): void {
       const sc = uiScale();
-      for (const spec of CHIPS) drawUiSprite(this.chips[spec.key].icon, spec.icon, 0, sc);
+      for (const spec of CHIPS) drawUiSprite(this.chips[spec.key].icon, spec.icon, spec.key === 'temp' && this.cold ? 1 : 0, sc);
       drawUiSprite(this.timeIcon, 'hud_time', 0, sc);
       this.drawControls(sc);
     }

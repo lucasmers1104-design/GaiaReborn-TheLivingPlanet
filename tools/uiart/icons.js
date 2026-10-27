@@ -6,7 +6,9 @@
  *   rail icons  14 × 14, drawn once in semantic characters and coloured per
  *               frame: 0 dark ink with warm wood lights for the parchment
  *               button, 1 pale yellow-green for the deep green selected one
- *   status bar  12 × 12, in colour with a dark selective outline, on parchment
+ *   status bar  12 × 12, in colour with a dark selective outline, on the white
+ *               clouds (O₂ and CO₂ are the air window's molecules: air.js; the
+ *               thermometer with its snowflake: snow.js)
  *   Planet menu 12 × 12, in colour, read on the flyout's dark wood: bright fills
  *               with a lit upper-left edge, a dark rim only where needed
  *   controls    10 × 10: 0 dark ink, 1 lit gold with a dark rim, same shape
@@ -232,22 +234,6 @@ const HUD = {
       'kk..........'],
     { k: 'vine0', L: 'vine5', l: 'vine4', m: 'vine6', d: 'vine3' },
   ],
-  // Air bubbles rising: a big one, a small one and a tiny one, each with a glint.
-  air: [
-    ['.......kkk..',
-      '......kWlk..',
-      '.kkkk.klbk..',
-      'kWWllk.kk...',
-      'kWllllk.....',
-      'kllllbk.....',
-      'kllllbk.kkk.',
-      '.klbbk.kWlbk',
-      '..kkk..klllk',
-      '.......klbbk',
-      '........kkk.',
-      '............'],
-    { k: 'water2', W: 'ice4', l: 'ice3', b: 'ice1' },
-  ],
   // Three waves, each a light crest running into deep blue.
   sea: [
     ['.WW....WW...',
@@ -263,38 +249,6 @@ const HUD = {
       'b..bLLb..bLL',
       '....bb....bb'],
     { W: 'water7', L: 'water5', b: 'water2' },
-  ],
-  // A grey cloud: a small puff notched off a tall one, lit on the upper left, belly in shade.
-  co2: [
-    ['............',
-      '............',
-      '......kkk...',
-      '.....kWWWk..',
-      '..kk.kWlllk.',
-      '.kWWkWlllllk',
-      'kWllWllllllk',
-      'kWllllllllsk',
-      'kllllllllssk',
-      '.kssssssssk.',
-      '..kkkkkkkk..',
-      '............'],
-    { k: 'rock0', W: 'rock4', l: 'rock3', s: 'rock2' },
-  ],
-  // A thermometer: glass tube with a red column into a round bulb, scale ticks.
-  temp: [
-    ['....kkk.....',
-      '...kWgsk.t..',
-      '...kWgsk....',
-      '...kWrsk.t..',
-      '...kWrsk....',
-      '...kRrsk.t..',
-      '...kRrsk....',
-      '..kRRrrsk...',
-      '.kRWRrrrsk..',
-      '.kRRrrrdsk..',
-      '..kRrrddk...',
-      '...kkkkk....'],
-    { k: 'ink1', W: 'white0', g: 'ice3', s: 'rock3', r: 'red1', R: 'orange0', d: 'red0', t: 'wood3' },
   ],
   // An hourglass in a wooden frame, sand running, a leaf sprouting from its top.
   time: [
@@ -579,10 +533,7 @@ module.exports = {
     hud_energy: hud('energy'),
     hud_ep: hud('ep'),
     hud_life: hud('life'),
-    hud_air: hud('air'),
     hud_sea: hud('sea'),
-    hud_co2: hud('co2'),
-    hud_temp: hud('temp'),
     hud_time: hud('time'),
     opt_raise: opt('raise'),
     opt_lower: opt('lower'),

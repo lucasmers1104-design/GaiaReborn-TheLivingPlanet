@@ -4,9 +4,9 @@
  * From the rail's buttons, its knot, the rock's root point and the top bar's
  * logo plaque (all in art px) one vine is planned: a stem from Gaia's rock up
  * the rail's left edge into the top bar, where it climbs round the plaque's
- * left end and sends a run along the bar's bottom edge; side branches through
- * the gaps between the buttons, curling up or down beside them; leaves,
- * curls and flowers; at full green a cluster hanging from the bar's right end.
+ * left end (no plaque: up into the open band, where the map shows between the
+ * status clouds); side branches through the gaps between the buttons,
+ * curling up or down beside them; leaves, curls and flowers.
  * Every part carries the greenery it is born at, so greenery 0 → 1 reveals the
  * vine in order (a sprout on the rock at about 0.04, halfway up at 0.3, lush
  * at 1); leaves carry their own wilt and fall thresholds in vitality, flowers
@@ -102,9 +102,6 @@ namespace SE {
   /** Greenery from one leaf size to the next; bloom from one flower stage to the next. */
   const LEAF_AGE = 0.05;
   const BLOOM_STEP = 0.08;
-  /** The right-end cluster under the top bar: greenery it starts at, per art px. */
-  const G_CLUSTER = 0.72;
-  const CLUSTER_G = 0.004;
   /** Greenery from which the vine turns lush: clusters at the joints, leaves in front of the rims. */
   const LUSH = 0.78;
   /** Vitality below which the tendril curls (no wilt frames of their own) have shrivelled away. */
@@ -281,7 +278,7 @@ namespace SE {
       flower(bt.x + 29, bt.y + 9 + dy, Math.max(g0 + 0.08, 0.45), 0.2 + 0.65 * r.next(), 0, r);
     });
 
-    /* ---- the top bar: round the plaque's left end, a run along the bottom edge ---- */
+    /* ---- the top bar: round the plaque's left end ---- */
     const rb = dice(5, 0);
     const kc = (inStage + n - 1) >> 1;
     // Round the plaque's left end: leaves out to the left where the bar leaves room, else in front of its frame
@@ -295,35 +292,6 @@ namespace SE {
     if (yEnd - 5 > -a.barH) curls.push({ x: trunk[n - 1].x, y: trunk[n - 1].y, dir: 'r', birth: G_TOP + 0.004, layer: 2 });
     else flower(trunk[n - 1].x + 1, trunk[n - 1].y + 1, G_TOP, 0.15, 2, rb);
     flower(trunk[n - 4].x - 1, trunk[n - 4].y + 2, G_TOP, 0.35, 2, rb);
-
-    const runEnd = Math.min(a.barW - 44, b ? b.x + clamp(Math.round(b.w * 0.6), 16, 72) : xTop + 56);
-    if (runEnd > xTop + 8) {
-      const path: Pt[] = [[xTop + 1, -1]];
-      lineTo(path, runEnd, -1);
-      const br = branch(inStage, path, 2, 0.02);
-      for (let m = 4, j = 0; m < br.length - 3; m += 9 + rb.int(4), j++) {
-        const p = br[m];
-        if (j % 3 === 2) flower(p.x, p.y + 4, p.birth + 0.02, 0.1 + 0.6 * rb.next(), 2, rb);
-        else onStem(p, 'hang', 0, 0.01 + 0.05 * rb.next(), inStage + m, rb);
-      }
-      const tip = br[br.length - 1];
-      curls.push({ x: tip.x, y: tip.y, dir: 'r', birth: tip.birth + 0.004, layer: 2 });
-    }
-
-    /* ---- lush: a cluster hanging from the bar's right end, grown in from beyond the edge ---- */
-    if (a.barW > 160) {
-      const path: Pt[] = [[a.barW, -1]];
-      lineTo(path, a.barW - 26, -1);
-      lineTo(path, a.barW - 30, 1);
-      const out = path.map(([x, y], m): VinePixel => ({ x, y, w: 1, birth: G_CLUSTER + m * CLUSTER_G, wood: false, layer: 2 }));
-      pixels.push(...out);
-      const rc = dice(6, 0);
-      const wave = n + 40;
-      for (const m of [3, 10, 17, 24]) onStem(out[m], 'hang', 0, 0.03 + 0.06 * rc.next(), wave + m, rc);
-      // Hanging, not reaching up: the bar's speed controls sit right above.
-      onStem(out[out.length - 1], 'hang', 0, 0.02, wave + out.length, rc);
-      flower(a.barW - 14, 5, G_CLUSTER + 0.08, 0.45, 2, rc);
-    }
 
     leaves.sort((p, q) => p.birth - q.birth);
     return { pixels, trunk, leaves, flowers, curls, reach };

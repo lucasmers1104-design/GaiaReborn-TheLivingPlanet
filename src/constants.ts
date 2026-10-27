@@ -1876,7 +1876,7 @@ namespace SE {
   ];
   export const TOOL_HINTS: readonly string[] = [
     'Tippe auf ein Feld, um Lebensraum, Arten und Klima zu sehen.',
-    'Ziehe die Karte oder fahre mit W A S D. Das Mausrad zoomt.',
+    'Ziehe die Karte oder fahre mit W A S D. Mausrad oder + und − zoomen.',
     'Formt das Gelände mit dem Pinsel: hebt Land aus dem Meer oder senkt es ab.',
     'Siedelt eine entwickelte Pflanzengruppe in einem 5 × 5-Feld an, wo sie wachsen kann.',
     'Siedelt eine entwickelte Tiergruppe, eine Stadt oder einen Terraformer an.',

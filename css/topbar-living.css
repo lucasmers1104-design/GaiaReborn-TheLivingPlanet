@@ -1,7 +1,7 @@
 /* =============================================================================
-   Living interface: the status bar (src/livingtopbar.ts). The wood, the
-   parchment panels and every pixel readout are drawn in code, and the layout
-   is inline there; this file only colours the text and polishes the controls.
+   Living interface: the status bar (src/livingtopbar.ts). The clouds and
+   every pixel readout are drawn in code, and the layout is inline there; this
+   file only colours the text and polishes the controls.
    Ink and gold are the UI palette's (tools/uiart/palette.js). --lt-f (set
    inline) lets the text grow a little with the art at large scales.
    ========================================================================== */
@@ -50,5 +50,5 @@
   pointer-events: none;
 }
 
-/* Until the atlas has decoded (or if it never does): plain parchment behind the text. */
-#topbar.lt-noart .lt-chip, #topbar.lt-noart .lt-speed, #topbar.lt-noart .lt-gear { background: #f6e2bb; }
+/* Until the atlas has decoded (or if it never does): plain cloud white behind the text. */
+#topbar.lt-noart .lt-chip, #topbar.lt-noart .lt-speed, #topbar.lt-noart .lt-gear { background: #eef3f9; }

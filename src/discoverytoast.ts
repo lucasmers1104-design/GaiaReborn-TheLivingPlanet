@@ -85,6 +85,7 @@ namespace SE {
 
     private showNext(): void {
       if (this.card || this.fading || this.queue.length === 0 || this.hooks.held()) return;
+      if (this.queue.some((e) => e.c === Life.Cetacean)) playSfx(WHALE_CALL);
       if (this.queue.length >= DISCOVERY_BUNDLE) this.showBundle(this.queue.splice(0));
       else this.showOne(this.queue.shift() as FaunaEvent);
     }

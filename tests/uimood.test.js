@@ -62,3 +62,27 @@ test("a new planet or a load never inherits the old planet's crisis end or dwell
   assert.strictEqual(mood.update(world(3, 200, 0.6), history, 10000).emotion, 'idle');
   assert.strictEqual(mood.update(world(3, 201, 0.6), history, 14000).emotion, 'idle', "the old planet's crisis gives the loaded one no hope");
 });
+
+test("the status bar's clouds: icon and text always lie on cloud, and a panel keeps its cloud", () => {
+  const SE = loadSE();
+  // [w, h, box]: measured panels at 1080p (h 29), 1440p (h 19) and 125 % laptops (h 37), the gear, extremes.
+  const cases = [
+    [54, 29, [8, 10, 46, 22]], [151, 29, [8, 8, 143, 24]], [26, 29, [8, 11, 18, 21]], [87, 29, [8, 7, 27, 24]],
+    [51, 19, [8, 3, 43, 15]], [131, 19, [8, 2, 123, 16]], [26, 19, [8, 4, 18, 14]],
+    [61, 37, [8, 15, 53, 28]], [182, 37, [8, 12, 174, 32]], [27, 37, [8, 16, 19, 27]],
+    [20, 18, [6, 3, 14, 15]], [280, 46, [8, 9, 272, 40]], [280, 46, [130, 20, 150, 26]],
+  ];
+  for (const [w, h, box] of cases) {
+    for (let seed = 0; seed < 8; seed++) {
+      const t = SE.cloudTones(w, h, seed, box);
+      assert.deepStrictEqual(SE.cloudTones(w, h, seed, box), t, 'the same panel, the same cloud');
+      for (let y = box[1]; y < box[3]; y++) {
+        for (let x = box[0]; x < box[2]; x++) {
+          const v = t[y * w + x];
+          // Behind icon and text only the light body tones (5..7): dark ink must read there.
+          assert.ok(v >= 5 && v < SE.CLOUD_TONES, `${w}×${h} seed ${seed}: content pixel ${x},${y} is tone ${v}`);
+        }
+      }
+    }
+  }
+});

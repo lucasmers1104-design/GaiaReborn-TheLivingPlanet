@@ -41,6 +41,10 @@ const UI_RAMPS = {
   glowT:  ['#0d4652', '#167f8c', '#2fbcc4', '#6fe6e0', '#b9fbf2', '#efffff'],
   glowG:  ['#1e6a33', '#3fae4c', '#7ee372', '#c2fbb2'],
   glowV:  ['#34205c', '#5c3b9a', '#8f67d8', '#bf9dfa', '#e8dcff'],
+  // --- the status bar's clouds, drawn in code (src/cloudshape.ts): normal, lit, the lit one's halo ---
+  cloud:    ['#4b5d7c', '#6f80a0', '#8f9fb7', '#adbacc', '#c8d2df', '#dde4ed', '#eef2f7', '#ffffff'],
+  cloudLit: ['#2f6db0', '#4f89cc', '#9fb9d9', '#bcd0e8', '#d5e3f3', '#e8f0fa', '#f5f9fd', '#ffffff'],
+  halo:     ['#d8ecff'],
 };
 
 /** Every ramp, terrain first, in palette order. */

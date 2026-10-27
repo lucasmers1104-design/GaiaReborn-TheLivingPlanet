@@ -419,18 +419,6 @@ p { margin: 0; }
   min-height: 0;
   overflow: hidden;
 }
-/* A soft vignette pulls the eye to the middle of the map, as a lens would. */
-.stage::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  background:
-    radial-gradient(130% 120% at 50% 45%, transparent 55%, rgba(2, 8, 10, 0.42) 100%),
-    linear-gradient(180deg, rgba(2, 8, 10, 0.28), transparent 70px);
-}
-
 .world-canvas {
   position: absolute;
   inset: 0;
@@ -576,10 +564,10 @@ p { margin: 0; }
 .opt-detail .opt-cost { margin-top: 0; }
 .opt-detail .opt-sub { grid-column: 1 / -1; }
 
-/* Map layers: a popover beside the map controls. */
+/* Map layers: a popover at the bottom right (menu "Fenster", key N). */
 .layer-pop {
   position: absolute;
-  right: 72px;
+  right: 12px;
   bottom: 14px;
   z-index: 60;
   width: 300px;
@@ -681,22 +669,6 @@ p { margin: 0; }
 .goal-title { font-weight: 600; font-size: 15px; line-height: 1.25; }
 .goal-sub { color: var(--ink-2); font-size: 13px; line-height: 1.35; }
 
-.map-zoom {
-  position: absolute;
-  right: 12px;
-  bottom: 14px;
-  z-index: 40;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 4px;
-  border: 2px solid var(--glass-border);
-  border-radius: 0;
-  box-shadow: var(--shadow);
-}
-.map-zoom-sep { height: 2px; margin: 2px 4px; background: var(--glass-border); }
-/* Layers button while a climate overlay colours the map. */
-.map-zoom .icon-btn.lit:not(.on) { border-color: rgba(255, 179, 71, 0.55); }
 
 .hover-tip {
   position: absolute;
@@ -1348,7 +1320,7 @@ p { margin: 0; }
 .toasts {
   position: fixed;
   bottom: 16px;
-  right: 62px;
+  right: 12px;
   z-index: 550;
   width: min(360px, calc(100vw - 24px));
   display: flex;
@@ -1522,8 +1494,8 @@ p { margin: 0; }
 @media (max-width: 1420px) {
   /* Centred, the goal bar would shrink to 100% - 880 px and wrap its subline
      into a tall column, or slide under the tool card (12 + 64 + 8 + 340 px); sit
-     it between the card and the map controls instead. */
-  .goal { left: 436px; right: 72px; transform: none; width: auto; max-width: 600px; min-width: 0; }
+     it between the card and the right edge instead. */
+  .goal { left: 436px; right: 12px; transform: none; width: auto; max-width: 600px; min-width: 0; }
   /* The docked Examine window reaches x 484. */
   .stage.examining .goal { left: 496px; }
   /* ... which puts it under the bottom-right toasts; lift them above it. */
@@ -1566,8 +1538,6 @@ p { margin: 0; }
   .goal-art { width: 36px; height: 36px; }
   .goal-title { font-size: 14px; }
   .goal .btn .btn-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  /* Below the goal bar: at mid-height the open tool sheet covers it. */
-  .map-zoom { top: 72px; bottom: auto; right: 8px; }
 
   .win {
     position: fixed !important;

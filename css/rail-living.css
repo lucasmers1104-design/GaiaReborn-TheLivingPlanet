@@ -1,6 +1,6 @@
 /* =============================================================================
    Living interface: the navigation rail, its flyout menus, the tool card and
-   the map controls in wood, parchment and gold (concept: left-toolbar.png).
+   the map-layers popover in wood, parchment and gold (concept: left-toolbar.png).
    Layout is inline in livingrail.ts / flyoutmenu.ts / app.ts; this only
    paints. Imported before styles.css's own rules, so the overrides below
    carry #desktop (or a second class) to win over them. Colours are the UI
@@ -125,18 +125,13 @@
 #desktop .dock .seg-btn.on { background: var(--rail-wood-hi); color: var(--rail-text); box-shadow: inset 0 0 0 2px var(--rail-gold-lo); }
 #desktop .dock .brush-size-value { color: var(--rail-text-3); }
 
-/* ---- map controls and the layers popover ---- */
-#desktop .map-zoom,
+/* ---- the map-layers popover ---- */
 #desktop .layer-pop {
   background: var(--rail-grain);
   border: 2px solid var(--rail-gold);
   box-shadow: var(--rail-frame);
   color: var(--rail-text);
 }
-#desktop .map-zoom .icon-btn:hover { background: var(--rail-wood-lit); border-color: var(--rail-gold); }
-#desktop .map-zoom .icon-btn.on { background: var(--rail-green); border-color: var(--rail-gold-hi); }
-#desktop .map-zoom .icon-btn:focus-visible { box-shadow: inset 0 0 0 2px var(--rail-gold-hi); outline: none; }
-#desktop .map-zoom-sep { background: var(--rail-gold-deep); }
 #desktop .layer-pop { scrollbar-color: var(--rail-gold-lo) transparent; }
 #desktop .layer-tg { border-color: var(--rail-gold-deep); color: var(--rail-text-3); }
 #desktop .layer-tg:hover { background: var(--rail-wood-hi); color: var(--rail-text-2); }

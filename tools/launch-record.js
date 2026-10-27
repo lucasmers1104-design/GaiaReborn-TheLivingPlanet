@@ -10,13 +10,14 @@
  * SE_BUNDLE or --bundle, so a parallel build never touches simulation.js.
  *
  *   node tools/launch-record.js [--from s] [--to s] [--fps N] [--at s,s,…]
- *        [--size WxH] [--reduce] [--seed N] [--epoch id] [--bundle file] [--out dir]
+ *        [--size WxH] [--reduce] [--clean] [--seed N] [--epoch id] [--bundle file] [--out dir]
  *
  *     --from/--to  the stretch of the film to record (default 0 to 12)
  *     --fps        frames per film second (default 4)
  *     --at         only these times, e.g. --at 3,3.1,7 (overrides --fps)
  *     --size       viewport (default 960x540)
  *     --reduce     with "Effekte reduzieren"
+ *     --clean      without the skip button (trailer footage)
  *     --seed/--epoch  the home planet (default: the title screen's)
  * ========================================================================== */
 'use strict';
@@ -32,7 +33,7 @@ function fail(msg) {
 }
 
 function parseArgs(argv) {
-  const a = { from: 0, to: 12, fps: 4, at: null, w: 960, h: 540, reduce: false, seed: null, epoch: null, bundle: null, out: null };
+  const a = { from: 0, to: 12, fps: 4, at: null, w: 960, h: 540, reduce: false, seed: null, epoch: null, bundle: null, out: null, clean: false };
   for (let k = 0; k < argv.length; k++) {
     const v = argv[k];
     const next = () => argv[++k];
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     else if (v === '--at') a.at = next().split(',').map(Number);
     else if (v === '--size') [a.w, a.h] = next().split('x').map(Number);
     else if (v === '--reduce') a.reduce = true;
+    else if (v === '--clean') a.clean = true;
     else if (v === '--seed') a.seed = Number(next());
     else if (v === '--epoch') a.epoch = next();
     else if (v === '--bundle') a.bundle = next();
@@ -51,9 +53,9 @@ function parseArgs(argv) {
   return a;
 }
 
-const PAGE = (bundle) => `<!DOCTYPE html>
+const PAGE = (bundle, clean) => `<!DOCTYPE html>
 <html lang="de"><head><meta charset="UTF-8"><base href="${pathToUrl(ROOT)}/">
-<link rel="stylesheet" href="styles.css"></head><body>
+<link rel="stylesheet" href="styles.css">${clean ? '<style>.intro-skip{display:none!important}</style>' : ''}</head><body>
 <header id="topbar" class="topbar glass"><nav id="menubar" class="menubar"></nav><div id="hud" class="hud"></div></header>
 <main id="desktop" class="stage"></main><div id="toasts" class="toasts"></div><div id="milestones" class="milestones"></div><div id="modal-root" class="modal-root"></div>
 <script src="${pathToUrl(bundle)}"></script></body></html>`;
@@ -69,7 +71,7 @@ async function main() {
   for (const f of fs.readdirSync(out)) if (f.endsWith('.png')) fs.rmSync(path.join(out, f));
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'simearth-launch-'));
   const html = path.join(work, 'launch.html');
-  fs.writeFileSync(html, PAGE(bundle));
+  fs.writeFileSync(html, PAGE(bundle, a.clean));
 
   const release = await lock();
   const proc = launchChrome(chrome, work, a.w, a.h);

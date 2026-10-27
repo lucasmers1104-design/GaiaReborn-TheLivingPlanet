@@ -392,7 +392,7 @@ namespace SE {
     /** Draw list: id, frame, x, y per sprite (anchor at x, y), back to front. */
     private compose(now: number): (string | number)[] {
       const s = this.state;
-      const ops: (string | number)[] = ['rock', !s.awake ? 0 : s.greenery > 0.7 ? 3 : s.greenery > 0.35 ? 2 : 1, UI_SCENE.rockFootX, UI_SCENE.h - 1];
+      const ops: (string | number)[] = ['rock', groundLook(s), UI_SCENE.rockFootX, UI_SCENE.h - 1];
       const [bx, by] = this.bed();
       const c = this.clip;
       ops.push(c.id, this.clipFrame(now), bx, by);

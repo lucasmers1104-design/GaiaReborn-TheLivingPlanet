@@ -34,7 +34,7 @@
 'use strict';
 
 /** Recipe files, one per family; a family without a file has no art yet. */
-const FAMILIES = ['gaia', 'gaiasleep', 'gaiamood', 'gaiamagic', 'scene', 'vine', 'chrome', 'icons', 'magic', 'air'];
+const FAMILIES = ['gaia', 'gaiasleep', 'gaiamood', 'gaiamagic', 'scene', 'vine', 'chrome', 'icons', 'magic', 'air', 'snow', 'ground'];
 
 /** Every Gaia body sprite shares this box and its foot anchor, so poses swap without a jump. */
 const GAIA_W = 64;
@@ -207,10 +207,7 @@ const SPRITES = [
   { id: 'hud_energy', name: 'Sonne (Energie Ω)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'hud_ep', name: 'DNA, violett (Evolutionspunkte)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'hud_life', name: 'Blatt (Leben)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
-  { id: 'hud_air', name: 'Luftblasen O₂ (Sauerstoff der Luft)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'hud_sea', name: 'Wellen (Sauerstoff im Meer)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
-  { id: 'hud_co2', name: 'Graue Wolke (CO₂)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
-  { id: 'hud_temp', name: 'Thermometer (Temperatur)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'hud_time', name: 'Sanduhr mit Blatt (Erdzeit)', family: 'icons', w: 12, h: 12, frames: 1, fps: 0, anchor: 'topleft' },
   // The altitude brush's choices in the tool dock, 18 × 16, in colour (for the wood tile and the green selected one).
   { id: 'opt_raise', name: 'Schneeberg mit Pfeil hoch (Anheben)', family: 'icons', w: 18, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
@@ -255,6 +252,9 @@ const SPRITES = [
   { id: 'air_co2', name: 'Kohlendioxid CO₂: dunkelgraues C zwischen zwei roten O, gerade, Doppelbindungen', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_ch4', name: 'Methan CH₄: dunkelgraues C, vier weiße H als Tetraeder (eins vorn, eins dahinter)', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_h2o', name: 'Wasserdampf H₂O: rotes O, zwei weiße H im Winkel, ein Dampfwölkchen', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
+  // The status bar's O₂ and CO₂ (src/livingtopbar.ts): the molecules above, cut to their pixels.
+  { id: 'hud_air', name: 'Sauerstoff O₂ der Statusleiste: das Molekül aus air_o2', family: 'air', w: 18, h: 7, frames: 1, fps: 0, anchor: 'topleft' },
+  { id: 'hud_co2', name: 'Kohlendioxid CO₂ der Statusleiste: das Molekül aus air_co2', family: 'air', w: 20, h: 6, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_dust', name: 'Staub: schwebende Körner und Flocken in Braun und Grau', family: 'air', w: 20, h: 14, frames: 1, fps: 0, anchor: 'topleft' },
   // The oxygen's way, left to right: iron in the sea binds it first, then it fills the sea, then the air.
   { id: 'air_fe', name: 'Gelöstes Eisen Fe²⁺: rostorange Kugel im Meerwasser, Rostflocken sinken', family: 'air', w: 24, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
@@ -266,6 +266,20 @@ const SPRITES = [
   // The two summary cards above the gases.
   { id: 'air_baro', name: 'Barometer: runde Messingdose mit Skala und Zeiger (Luftdruck)', family: 'air', w: 16, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
   { id: 'air_temp', name: 'Thermometer mit roter Säule und Kugel (Mitteltemperatur)', family: 'air', w: 16, h: 16, frames: 1, fps: 0, anchor: 'topleft' },
+
+  // ---------------------------------------------------------------- snow ---
+  // Frost for the status bar's temperature cloud (src/livingtopbar.ts) and the snow falling from it over the
+  // map (src/cloudsnow.ts). The thermometer is read on a white cloud; the flakes over ocean, ice and rock.
+  { id: 'hud_temp', name: 'Thermometer (Temperatur): 0 Säule hoch; 1 kalt (unter 10 °C): Säule tief, große sechsstrahlige Schneeflocke dahinter', family: 'snow', w: 19, h: 17, frames: 2, fps: 0, anchor: 'topleft' },
+  { id: 'snow_l', name: 'Große Schneeflocke, sechsstrahlig, taumelt im Fallen', family: 'snow', w: 11, h: 11, frames: 6, fps: 6, anchor: 'center' },
+  { id: 'snow_m', name: 'Mittlere Schneeflocke, taumelt im Fallen', family: 'snow', w: 7, h: 7, frames: 4, fps: 6, anchor: 'center' },
+  { id: 'snow_s', name: 'Kleine Schneeflocke, funkelt', family: 'snow', w: 5, h: 5, frames: 2, fps: 3, anchor: 'center' },
+
+  // -------------------------------------------------------------- ground ---
+  // The stone beam along the screen's bottom edge (src/stonebeam.ts), Gaia's rock standing at its left end.
+  // Looks follow the planet like the rock's: 0 bare, 1 first lichen, 2 moss tufts, 3 lush moss, tiny flowers.
+  { id: 'beam_tile', name: 'Steinbalken, nahtlos waagerecht aneinander: Bild = Variante · 4 + Aussehen (3 Varianten; 0 kahl, 1 Flechten, 2 Moos, 3 üppig)', family: 'ground', w: 96, h: 14, frames: 12, fps: 0, anchor: 'topleft' },
+  { id: 'beam_end', name: 'Anfang des Balkens rechts an Gaias Felsen: runder und kleiner Findling, zur Steinreihe abfallend; 0 kahl … 3 üppig', family: 'ground', w: 44, h: 24, frames: 4, fps: 0, anchor: 'topleft' },
 ];
 
 /** Most colours one frame may use. Gaia's poses need more than an effect. */

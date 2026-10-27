@@ -155,14 +155,14 @@ namespace SE {
     private bubblingTarget = 0;
     private readonly stormWind = new AmbientLoop('assets/audio/sfx/hurricane-wind.mp3', STORM_WIND_VOLUME);
     private stormWindTarget = 0;
+    private readonly birdsong = new AmbientLoop('assets/audio/ambient/birds-chirping-relaxing-nature-sounds.mp3', BIRDSONG_VOLUME);
+    private birdsongTarget = 0;
     private lastSurfCheck = 0;
     private canvas!: HTMLCanvasElement;
     private dock!: HTMLElement;
     private toolTitle!: HTMLElement;
     private toolKey!: HTMLElement;
     private layerPop!: HTMLElement;
-    private layerBtn!: HTMLButtonElement;
-    private mapBtn!: HTMLButtonElement;
     private overlayLegend!: HTMLElement;
     private toolHint!: HTMLElement;
     private toolOptions!: HTMLElement;
@@ -237,6 +237,7 @@ namespace SE {
     private living: LivingState = SLEEPING_STATE;
     private companion!: GaiaCompanion;
     private vines!: VineLayer;
+    private beam!: StoneBeam;
     private gaiaMagic!: GaiaMagic;
     /** The showcase's `done` while Gaia's magic plays before it. */
     private magicDone: (() => void) | null = null;
@@ -349,9 +350,14 @@ namespace SE {
 
     private buildStage(): void {
       const canvas = make('canvas', 'world-canvas');
-      canvas.setAttribute('aria-label', 'Planetenkarte – Werkzeug anwenden, ziehen zum Verschieben, Mausrad zum Zoomen');
+      canvas.setAttribute('aria-label', 'Planetenkarte – Werkzeug anwenden, ziehen zum Verschieben, Mausrad oder + und − zum Zoomen');
       canvas.tabIndex = 0;
       this.canvas = canvas;
+      // The map runs on up under the status bar's clouds (livingtopbar.ts); everything else keeps to the stage. Inline: safe with a stale stylesheet.
+      Object.assign(canvas.style, { top: 'calc(-1 * var(--topbar-h))', height: 'calc(100% + var(--topbar-h))' });
+      this.stage.style.overflow = 'visible';
+      // The map's edge vignette is gone; a cached older styles.css would still lay it over the map below the clouds.
+      document.head.appendChild(make('style', undefined, '#desktop::after { content: none; }'));
       this.stage.appendChild(canvas);
       this.editView = new EditView(canvas);
       this.editView.reduceEffects = this.settings.reduceEffects;
@@ -418,32 +424,13 @@ namespace SE {
       /* ---- next step ---- */
       this.goalNotice = new GoalNotice(this.stage, (id) => this.openTree(id));
 
-      /* ---- map controls: layers, overview map, zoom ---- */
-      const zoom = make('div', 'map-zoom glass');
-      zoom.setAttribute('role', 'toolbar');
-      zoom.setAttribute('aria-label', 'Karte');
-      zoom.setAttribute('aria-orientation', 'vertical');
-      this.layerBtn = button({
-        label: 'Kartenebenen', icon: uiIcon('layers'), cls: 'icon-btn', showLabel: false, title: 'Kartenebenen und Klima-Überlagerung',
-        onClick: () => this.setLayersOpen(this.layerPop.hidden),
-      });
-      this.layerBtn.setAttribute('aria-expanded', 'false');
-      this.layerBtn.setAttribute('aria-controls', 'layer-pop');
-      this.mapBtn = button({
-        label: 'Übersichtskarte', icon: uiIcon('map'), cls: 'icon-btn', showLabel: false, title: 'Übersichtskarte (M)',
-        onClick: () => this.windows.toggle('map'),
-      });
-      zoom.append(
-        this.layerBtn, this.mapBtn, make('div', 'map-zoom-sep'),
-        button({ label: 'Hineinzoomen', icon: uiIcon('zoom-in'), cls: 'icon-btn', showLabel: false, title: 'Hineinzoomen (+)', onClick: () => this.zoomMap(1.25) }),
-        button({ label: 'Herauszoomen', icon: uiIcon('zoom-out'), cls: 'icon-btn', showLabel: false, title: 'Herauszoomen (−)', onClick: () => this.zoomMap(0.8) }),
-      );
+      /* ---- the map layers: a popover opened from the menu "Fenster" or with N (zoom: wheel, + and −) ---- */
       this.layerPop = this.buildLayerPopover();
-      this.stage.append(this.layerPop, zoom);
-      // A click anywhere else closes the popover, as a menu would.
+      this.stage.appendChild(this.layerPop);
+      // A click anywhere else closes the popover, as a menu would; one in the menu that opens it leaves it to the item.
       document.addEventListener('pointerdown', (e) => {
-        if (this.layerPop.hidden || !(e.target instanceof Node)) return;
-        if (!this.layerPop.contains(e.target) && !this.layerBtn.contains(e.target)) this.setLayersOpen(false);
+        if (this.layerPop.hidden || !(e.target instanceof Element)) return;
+        if (!this.layerPop.contains(e.target) && !e.target.closest('[role="menu"]')) this.setLayersOpen(false);
       });
 
       this.hoverTip = make('div', 'hover-tip');
@@ -453,6 +440,7 @@ namespace SE {
       /* ---- the living interface: Gaia in the corner, the vines, her magic ---- */
       this.companion = new GaiaCompanion(this.stage, { openGaiaWindow: () => this.windows.show('gaia') });
       this.vines = new VineLayer(this.stage, el<HTMLElement>('topbar'));
+      this.beam = new StoneBeam(this.stage);
       this.gaiaMagic = new GaiaMagic({
         companion: this.companion,
         tileClient: (tile) => this.tileClient(tile),
@@ -473,10 +461,12 @@ namespace SE {
       const r = this.canvas.getBoundingClientRect();
       const x = r.left + rx * v.tilePx;
       const y = r.top + (Math.floor(tile / GRID_W) + 0.5 - v.scrollY) * v.tilePx;
-      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom ? { x, y } : null;
+      // The canvas reaches up under the status bar and down under the stone beam: only the stage between counts.
+      const s = this.stage.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= s.top && y <= s.bottom - this.beam.height ? { x, y } : null;
     }
 
-    /** The map-layers popover beside the map controls: additive layers and one climate overlay. */
+    /** The map-layers popover at the bottom right: additive layers and one climate overlay. */
     private buildLayerPopover(): HTMLElement {
       const pop = make('section', 'layer-pop glass');
       pop.id = 'layer-pop';
@@ -485,6 +475,7 @@ namespace SE {
       const head = make('div', 'layer-pop-head');
       const title = make('h2', 'layer-pop-title', 'Kartenebenen');
       title.id = 'layer-pop-title';
+      title.tabIndex = -1;
       head.append(img(uiIcon('layers'), 'ico'), title, button({
         label: 'Kartenebenen schließen', icon: uiIcon('close'), cls: 'icon-btn layer-pop-close', showLabel: false,
         onClick: () => this.setLayersOpen(false, true),
@@ -530,11 +521,16 @@ namespace SE {
     }
 
     private setLayersOpen(open: boolean, refocus = false): void {
+      const hadFocus = this.layerPop.contains(document.activeElement);
       this.layerPop.hidden = !open;
-      setPressed(this.layerBtn, open);
-      this.layerBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open) this.syncLayerButtons();
-      if (refocus) this.layerBtn.focus();
+      if (open) {
+        this.syncLayerButtons();
+        // Like a window, its heading takes the focus: from the menu or with N the keyboard lands in it.
+        this.layerPop.querySelector<HTMLElement>('.layer-pop-title')?.focus({ preventScroll: true });
+      }
+      // A popover hidden with the focus inside would drop it to the page.
+      if (refocus || (!open && hadFocus)) this.canvas.focus({ preventScroll: true });
+      this.flyout.refresh();
     }
 
     private syncLayerButtons(): void {
@@ -546,8 +542,6 @@ namespace SE {
         b.setAttribute('aria-checked', on ? 'true' : 'false');
         b.tabIndex = on ? 0 : -1;
       }
-      // The layers button glows while the map shows a climate overlay.
-      this.layerBtn.classList.toggle('lit', this.editView.overlay !== Overlay.None);
       this.renderOverlayLegend();
     }
 
@@ -748,11 +742,10 @@ namespace SE {
     /* ======================================================== windows === */
 
     private buildMapWindow(): void {
-      // 12 px clear of the map controls (50 px wide, 12 px from the right edge): as tall as it is, it would cover them.
       const folded = (): boolean => !this.settings.mapGlobe;
       const win = this.windows.create({
         id: 'map', title: 'Übersichtskarte', icon: uiIcon('map'),
-        x: -74, y: 12, width: 500, cls: 'win-map',
+        x: -12, y: 12, width: 500, cls: 'win-map',
         // Read at every reset and screen change, so the window fits its globe row shown or folded away.
         get height() { return folded() ? MAP_WINDOW_FOLDED_H : MAP_WINDOW_H; },
       });
@@ -855,19 +848,19 @@ namespace SE {
     }
 
     private buildInfoWindows(): void {
-      // Gaia: below the overview map, 12 px clear of the map controls (50 px wide, 12 px from the right edge).
-      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -74, y: 12 + MAP_WINDOW_H + 8, width: 300, height: 396 });
+      // Gaia: below the overview map, 12 px from the right edge like it.
+      const gaia = this.windows.create({ id: 'gaia', title: 'Gaia', icon: uiIcon('gaia'), cls: 'win-gaia', x: -12, y: 12 + MAP_WINDOW_H + 8, width: 300, height: 396 });
       const gaiaWrap = make('div', 'gaia-layout');
       gaia.body.appendChild(gaiaWrap);
       this.gaiaPanel = new GaiaPanel(gaiaWrap);
 
       // History: 4 px clear of the tool card (beside the rail, 340 px wide)
-      // and of the overview map (500 px wide, 74 px from the right), down to
+      // and of the overview map (500 px wide, 12 px from the right), down to
       // just above the bottom.
       const histX = this.rail.width + 344;
       const hist = this.windows.create({
         id: 'history', title: 'Verlauf', icon: uiIcon('history'), resetOnOpen: true,
-        x: histX, y: 12, width: -(histX + 578), height: -(12 + 27),
+        x: histX, y: 12, width: -(histX + 516), height: -(12 + 27),
       });
       const histWrap = make('div', 'hist-layout');
       hist.body.appendChild(histWrap);
@@ -993,7 +986,7 @@ namespace SE {
     /* ============================================================ HUD === */
 
     private buildHud(): void {
-      this.hud = new LivingTopbar(el<HTMLElement>('topbar'), el<HTMLElement>('hud'), {
+      this.hud = new LivingTopbar(el<HTMLElement>('topbar'), el<HTMLElement>('hud'), this.stage, {
         speedNames: SPEED_NAMES,
         togglePause: () => this.togglePause(),
         setSpeed: (s) => this.setSpeed(s),
@@ -1005,7 +998,7 @@ namespace SE {
         fillEp: (pop) => fillEpInfo(pop, this.world, this.evolution, this.params),
       });
       this.hudInfo = this.hud.info;
-      this.hudInfo.reduced = () => this.settings.reduceEffects || prefersReducedMotion();
+      this.hudInfo.reduced = this.hud.reduced = () => this.settings.reduceEffects || prefersReducedMotion();
       this.syncSpeedButtons();
     }
 
@@ -1064,6 +1057,7 @@ namespace SE {
             winItem('Raumfahrt', 'spaceport', 'rocket'),
             winItem('Arten-Lexikon', 'lexicon', 'layer-life', 'X'),
             winItem('Übersichtskarte', 'map', 'map', 'M'),
+            { label: 'Kartenebenen', icon: uiIcon('layers'), hint: 'N', action: () => this.setLayersOpen(this.layerPop.hidden), checked: () => !this.layerPop.hidden },
             winItem('Gaia', 'gaia', 'gaia'),
             winItem('Verlauf', 'history', 'history'),
             winItem('Bericht', 'report', 'report', 'B'),
@@ -1157,7 +1151,6 @@ namespace SE {
 
     private syncWindowButtons(): void {
       this.syncEvolutionButton(this.evolution.availableIds().length);
-      setPressed(this.mapBtn, this.windows.isVisible('map'));
       this.flyout.refresh();
     }
 
@@ -1235,6 +1228,7 @@ namespace SE {
           case 'c': case 'C': this.windows.toggle('chronicle'); return;
           case 'x': case 'X': this.windows.toggle('lexicon'); return;
           case 'm': case 'M': this.windows.toggle('map'); return;
+          case 'n': case 'N': this.setLayersOpen(this.layerPop.hidden); return;
           case 'b': case 'B': this.windows.toggle('report'); return;
           case 'o': case 'O': void this.openSaves(); return;
           case '+': this.zoomMap(1.25); return;
@@ -2308,6 +2302,8 @@ namespace SE {
       this.living = this.livingMood.update(w, this.history, performance.now());
       this.companion.update(this.living);
       this.vines.update(this.living);
+      this.beam.update(this.living);
+      this.editView.insetBottom = this.beam.height;
       const stage = omegaStage(w);
       if (stage > this.omegaStageSeen) {
         const s = OMEGA_STAGES[stage];
@@ -2428,7 +2424,9 @@ namespace SE {
         this.surfTarget = quiet ? 0 : this.editView.surfPresence(this.world) * this.settings.ambientVolume;
         this.bubblingTarget = quiet ? 0 : this.editView.bubblePresence() * this.settings.ambientVolume;
         this.stormWindTarget = quiet ? 0 : this.editView.stormPresence(now) * this.settings.ambientVolume;
+        this.birdsongTarget = quiet ? 0 : this.editView.birdPresence(this.world) * this.settings.ambientVolume;
       }
+      this.birdsong.update(this.birdsongTarget, delta, now);
       this.surf.update(this.surfTarget, delta, now);
       this.bubbling.update(this.bubblingTarget, delta, now);
       this.stormWind.update(this.stormWindTarget, delta, now);

@@ -72,6 +72,8 @@ namespace SE {
   /** Blowhole, snout and fluke in the east frames when the catalog's `mouth` lacks them, as shares of w and h. */
   const DEFAULT_POINTS: readonly number[] = [0.62, 0.3, 0.92, 0.5, 0.15, 0.5];
   const WORLD_PX = GRID_W * 16;
+  /** Share of surfacings in view that call: now and then, not every blow. */
+  const CALL_CHANCE = 0.35;
 
   export interface WhalePhase {
     /** Whale frame 0–7; only drawn while `visible`. */
@@ -104,6 +106,8 @@ namespace SE {
     /** Frame stamp of the last draw that saw it, and whether it then still held its room. */
     seen: number;
     holds: boolean;
+    /** The cycle whose call was already rolled. */
+    called: number;
   }
 
   /** The pixel whale for a Cetacean stage, or null where the SVG icon stays (early stages, dolphins, specialists). */
@@ -198,7 +202,7 @@ namespace SE {
         if (!s) {
           // Anywhere in its cycle; one that joins after the boil stays under until its next cycle (decide).
           const offset = Math.random() * period - clock;
-          s = { tile: m.tile, flip: m.flip, offset, cycle: NaN, under: true, x0: 0, x1: 0, y0: 0, y1: 0, seen: 0, holds: false };
+          s = { tile: m.tile, flip: m.flip, offset, cycle: NaN, under: true, x0: 0, x1: 0, y0: 0, y1: 0, seen: 0, holds: false, called: NaN };
           this.swims.set(m, s);
         }
         s.seen = stamp;
@@ -260,6 +264,10 @@ namespace SE {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
 
         if (ph.blowAge < 0) continue;
+        if (s.called !== cycle) {
+          s.called = cycle;
+          if (Math.random() < CALL_CHANCE) playSfx(WHALE_CALL, clamp((cam.tilePx - EditView.MIN_TILE) / (EditView.MAX_TILE - EditView.MIN_TILE), 0, 1) ** 2);
+        }
         const bf = blowFrame(ph.blowAge);
         if (bf < 0) continue;
         // The blow stays where it was blown; the whale swims on under it.
